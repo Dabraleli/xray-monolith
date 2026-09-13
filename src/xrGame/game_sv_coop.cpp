@@ -687,6 +687,25 @@ void game_sv_Coop::TalkNpcAnswer(CGameObject* listener, LPCSTR text)
         self->TalkAnswer(client, false, text);
 }
 
+// pda.actor_menu_mode 10/11 of SP (the talk window showing and hiding, InventoryUtilities::
+// SendInfoToLuaScripts): the NPC the dialog's Lua addresses through get_speaker (used_npc_id;
+// Sidorovich and the Forester have no use_callback that would set it - tasks_fetch indexed a table
+// by nil) and actor_on_leave_dialog at the end. The event table is one for the whole VM, so the
+// speaker is set again before every phrase: two players in dialogs at once each get their own.
+static void coop_talk_speaker(u16 npc_id)
+{
+    ::luabind::functor<void> set_event;
+    if (ai().script_engine().functor("SetEvent", set_event)) set_event("used_npc_id", u32(npc_id));
+}
+
+static void coop_talk_left(CActor* body, u16 npc_id)
+{
+    if (!body) return;
+    CoopLuaActor context(body, false);
+    ::luabind::functor<void> callback;
+    if (ai().script_engine().functor("SendScriptCallback", callback)) callback("actor_on_leave_dialog", u32(npc_id));
+}
+
 void game_sv_Coop::TalkStart(xrClientData* client, u16 npc_id)
 {
     if (m_talks.find(client->ID.value()) != m_talks.end()) TalkStop(client, false);
@@ -720,6 +739,7 @@ void game_sv_Coop::TalkStart(xrClientData* client, u16 npc_id)
         npc->StartTalk(body);
     }
     body->StartTalk(npc);
+    coop_talk_speaker(npc_id);
     SCoopTalk& talk = m_talks[client->ID.value()];
     talk.npc = npc_id;
     talk.dialog = DIALOG_SHARED_PTR((CPhraseDialog*)NULL);
@@ -822,6 +842,7 @@ void game_sv_Coop::TalkSelect(xrClientData* client, const shared_str& id)
     CPhraseDialogManager* npc_dialogs = smart_cast<CPhraseDialogManager*>(npc_object);
     if (!npc_dialogs) return;
     CoopLuaActor lua(body);
+    coop_talk_speaker(talk.npc);
     if (!talk.dialog)
     {
         if (!body->HaveAvailableDialog(id)) return;
@@ -851,6 +872,7 @@ void game_sv_Coop::TalkStop(xrClientData* client, bool notify)
     CInventoryOwner* npc = smart_cast<CInventoryOwner*>(Level().Objects.net_Find(it->second.npc));
     if (body && body->IsTalking()) body->StopTalk();
     if (npc && npc->IsTalking()) npc->StopTalk();
+    coop_talk_left(body, it->second.npc);
     m_talks.erase(it);
     if (notify)
     {
@@ -1980,6 +2002,7 @@ void game_sv_Coop::TradeStart(xrClientData* client, u16 npc_id)
     npc_trade->StartTradeEx(body);
     SCoopTrade& trade = m_trades[client->ID.value()];
     trade.npc = npc_id;
+    coop_talk_speaker(npc_id);
     coop_trade_lua(body, "actor_menu.trade_wnd_opened");
     Msg("[COOP_SERVER] TRADE_START client=%u body=%u npc=%u", client->ID.value(), body->ID(), npc_id);
     TradeSendPrices(client, 1);
