@@ -11,10 +11,12 @@
 
 #include "../xrCore/xrCore.h"
 
+#ifndef XR_USE_ENET
 #pragma warning(push)
 #pragma warning(disable:4995)
 #include <DPlay/dplay8.h>
 #pragma warning(pop)
+#endif
 
 #include "NET_Shared.h"
 

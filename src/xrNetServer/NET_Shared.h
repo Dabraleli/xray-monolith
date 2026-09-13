@@ -12,7 +12,13 @@
 #endif
 
 #include "../xrCore/net_utils.h"
+#ifdef XR_USE_ENET
+// DirectPlay is not compiled in; NET_ENet.h supplies the DPNSEND_* flag
+// vocabulary that net_flags() and its call sites still speak.
+#include "NET_ENet.h"
+#else
 #include <dplay/dplay8.h>
+#endif
 #include "net_messages.h"
 
 
@@ -34,6 +40,7 @@ XRNETSERVER_API extern BOOL psNET_direct_connect;
 // work around for GUID symbol conflicts
 #define XR_GUID(x) xrInternalGuid_ ## x
 
+#ifndef XR_USE_ENET
 // externs
 extern const GUID XR_GUID(CLSID_DirectPlay8Client);
 
@@ -104,6 +111,7 @@ extern const GUID XR_GUID(CLSID_DP8SP_BLUETOOTH);
 extern const GUID XR_GUID(CLSID_DirectPlay8Address);
 
 extern const GUID XR_GUID(IID_IDirectPlay8Address);
+#endif // !XR_USE_ENET
 
 
 enum

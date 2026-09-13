@@ -16,6 +16,11 @@ void XRNETSERVER_API fill_auth_check_params(xr_auth_strings_t& ignore,
 	ignore.push_back(shared_str(FS.update_path(config, "$game_config$", "scripts")));
 	ignore.push_back(shared_str(FS.update_path(config, "$game_config$", "misc\\script_sound_pripyat.ltx")));
 	ignore.push_back(shared_str(FS.update_path(config, "$game_scripts$", "state_mgr_pri_a15.script")));
+	// Coop: Anomaly's options file lives in gamedata/configs and the server rewrites it at start
+	// (modded_exes_migration stamps the build date); the clients keep their copies. Options are
+	// not gameplay data the sides must share, so they stay out of the verification.
+	if (strstr(Core.Params, "-coop_client") || strstr(Core.Params, "-coop_client_probe") || strstr(Core.Params, "-coop_server_probe"))
+		ignore.push_back(shared_str(FS.update_path(config, "$game_config$", "axr_options.ltx")));
 
 	check.push_back(shared_str(FS.update_path(config, "$game_config$", "")));
 	check.push_back(shared_str(FS.update_path(config, "$game_scripts$", "")));

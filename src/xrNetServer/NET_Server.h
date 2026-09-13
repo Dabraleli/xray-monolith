@@ -11,10 +11,13 @@ struct SClientConnectData
 	string64 name;
 	string64 pass;
 	u32 process_id;
+	// Coop: the player's character as chosen in the join menu ("coop=" in the client options:
+	// faction:<f>;icon:<i>;money:<n>;loadout:<a,b,c>), read by game_sv_Coop::SpawnBody.
+	char coop[768];
 
 	SClientConnectData()
 	{
-		name[0] = pass[0] = 0;
+		name[0] = pass[0] = coop[0] = 0;
 		process_id = 0;
 	}
 };
@@ -72,6 +75,7 @@ public:
 	string128 m_guid;
 	shared_str name;
 	shared_str pass;
+	shared_str coop_profile; // coop: SClientConnectData::coop
 
 	Flags flags; // local/host/normal
 	u32 dwTime_LastUpdate;
@@ -164,8 +168,24 @@ public:
 
 protected:
 	shared_str connect_options;
+#ifdef XR_USE_ENET
+	ENetHost* m_enet_host;
+
+	// DirectPlay published this in the session description and the client read it
+	// off the connect response. ENet has no such channel, so the server keeps a
+	// copy and sends it as its half of the handshake.
+	GameDescriptionData m_enet_game_descr;
+
+	ENetPeer* peer_of(ClientID id);
+public:
+	// ENet is polled where DirectPlay pushed from its own threads: pump this
+	// from the server's per-frame Update().
+	void Poll();
+protected:
+#else
 	IDirectPlay8Server* NET;
 	IDirectPlay8Address* net_Address_device;
+#endif
 
 	NET_Compressor net_Compressor;
 
@@ -195,7 +215,9 @@ protected:
 	IClient* ID_to_client(ClientID ID, bool ScanAll = false);
 
 	virtual IClient* new_client(SClientConnectData* cl_data) =0;
+#ifndef XR_USE_ENET
 	bool GetClientAddress(IDirectPlay8Address* pClientAddress, ip_address& Address, DWORD* pPort = NULL);
+#endif
 
 	IBannedClient* GetBannedClient(const ip_address& Address);
 	void BannedList_Save();

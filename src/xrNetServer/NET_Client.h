@@ -41,17 +41,31 @@ class XRNETSERVER_API
 protected:
 	struct HOST_NODE //deprecated...
 	{
+#ifndef XR_USE_ENET
 		DPN_APPLICATION_DESC dpAppDesc;
 		IDirectPlay8Address* pHostAddress;
+#endif
 		shared_str dpSessionName;
 	};
 
 	GameDescriptionData m_game_description;
 	CTimer* device_timer;
 protected:
+#ifdef XR_USE_ENET
+	ENetHost* m_enet_host;
+	ENetPeer* m_enet_peer;
+public:
+	// ENet is polled where DirectPlay pushed from its own threads: pump this
+	// from the client's per-frame update.
+	void Poll();
+	// One step of the clock sync, driven from Poll() -- see NET_Client.cpp.
+	void sync_step();
+protected:
+#else
 	IDirectPlay8Client* NET;
 	IDirectPlay8Address* net_Address_device;
 	IDirectPlay8Address* net_Address_server;
+#endif
 
 	xrCriticalSection net_csEnumeration;
 	xr_vector<HOST_NODE> net_Hosts;
@@ -76,7 +90,9 @@ protected:
 	void SetClientID(ClientID const& local_client) { net_ClientID = local_client; };
 
 
-	IC virtual void SendTo_LL(void* data, u32 size, u32 dwFlags = DPNSEND_GUARANTEED, u32 dwTimeout = 0);
+	// Not IC: the definition lives in a transport-specific .cpp, so an inline
+	// declaration would leave callers in other translation units unresolved.
+	virtual void SendTo_LL(void* data, u32 size, u32 dwFlags = DPNSEND_GUARANTEED, u32 dwTimeout = 0);
 
 public:
 	IPureClient(CTimer* tm);

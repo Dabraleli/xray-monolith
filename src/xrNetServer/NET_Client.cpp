@@ -110,6 +110,7 @@ const GUID XR_GUID(IID_IDirectPlay8Address) =
 
 static INetLog* pClNetLog = NULL;
 
+#ifndef XR_USE_ENET // DirectPlay transport
 void dump_URL(LPCSTR p, IDirectPlay8Address* A)
 {
 	string256 aaaa;
@@ -117,6 +118,7 @@ void dump_URL(LPCSTR p, IDirectPlay8Address* A)
 	R_CHK(A->GetURLA(aaaa,&aaaa_s));
 	Log(p, aaaa);
 }
+#endif // !XR_USE_ENET
 
 // 
 INetQueue::INetQueue()
@@ -281,11 +283,13 @@ XRNETSERVER_API BOOL psNET_direct_connect = FALSE;
  ****************************************************************************/
 
 
+#ifndef XR_USE_ENET // DirectPlay transport
 static HRESULT WINAPI Handler(PVOID pvUserContext, DWORD dwMessageType, PVOID pMessage)
 {
 	IPureClient* C = (IPureClient*)pvUserContext;
 	return C->net_Handler(dwMessageType, pMessage);
 }
+#endif // !XR_USE_ENET
 
 
 //------------------------------------------------------------------------------
@@ -355,9 +359,14 @@ IPureClient::IPureClient(CTimer* timer): net_Statistic(timer)
 	,net_csEnumeration(MUTEX_PROFILE_ID(IPureClient::net_csEnumeration))
 #endif // PROFILE_CRITICAL_SECTIONS
 {
+#ifdef XR_USE_ENET
+	m_enet_host = NULL;
+	m_enet_peer = NULL;
+#else
 	NET = NULL;
 	net_Address_server = NULL;
 	net_Address_device = NULL;
+#endif
 	device_timer = timer;
 	net_TimeDelta_User = 0;
 	net_Time_LastUpdate = 0;
@@ -374,6 +383,7 @@ IPureClient::~IPureClient()
 	psNET_direct_connect = FALSE;
 }
 
+#ifndef XR_USE_ENET // DirectPlay transport
 BOOL IPureClient::Connect(LPCSTR options)
 {
 	R_ASSERT(options);
@@ -760,7 +770,9 @@ BOOL IPureClient::Connect(LPCSTR options)
 	net_TimeDelta = 0;
 	return TRUE;
 }
+#endif // !XR_USE_ENET
 
+#ifndef XR_USE_ENET // DirectPlay transport
 void IPureClient::Disconnect()
 {
 	if (NET) NET->Close(0);
@@ -786,7 +798,9 @@ void IPureClient::Disconnect()
 	net_Connected = EnmConnectionWait;
 	net_Syncronised = FALSE;
 }
+#endif // !XR_USE_ENET
 
+#ifndef XR_USE_ENET // DirectPlay transport
 HRESULT IPureClient::net_Handler(u32 dwMessageType, PVOID pMessage)
 {
 	// HRESULT     hr = S_OK;
@@ -962,6 +976,7 @@ HRESULT IPureClient::net_Handler(u32 dwMessageType, PVOID pMessage)
 
 	return S_OK;
 }
+#endif // !XR_USE_ENET
 
 void IPureClient::OnMessage(void* data, u32 size)
 {
@@ -985,6 +1000,7 @@ void IPureClient::timeServer_Correct(u32 sv_time, u32 cl_time)
 	Sync_Average();
 }
 
+#ifndef XR_USE_ENET // DirectPlay transport
 void IPureClient::SendTo_LL(void* data, u32 size, u32 dwFlags, u32 dwTimeout)
 {
 	if (net_Disconnected)
@@ -1024,6 +1040,7 @@ void IPureClient::SendTo_LL(void* data, u32 size, u32 dwFlags, u32 dwTimeout)
 
 	//	UpdateStatistic();
 }
+#endif // !XR_USE_ENET
 
 void IPureClient::Send(NET_Packet& packet, u32 dwFlags, u32 dwTimeout)
 {
@@ -1035,6 +1052,7 @@ void IPureClient::Flush_Send_Buffer()
 	MultipacketSender::FlushSendBuffer(0);
 }
 
+#ifndef XR_USE_ENET // DirectPlay transport
 BOOL IPureClient::net_HasBandwidth()
 {
 	u32 dwTime = TimeGlobal(device_timer);
@@ -1077,7 +1095,9 @@ BOOL IPureClient::net_HasBandwidth()
 	}
 	return FALSE;
 }
+#endif // !XR_USE_ENET
 
+#ifndef XR_USE_ENET // DirectPlay transport
 void IPureClient::UpdateStatistic()
 {
 	// Query network statistic for this client
@@ -1089,6 +1109,7 @@ void IPureClient::UpdateStatistic()
 
 	net_Statistic.Update(CI);
 }
+#endif // !XR_USE_ENET
 
 void IPureClient::Sync_Thread()
 {
@@ -1096,11 +1117,16 @@ void IPureClient::Sync_Thread()
 
 	//***** Ping server
 	net_DeltaArray.clear();
+#ifdef XR_USE_ENET
+	while (m_enet_peer && !net_Disconnected)
+#else
 	R_ASSERT(NET);
 	for (; NET && !net_Disconnected;)
+#endif
 	{
 		// Waiting for queue empty state
-		if (net_Syncronised) break; // Sleep(2000);
+		if (net_Syncronised) break;
+#ifndef XR_USE_ENET
 		else
 		{
 			DWORD dwPending = 0;
@@ -1111,6 +1137,7 @@ void IPureClient::Sync_Thread()
 			}
 			while (dwPending);
 		}
+#endif
 
 		// Construct message
 		clPing.sign1 = 0x12071980;
@@ -1118,6 +1145,11 @@ void IPureClient::Sync_Thread()
 		clPing.dwTime_ClientSend = TimerAsync(device_timer);
 
 		// Send it
+#ifdef XR_USE_ENET
+		// ENet paces itself; no queue drain step and no structured exception
+		// handling needed around the send.
+		SendTo_LL(&clPing, sizeof(clPing), net_flags(FALSE, FALSE, TRUE, TRUE));
+#else
 		__try
 		{
 			DPN_BUFFER_DESC desc;
@@ -1137,19 +1169,21 @@ void IPureClient::Sync_Thread()
 			Msg("* CLIENT: SyncThread: EXIT. (failed to send - disconnected?)");
 			break;
 		}
+#endif
 
 		// Waiting for reply-packet to arrive
 		if (!net_Syncronised)
 		{
 			u32 old_size = net_DeltaArray.size();
 			u32 timeBegin = TimerAsync(device_timer);
-			while ((net_DeltaArray.size() == old_size) && (TimerAsync(device_timer) - timeBegin < 5000)) Sleep(1);
+			while ((net_DeltaArray.size() == old_size)
+				&& (TimerAsync(device_timer) - timeBegin < 5000)
+				&& !net_Disconnected) Sleep(1);
 
 			if (net_DeltaArray.size() >= syncSamples)
 			{
 				net_Syncronised = TRUE;
 				net_TimeDelta = net_TimeDelta_Calculated;
-				// Msg			("* CL_TimeSync: DELTA: %d",net_TimeDelta);
 			}
 		}
 	}
@@ -1181,11 +1215,40 @@ void sync_thread(void* P)
 	C->Sync_Thread();
 }
 
+#ifdef XR_USE_ENET
+// DirectPlay received on its own threads, so the clock sync could live on one
+// too. ENet is serviced from the main thread and is not thread safe, so the
+// sync runs there as well: one ping per poll, replies handled in _Recieve as
+// before, until enough round trips have been measured.
+void IPureClient::sync_step()
+{
+	if (net_Syncronised || net_Disconnected)
+		return;
+
+	if (net_DeltaArray.size() >= syncSamples)
+	{
+		net_Syncronised = TRUE;
+		net_TimeDelta = net_TimeDelta_Calculated;
+		return;
+	}
+
+	MSYS_PING clPing;
+	clPing.sign1 = 0x12071980;
+	clPing.sign2 = 0x26111975;
+	clPing.dwTime_ClientSend = TimerAsync(device_timer);
+	SendTo_LL(&clPing, sizeof(clPing), net_flags(FALSE, FALSE, TRUE, TRUE));
+}
+#endif // XR_USE_ENET
+
 void IPureClient::net_Syncronize()
 {
 	net_Syncronised = FALSE;
 	net_DeltaArray.clear();
+#ifdef XR_USE_ENET
+	// no thread to spawn: Poll() carries the sync now
+#else
 	thread_spawn(sync_thread, "network-time-sync", 0, this);
+#endif
 }
 
 void IPureClient::ClearStatistic()
@@ -1201,6 +1264,7 @@ BOOL IPureClient::net_IsSyncronised()
 #include <WINSOCK2.H>
 #include <Ws2tcpip.h>
 
+#ifndef XR_USE_ENET // DirectPlay transport
 bool IPureClient::GetServerAddress(ip_address& pAddress, DWORD* pPort)
 {
 	*pPort = 0;
@@ -1236,3 +1300,4 @@ bool IPureClient::GetServerAddress(ip_address& pAddress, DWORD* pPort)
 
 	return true;
 };
+#endif // !XR_USE_ENET

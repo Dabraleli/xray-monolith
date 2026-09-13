@@ -17,7 +17,9 @@ static INetLog* pSvNetLog = NULL;
 #define NET_PROTECTED_SERVER_STR      "Access denied by protected server for this player!"
 #define NET_NOTFOR_SUBNET_STR		  "Your IP does not present in server's subnet"
 
+#ifndef XR_USE_ENET // DirectPlay transport
 void dump_URL(LPCSTR p, IDirectPlay8Address* A);
+#endif // !XR_USE_ENET
 
 LPCSTR nameTraffic = "traffic.net";
 
@@ -142,11 +144,13 @@ static const GUID NET_GUID =
 static const GUID CLSID_NETWORKSIMULATOR_DP8SP_TCPIP =
 	{0x8d3f9e5e, 0xa3bd, 0x475b, {0x9e, 0x49, 0xb0, 0xe7, 0x71, 0x39, 0x14, 0x3c}};
 
+#ifndef XR_USE_ENET // DirectPlay transport
 static HRESULT WINAPI Handler(PVOID pvUserContext, DWORD dwMessageType, PVOID pMessage)
 {
 	IPureServer* C = (IPureServer*)pvUserContext;
 	return C->net_Handler(dwMessageType, pMessage);
 }
+#endif // !XR_USE_ENET
 
 
 //------------------------------------------------------------------------------
@@ -220,8 +224,12 @@ IPureServer::IPureServer(CTimer* timer, BOOL Dedicated)
 	stats.clear();
 	stats.dwSendTime = TimeGlobal(device_timer);
 	SV_Client = NULL;
+#ifdef XR_USE_ENET
+	m_enet_host = NULL;
+#else
 	NET = NULL;
 	net_Address_device = NULL;
+#endif
 	pSvNetLog = NULL; //xr_new<INetLog>("logs\\net_sv_log.log", TimeGlobal(device_timer));
 #ifdef DEBUG
 	sender_functor_invoked = false;
@@ -242,6 +250,7 @@ IPureServer::~IPureServer()
 	psNET_direct_connect = FALSE;
 }
 
+#ifndef XR_USE_ENET // DirectPlay transport
 IPureServer::EConnect IPureServer::Connect(LPCSTR options, GameDescriptionData& game_descr)
 {
 	connect_options = options;
@@ -442,7 +451,9 @@ IPureServer::EConnect IPureServer::Connect(LPCSTR options, GameDescriptionData& 
 
 	return ErrNoError;
 }
+#endif // !XR_USE_ENET
 
+#ifndef XR_USE_ENET // DirectPlay transport
 void IPureServer::Disconnect()
 {
 	//.	config_Save		();
@@ -459,7 +470,9 @@ void IPureServer::Disconnect()
 	_RELEASE(net_Address_device);
 	_RELEASE(NET);
 }
+#endif // !XR_USE_ENET
 
+#ifndef XR_USE_ENET // DirectPlay transport
 HRESULT IPureServer::net_Handler(u32 dwMessageType, PVOID pMessage)
 {
 	// HRESULT     hr = S_OK;
@@ -582,6 +595,7 @@ HRESULT IPureServer::net_Handler(u32 dwMessageType, PVOID pMessage)
 	}
 	return S_OK;
 }
+#endif // !XR_USE_ENET
 
 void IPureServer::Flush_Clients_Buffers()
 {
@@ -611,6 +625,7 @@ void IPureServer::SendTo_Buf(ClientID id, void* data, u32 size, u32 dwFlags, u32
 }
 
 
+#ifndef XR_USE_ENET // DirectPlay transport
 void IPureServer::SendTo_LL(ClientID ID/*DPNID ID*/, void* data, u32 size, u32 dwFlags, u32 dwTimeout)
 {
 	//	if (psNET_Flags.test(NETFLAG_LOG_SV_PACKETS)) pSvNetLog->LogData(TimeGlobal(device_timer), data, size);
@@ -657,12 +672,14 @@ void IPureServer::SendTo_LL(ClientID ID/*DPNID ID*/, void* data, u32 size, u32 d
 
 	R_CHK(_hr);
 }
+#endif // !XR_USE_ENET
 
 void IPureServer::SendTo(ClientID ID/*DPNID ID*/, NET_Packet& P, u32 dwFlags, u32 dwTimeout)
 {
 	SendTo_LL(ID, P.B.data, P.B.count, dwFlags, dwTimeout);
 }
 
+#ifndef XR_USE_ENET // DirectPlay transport
 void IPureServer::SendBroadcast_LL(ClientID exclude, void* data, u32 size, u32 dwFlags)
 {
 	struct ClientExcluderPredicate
@@ -703,6 +720,7 @@ void IPureServer::SendBroadcast_LL(ClientID exclude, void* data, u32 size, u32 d
 	ClientSenderFunctor temp_functor(this, data, size, dwFlags);
 	net_players.ForFoundClientsDo(ClientExcluderPredicate(exclude), temp_functor);
 }
+#endif // !XR_USE_ENET
 
 void IPureServer::SendBroadcast(ClientID exclude, NET_Packet& P, u32 dwFlags)
 {
@@ -740,6 +758,7 @@ void IPureServer::OnCL_Disconnected(IClient* CL)
 	Msg("* Player 0x%08x disconnected.\n", CL->ID.value());
 }
 
+#ifndef XR_USE_ENET // DirectPlay transport
 BOOL IPureServer::HasBandwidth(IClient* C)
 {
 	u32 dwTime = TimeGlobal(device_timer);
@@ -777,7 +796,9 @@ BOOL IPureServer::HasBandwidth(IClient* C)
 	}
 	return FALSE;
 }
+#endif // !XR_USE_ENET
 
+#ifndef XR_USE_ENET // DirectPlay transport
 void IPureServer::UpdateClientStatistic(IClient* C)
 {
 	// Query network statistic for this client
@@ -791,6 +812,7 @@ void IPureServer::UpdateClientStatistic(IClient* C)
 	}
 	C->stats.Update(CI);
 }
+#endif // !XR_USE_ENET
 
 void IPureServer::ClearStatistic()
 {
@@ -815,6 +837,7 @@ void IPureServer::ClearStatistic()
 	return true;
 }*/
 
+#ifndef XR_USE_ENET // DirectPlay transport
 bool IPureServer::DisconnectClient(IClient* C, LPCSTR Reason)
 {
 	if (!C) return false;
@@ -823,6 +846,7 @@ bool IPureServer::DisconnectClient(IClient* C, LPCSTR Reason)
 	CHK_DX(res);
 	return true;
 }
+#endif // !XR_USE_ENET
 
 bool IPureServer::DisconnectAddress(const ip_address& Address, LPCSTR reason)
 {
@@ -866,6 +890,7 @@ bool IPureServer::DisconnectAddress(const ip_address& Address, LPCSTR reason)
 	return true;
 }
 
+#ifndef XR_USE_ENET // DirectPlay transport
 bool IPureServer::GetClientAddress(IDirectPlay8Address* pClientAddress, ip_address& Address, DWORD* pPort)
 {
 	WCHAR wstrHostname[ 256 ] = {0};
@@ -889,7 +914,9 @@ bool IPureServer::GetClientAddress(IDirectPlay8Address* pClientAddress, ip_addre
 
 	return true;
 };
+#endif // !XR_USE_ENET
 
+#ifndef XR_USE_ENET // DirectPlay transport
 bool IPureServer::GetClientAddress(ClientID ID, ip_address& Address, DWORD* pPort)
 {
 	IDirectPlay8Address* pClAddr = NULL;
@@ -897,6 +924,7 @@ bool IPureServer::GetClientAddress(ClientID ID, ip_address& Address, DWORD* pPor
 
 	return GetClientAddress(pClAddr, Address, pPort);
 };
+#endif // !XR_USE_ENET
 
 IBannedClient* IPureServer::GetBannedClient(const ip_address& Address)
 {

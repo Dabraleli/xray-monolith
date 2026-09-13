@@ -1,3 +1,6 @@
 [submodule "src/3rd party/optick-git"]
 	path = src/3rd party/optick-git
 	url = https://github.com/bombomby/optick.git
+[submodule "src/3rd party/enet"]
+	path = src/3rd party/enet
+	url = https://github.com/lsalzman/enet
