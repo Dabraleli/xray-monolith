@@ -1157,6 +1157,168 @@ function on_server_lua(text)
     end
 end
 
+-- ---- Module loader: the rest of the script layer starts here as in SP ---------------------------
+-- SP starts every script module from axr_main.on_game_start (start_game_callback of the server
+-- world). A coop client has no ALife, so that pass never runs here; the coop layer used to start a
+-- hand-picked list of presentation modules and nothing else - a script mod with its own
+-- on_game_start (HUD, animations, keys, MCM features) stayed dead on the clients. This pass loads
+-- and starts every module of $game_scripts$ in the SP order, except:
+--   LOADER_WORLD: the world's modules (ALife, squads, smart terrains, tasks, trade, NPC schemes,
+--     loot, spawns, saves) - they run on the server, and their listeners here would act on a world
+--     that only exists there;
+--   LOADER_OWN: modules the coop layer initialises itself above (explicit on_game_start / create)
+--     or replaces with mirrors (PDA, statistics, emissions, companions, loot, sleep, teleport).
+-- Each start runs under pcall; an error only logs [COOP_LOADER] FAIL (and the SP fatal window of
+-- modxml_lua_fatal_window is held back for the load pass). -coop_loader_probe logs every start.
+local LOADER_WORLD = {
+    aaaa_script_fixes_mp = true, alife_storage_manager = true, axr_beh_patches = true, axr_main = true,
+    axr_task_manager = true, axr_trade_manager = true, axr_turn_on_campfire = true,
+    bind_anomaly_field = true, bind_anomaly_zone = true, bind_awr = true, bind_item = true,
+    death_manager = true, dialogs_lostzone = true, dynamic_news_manager = true, faction_expansions = true,
+    game_autosave = true, game_autosave_new = true, game_backpack_travel = true, game_difficulties = true,
+    game_fast_travel = true, game_relations = true, game_setup = true, game_statistics = true,
+    gamemode_agony = true, gamemode_azazel = true, gamemode_ironman = true, gamemode_timer = true,
+    gameplay_radioactive_water = true, gameplay_silent_kills = true, guaranteed_loot = true,
+    heli_alife_warfare = true, info_portions = true, item_artefact = true, item_mine = true,
+    logic_enforcer = true, mob_trade = true, pda = true, pda_smart_terrain_warfare = true,
+    phantom_manager = true, psi_storm_manager = true, release_body_manager = true, release_item_manager = true,
+    release_npc_inventory = true, safe_release_manager = true, sim_offline_combat = true, sim_squad_bounty = true,
+    sim_squad_warfare = true, simulation_objects = true, smart_terrain_warfare = true, surge_manager = true,
+    trade_manager = true, treasure_manager = true, true_first_person_death = true, txr_mines = true,
+    txr_paid_companions = true, txr_routes = true, ui_map_debug_ex = true, ui_mm_faction_select = true,
+    xrs_debug_tools = true, xrs_facer = true, xrs_kill_wounded = true, xrs_rnd_npc_loadout = true,
+}
+local LOADER_WORLD_PREFIX = { 'sim_', 'smart_terrain', 'tasks_', 'task_', 'xr_', 'xrs_', 'warfare', 'gamemode_',
+    'release_', 'dialogs_', 'ui_debug', 'drx_da_main', 'treasure', 'surge_', 'psi_storm' }
+local LOADER_OWN = {
+    actor_menu = true, actor_status = true, actor_effects = true, actor_status_thirst = true, actor_status_sleep = true,
+    item_repair = true, item_cooking = true, item_map_kit = true, item_money = true, item_backpack = true, item_tent = true,
+    item_parts = true, item_weapon = true, item_device = true, ui_pda_encyclopedia_tab = true, ui_pda_radio_tab = true,
+    itms_manager = true, sound_theme = true, axr_companions = true, ui_mutant_loot = true, ui_sleep_dialog = true,
+    ui_sr_teleport = true, coop_client_actor = true, coop_server_actor = true, coop_menu = true, coop_spatial = true,
+    coop_activation_probe = true,
+    -- SP starts these from the engine itself (script.ltx [common]), not from axr_main
+    _G = true, _g_patches = true, dxml_core = true, class_registrator = true, game_registrator = true, ui_registrator = true,
+    ce_new_attachable_item = true, ce_new_game_dm = true, sim_faction_brain_human = true, sim_faction_brain_mutant = true,
+    ce_switcher = true, lua_help = true, rx_gl = true,
+}
+local LOADER_ALLOW = { xrs_dyn_music = true } -- presentation modules caught by a world prefix
+local loader_started = {} -- module -> true (started) | string (error)
+
+local function loader_skips(name)
+    if LOADER_ALLOW[name] then return false end
+    if LOADER_WORLD[name] or LOADER_OWN[name] then return true end
+    for _, prefix in ipairs(LOADER_WORLD_PREFIX) do
+        if string.sub(name, 1, #prefix) == prefix then return true end
+    end
+    return false
+end
+
+local function loader_probe()
+    return string.find(command_line(), '-coop_loader_probe', 1, true) ~= nil
+end
+
+local function start_script_modules()
+    local probe = loader_probe()
+    local fatal_window = _G.COnLuaBindFatalError
+    _G.COnLuaBindFatalError = nil
+    local f = getFS()
+    local flist = f:file_list_open_ex('$game_scripts$', bit_or(FS.FS_ListFiles, FS.FS_RootOnly), '*.script')
+    local names = {}
+    for it = 0, flist:Size() - 1 do
+        local file = flist:GetAt(it)
+        local name = file:NameShort()
+        if file:Size() > 0 and string.sub(name, -7) == '.script' then
+            name = string.sub(name, 1, -8)
+            if not loader_skips(name) then names[#names + 1] = name end
+        end
+    end
+    -- pass 1: load (top-level code, monkeypatches) in the SP order
+    local loaded = {}
+    for _, name in ipairs(names) do
+        local ok, module = pcall(function() return _G[name] end)
+        if ok and type(module) == 'table' then
+            loaded[#loaded + 1] = name
+        elseif not ok then
+            loader_started[name] = tostring(module)
+            printf('! [COOP_LOADER] FAIL load %s: %s', name, tostring(module))
+        end
+    end
+    -- pass 2: on_game_start
+    local started, failed = 0, 0
+    for _, name in ipairs(loaded) do
+        local module = rawget(_G, name)
+        if module and type(module.on_game_start) == 'function' then
+            local ok, err = pcall(module.on_game_start)
+            if ok then
+                started = started + 1
+                loader_started[name] = true
+                if probe then printf('[COOP_LOADER] start %s', name) end
+            else
+                failed = failed + 1
+                loader_started[name] = tostring(err)
+                printf('! [COOP_LOADER] FAIL start %s: %s', name, tostring(err))
+            end
+        end
+    end
+    _G.COnLuaBindFatalError = fatal_window
+    printf('[COOP_LOADER] modules=%s loaded=%s started=%s failed=%s probe=%s', tostring(#names), tostring(#loaded),
+        tostring(started), tostring(failed), tostring(probe))
+end
+
+-- Listeners of every script callback run under pcall here (the server does the same for its world
+-- pass): an error in a mod's listener logs [COOP_CLIENT] LISTENER_ERROR once and disables that
+-- listener instead of stopping the client.
+local client_failed = {}
+local client_send_callback = nil
+local client_intercepts_table = nil
+
+local function client_intercepts()
+    if client_intercepts_table then return client_intercepts_table end
+    for i = 1, 40 do
+        local name, value = debug.getupvalue(axr_main.make_callback, i)
+        if not name then return nil end
+        if name == 'intercepts' then client_intercepts_table = value; return value end
+    end
+end
+
+local function listener_script(f)
+    local info = debug.getinfo(f, 'S')
+    local source = info and info.source or ''
+    return string.match(source, '([%w_]+)%.script') or source
+end
+
+local function send_client_callback(name, ...)
+    local intercepts = client_intercepts()
+    local list = intercepts and intercepts[name]
+    if not list then return client_send_callback(name, ...) end
+    local listeners = {}
+    for listener, index in pairs(list) do listeners[#listeners + 1] = { listener, index } end
+    table.sort(listeners, function(a, b) return (tonumber(a[2]) or 0) < (tonumber(b[2]) or 0) end)
+    for _, entry in ipairs(listeners) do
+        local listener = entry[1]
+        if list[listener] and not client_failed[listener] then
+            local f, self_arg = listener, nil
+            if type(listener) ~= 'function' then f, self_arg = listener[name], listener end
+            if f then
+                local ok, err
+                if self_arg then ok, err = pcall(f, self_arg, ...) else ok, err = pcall(f, ...) end
+                if not ok then
+                    client_failed[listener] = true
+                    printf('! [COOP_CLIENT] LISTENER_ERROR callback=%s script=%s error=%s', name, listener_script(f), tostring(err))
+                end
+            end
+        end
+    end
+    if axr_main[name] then axr_main[name](...) end
+end
+
+local function install_client_callbacks()
+    if client_send_callback then return end
+    client_send_callback = _G.SendScriptCallback
+    _G.SendScriptCallback = send_client_callback
+end
+
 local function install_presentation_layer()
     if layer_installed then return end
     layer_installed = true
@@ -1184,6 +1346,8 @@ local function install_presentation_layer()
     actor_status_thirst.force_sleep = sleep_warning
     actor_status_sleep.force_sleep = sleep_warning
     RegisterScriptCallback("actor_on_item_before_use", itms_manager.actor_on_item_before_use)
+    install_client_callbacks()
+    start_script_modules()
     if pending_store then
         store_apply(pending_store)
         pending_store = nil
