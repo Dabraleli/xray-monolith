@@ -886,33 +886,34 @@ void game_sv_Coop::TalkUpdate()
     }
 }
 
-static const u32 coop_store_limit = 4096;
-
 void game_sv_Coop::OnPlayerStore(xrClientData* client, NET_Packet& P)
 {
-    if (!client->name.size() || P.B.count < P.r_tell() + 1) return;
-    const u32 length = P.B.count - P.r_tell();
-    if (length > coop_store_limit)
-    {
-        Msg("! [COOP_SERVER] PLAYER_STORE_REJECT client=%u name=%s bytes=%u", client->ID.value(), client->name.c_str(), length);
-        return;
-    }
-    xr_string& blob = m_store[client->name];
-    blob.assign((LPCSTR)(P.B.data + P.r_tell()), length);
-    while (!blob.empty() && blob[blob.size() - 1] == 0) blob.resize(blob.size() - 1); // stringZ terminator
-    if (strstr(Core.Params, "-coop_damage_probe"))
-        Msg("[COOP_SERVER] PLAYER_STORE client=%u name=%s bytes=%u", client->ID.value(), client->name.c_str(), u32(blob.size()));
+    if (!client->name.size()) return;
+    xr_string blob;
+    if (!m_store_parts[client->name].receive(P, blob)) return;
+    m_store[client->name].swap(blob);
+    if (strstr(Core.Params, "-coop_damage_probe") || strstr(Core.Params, "-coop_store_probe"))
+        Msg("[COOP_SERVER] PLAYER_STORE client=%u name=%s bytes=%u", client->ID.value(), client->name.c_str(), u32(m_store[client->name].size()));
 }
 
+// Sent before the connection data (xrServer::OnCL_Connected): the client applies it before its
+// body spawns, the order of load_state and the actor's net_spawn in SP.
 void game_sv_Coop::SendPlayerStore(xrClientData* client)
 {
     xr_map<shared_str, xr_string>::const_iterator it = m_store.find(client->name);
     if (it == m_store.end() || it->second.empty()) return;
-    NET_Packet P;
-    P.w_begin(M_COOP_PLAYER_STORE);
-    P.w_stringZ(it->second.c_str());
-    server().SendTo(client->ID, P, net_flags(TRUE, TRUE));
-    Msg("[COOP_SERVER] PLAYER_STORE_SENT client=%u name=%s bytes=%u", client->ID.value(), client->name.c_str(), u32(it->second.size()));
+    const xr_string& blob = it->second;
+    const u32 total = u32(blob.size());
+    for (u32 offset = 0; offset < total;)
+    {
+        const u32 length = _min(total - offset, coop_store_part);
+        NET_Packet P;
+        P.w_begin(M_COOP_PLAYER_STORE);
+        coop_store_write_part(P, blob.c_str(), total, offset, length);
+        server().SendTo(client->ID, P, net_flags(TRUE, TRUE));
+        offset += length;
+    }
+    Msg("[COOP_SERVER] PLAYER_STORE_SENT client=%u name=%s bytes=%u", client->ID.value(), client->name.c_str(), total);
 }
 
 // ---- saves ---------------------------------------------------------------------------------------
@@ -941,7 +942,10 @@ static void coop_store_save(const xr_map<shared_str, xr_string>& store, LPCSTR s
     for (xr_map<shared_str, xr_string>::const_iterator it = store.begin(); it != store.end(); ++it)
     {
         if (it->second.empty()) continue;
-        writer->w_printf("%s\n%s\n", it->first.c_str(), it->second.c_str());
+        writer->w(it->first.c_str(), it->first.size());
+        writer->w("\n", 1);
+        writer->w(it->second.c_str(), u32(it->second.size()));
+        writer->w("\n", 1);
     }
     FS.w_close(writer);
 }
@@ -953,13 +957,14 @@ static void coop_store_load(xr_map<shared_str, xr_string>& store, LPCSTR save_na
     if (!FS.exist(path)) return;
     IReader* reader = FS.r_open(path);
     if (!reader) return;
-    string4096 name, blob;
+    string4096 name;
+    xr_string blob;
     u32 loaded = 0;
     while (!reader->eof())
     {
         reader->r_string(name, sizeof(name));
         if (reader->eof()) break;
-        reader->r_string(blob, sizeof(blob));
+        reader->r_string(blob);
         if (!name[0]) continue;
         store[shared_str(name)] = blob;
         ++loaded;
@@ -2267,7 +2272,6 @@ void game_sv_Coop::OnPlayerConnectFinished(ClientID id)
         {
             R_ASSERT(client->owner && client->owner->owner == server().GetServerClient());
             Msg("[COOP_SERVER] PLAYER_READY client=%u body=%u", id.value(), client->owner->ID);
-            SendPlayerStore(client);
             SendTipTexts(client);
             SendPda(client);
             SendWorldInfos(client);

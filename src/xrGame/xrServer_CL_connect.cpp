@@ -213,6 +213,8 @@ void xrServer::OnCL_Connected(IClient* _CL)
 	//csPlayers.Enter					();	//sychronized by a parent call
 	Export_game_type(CL);
 	Perform_game_export();
+	if (game->Type() == eGameIDCoop) // the player's kept Lua state, ahead of the body it belongs to
+		static_cast<game_sv_Coop*>(game)->SendPlayerStore(CL);
 	SendConnectionData(CL);
 
 	VERIFY2(CL->ps, "Player state not created");

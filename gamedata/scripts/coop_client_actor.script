@@ -158,36 +158,66 @@ local function install_client_globals()
     end
 end
 
--- Per-player state that must outlive the connection: the thirst and sleep modules keep it in
--- module locals and expose it only through their save_state/load_state (the SP save hooks).
--- The client serialises that table as Lua source and hands it to the server
--- (level.coop_player_store); the server keeps it under the connection name and sends it back
--- on the next join (game_cl_Coop -> on_player_store). Health penalties of these modules reach
--- the server body through db.actor:change_health (GE_COOP_HEALTH_CHANGE).
+-- Per-player state that must outlive the connection. In SP every module keeps its persistent
+-- state in the alife_storage_manager table (m_data): save_state listeners fill it before a save,
+-- load_state listeners read it after a load, and a few modules read and write
+-- alife_storage_manager.get_state() directly. Here that table is this client's own, and the store
+-- is that table: the client serialises it as Lua source and hands it to the server
+-- (level.coop_player_store, in parts); the server keeps it under the connection name and sends it
+-- back ahead of the body's spawn on the next join (game_cl_Coop -> on_player_store), so load_state
+-- runs before net_spawn / on_game_load as in SP. The pstor tables (se_object, game_object: per-object
+-- variables of the world) stay out - the world is the server's. Thirst and sleep are started by the
+-- coop layer without their on_game_start (no listeners of their own), so they are asked by name.
+-- Health penalties of these modules reach the server body through db.actor:change_health
+-- (GE_COOP_HEALTH_CHANGE).
 local STORE_MODULES = { "actor_status_thirst", "actor_status_sleep" }
+local STORE_SKIP = { se_object = true, game_object = true }
 local store_interval = 15000 -- ms
 local store_next = 0
 local pending_store = nil
+local store_last = nil -- the last blob sent: an unchanged state is not sent again
+local store_sent = 0
 
-local function encode_value(v, out)
+local function store_probe()
+    return string.find(command_line(), '-coop_store_probe', 1, true) ~= nil
+end
+
+local function store_state()
+    return alife_storage_manager.get_state()
+end
+
+-- Lua source of a value: tables (cycles cut, shared tables copied), strings, finite numbers,
+-- booleans; anything else (userdata, functions) is left out.
+local function encode_value(v, out, depth, seen)
     local t = type(v)
     if t == "table" then
+        if depth > 24 or seen[v] then
+            out[#out + 1] = "nil"
+            return
+        end
+        seen[v] = true
         out[#out + 1] = "{"
         for k, val in pairs(v) do
-            local kt = type(k)
-            if (kt == "string" or kt == "number") and val ~= nil then
+            local kt, vt = type(k), type(val)
+            if (kt == "string" or kt == "number") and not (depth == 0 and STORE_SKIP[k])
+                and (vt == "table" or vt == "string" or vt == "number" or vt == "boolean") then
                 out[#out + 1] = "["
-                encode_value(k, out)
+                encode_value(k, out, depth + 1, seen)
                 out[#out + 1] = "]="
-                encode_value(val, out)
+                encode_value(val, out, depth + 1, seen)
                 out[#out + 1] = ","
             end
         end
+        seen[v] = nil
         out[#out + 1] = "}"
     elseif t == "string" then
-        out[#out + 1] = string.format("%q", v)
+        out[#out + 1] = (string.gsub(string.format("%q", v), "\\\n", "\\n")) -- one line per blob
     elseif t == "number" then
-        out[#out + 1] = string.format("%.17g", v)
+        if v ~= v or v == math.huge or v == -math.huge then
+            out[#out + 1] = "nil"
+        else
+            out[#out + 1] = string.format("%.17g", v)
+        end
     elseif t == "boolean" then
         out[#out + 1] = tostring(v)
     else
@@ -196,13 +226,14 @@ local function encode_value(v, out)
 end
 
 local function store_collect()
-    local data = {}
+    local data = store_state()
+    SendScriptCallback("save_state", data) -- every client-started module with a listener
     for _, name in ipairs(STORE_MODULES) do
         local module = _G[name]
         if module and module.save_state then module.save_state(data) end
     end
     local out = {}
-    encode_value(data, out)
+    encode_value(data, out, 0, {})
     return table.concat(out)
 end
 
@@ -215,19 +246,41 @@ local function store_apply(blob)
         printf("! [COOP_CLIENT] PLAYER_STORE_BAD bytes=%s", tostring(#blob))
         return
     end
+    local state = store_state()
+    local keys = 0
+    for k, v in pairs(data) do
+        if not STORE_SKIP[k] then
+            state[k] = v
+            keys = keys + 1
+        end
+    end
+    SendScriptCallback("load_state", state)
     for _, name in ipairs(STORE_MODULES) do
         local module = _G[name]
-        if module and module.load_state then module.load_state(data) end
+        if module and module.load_state then module.load_state(state) end
     end
-    printf("[COOP_CLIENT] PLAYER_STORE_LOADED bytes=%s", tostring(#blob))
+    store_last = blob
+    printf("[COOP_CLIENT] PLAYER_STORE_LOADED bytes=%s keys=%s", tostring(#blob), tostring(keys))
 end
 
 local function store_send()
     if level.coop_player_store == nil then return end
-    level.coop_player_store(store_collect())
+    local ok, blob = pcall(store_collect)
+    if not ok then
+        printf("! [COOP_CLIENT] PLAYER_STORE_ENCODE_FAIL %s", tostring(blob))
+        return
+    end
+    if blob == store_last then return end
+    store_last = blob
+    store_sent = store_sent + 1
+    level.coop_player_store(blob)
+    if store_sent == 1 or store_probe() then
+        printf("[COOP_CLIENT] PLAYER_STORE_SENT bytes=%s n=%s", tostring(#blob), tostring(store_sent))
+    end
 end
 
--- Called by the engine (game_cl_Coop::OnPlayerStore) when the server returns the kept state.
+-- Called by the engine (game_cl_Coop::OnPlayerStore) when the server returns the kept state:
+-- before the body's spawn on a join (kept until the modules are started), later otherwise.
 function on_player_store(blob)
     if type(blob) ~= "string" or blob == "" then return end
     if layer_installed then
@@ -1323,6 +1376,18 @@ local function install_client_callbacks()
     _G.SendScriptCallback = send_client_callback
 end
 
+-- The trade and the mechanic windows stay the engine's on a coop client: the server prices the
+-- items and runs the deal (M_COOP_TRADE), while ui_inventory (started by the loader) would price
+-- them with the trade_manager tables the world keeps on the server - nothing tradable here - and
+-- move the items and the money itself. The engine asks these before it opens a mode; false = its
+-- own window. Inventory and loot stay with ui_inventory.
+local function install_engine_trade_window()
+    local menu = actor_menu_inventory
+    if not menu then return end
+    menu.CUIActorMenu_OnMode_Trade = function(obj) return false end
+    menu.CUIActorMenu_OnMode_Upgrade = function(obj) return false end
+end
+
 local function install_presentation_layer()
     if layer_installed then return end
     layer_installed = true
@@ -1352,6 +1417,7 @@ local function install_presentation_layer()
     RegisterScriptCallback("actor_on_item_before_use", itms_manager.actor_on_item_before_use)
     install_client_callbacks()
     start_script_modules()
+    install_engine_trade_window()
     local mirror = level.coop_alife and level.coop_alife()
     if mirror then
         local me = mirror:actor()
@@ -1441,7 +1507,9 @@ function client_actor:net_spawn(se)
     -- modules address their sounds and item checks by it (xr_sound looped sounds: db.storage[AC_ID]).
     _G.AC_ID = self.object:id()
     self.first_update_pending = true
-    -- The server returns the kept state shortly after PLAYER_READY; the first upload waits for it.
+    -- SP: bind_stalker_ext.actor_on_net_spawn, after the load_state pass (the store came ahead of
+    -- this body); the modules' post-load setup (arszi_psy, level_environment, ...).
+    SendScriptCallback("on_game_load", self)
     store_next = time_global() + 2 * store_interval
     printf('[COOP_CLIENT] LUA_ACTOR_READY id=%s', tostring(self.object:id()))
     return true

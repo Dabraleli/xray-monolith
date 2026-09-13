@@ -29,7 +29,7 @@ void game_cl_Coop::OnPlayerStore(NET_Packet& P)
 {
     // The blob is opaque here; coop_client_actor.script serialises and restores it.
     xr_string blob;
-    P.r_stringZ(blob);
+    if (!m_store_parts.receive(P, blob)) return;
     ::luabind::functor<void> functor;
     if (ai().script_engine().functor("coop_client_actor.on_player_store", functor))
         functor(blob.c_str());

@@ -9,6 +9,7 @@
 #include "pch_script.h"
 #include "level.h"
 #include "game_sv_coop.h"
+#include "coop_player_store.h"
 #include "actor.h"
 #include "ai/stalker/ai_stalker.h"
 #include "script_game_object.h"
@@ -1907,20 +1908,29 @@ void g_send(NET_Packet& P, bool bReliable = 0, bool bSequential = 1, bool bHighP
 	Level().Send(P, net_flags(bReliable, bSequential, bHighPriority, bSendImmediately));
 }
 
-// Coop client: hand this player's Lua state (thirst, sleep, ...) to the server, which keeps it under
-// the connection name and returns it on the next join (coop_client_actor.on_player_store).
+// Coop client: hand this player's Lua state (the client's alife_storage_manager table: thirst,
+// sleep, the state of every module with save_state) to the server, which keeps it under the
+// connection name and returns it on the next join (coop_client_actor.on_player_store). The blob
+// goes in parts of coop_store_part bytes (coop_player_store.h).
 void g_coop_player_store(LPCSTR blob)
 {
 	if (!IsGameTypeCoop() || OnServer() || !blob) return;
-	if (xr_strlen(blob) >= 4096)
+	const u32 total = xr_strlen(blob);
+	if (!total) return;
+	if (total > coop_store_limit)
 	{
-		Msg("! [COOP_CLIENT] PLAYER_STORE too large: %u bytes", xr_strlen(blob));
+		Msg("! [COOP_CLIENT] PLAYER_STORE too large: %u bytes (limit %u)", total, coop_store_limit);
 		return;
 	}
-	NET_Packet P;
-	P.w_begin(M_COOP_PLAYER_STORE);
-	P.w_stringZ(blob);
-	Level().Send(P, net_flags(TRUE, TRUE));
+	for (u32 offset = 0; offset < total;)
+	{
+		const u32 length = _min(total - offset, coop_store_part);
+		NET_Packet P;
+		P.w_begin(M_COOP_PLAYER_STORE);
+		coop_store_write_part(P, blob, total, offset, length);
+		Level().Send(P, net_flags(TRUE, TRUE));
+		offset += length;
+	}
 }
 
 // Coop: a text from the coop-owned Lua of one side to the other (M_COOP_LUA). On the server

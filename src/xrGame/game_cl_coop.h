@@ -1,4 +1,5 @@
 #pragma once
+#include "coop_player_store.h"
 #include "game_cl_single.h"
 
 class game_cl_Coop : public game_cl_Single
@@ -14,6 +15,7 @@ class game_cl_Coop : public game_cl_Single
     u32 m_item_probe_bucket = 0;
     bool m_item_probe_looted = false;
     u32 m_item_probe_last_report = 0;
+    CCoopStoreAssembler m_store_parts;
 public:
     virtual void OnConnected();
     virtual void shedule_Update(u32 dt);

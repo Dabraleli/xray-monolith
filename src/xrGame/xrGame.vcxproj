@@ -1178,6 +1178,7 @@
     <ClInclude Include="game_sv_coop.h" />
     <ClInclude Include="coop_spatial_scope.h" />
     <ClInclude Include="coop_alife_mirror.h" />
+    <ClInclude Include="coop_player_store.h" />
     <ClInclude Include="game_cl_coop.h" />
     <ClInclude Include="game_sv_teamdeathmatch.h" />
     <ClInclude Include="GlobalFeelTouch.hpp" />

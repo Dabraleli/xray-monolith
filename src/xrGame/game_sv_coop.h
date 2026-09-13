@@ -1,4 +1,5 @@
 #pragma once
+#include "coop_player_store.h"
 #include "game_sv_single.h"
 #include "PhraseDialogDefs.h"
 
@@ -61,7 +62,7 @@ class game_sv_Coop : public game_sv_Single
     // sends it as a text blob (M_COOP_PLAYER_STORE), the server keeps it under the connection
     // name and hands it back when the same name is ready in the world again.
     xr_map<shared_str, xr_string> m_store;
-    void SendPlayerStore(xrClientData* client);
+    xr_map<shared_str, CCoopStoreAssembler> m_store_parts; // the upload in flight, per connection name
     // NPC dialogs (M_COOP_TALK). The dialog runs on the server between the player's body and the
     // NPC exactly as CUITalkWnd drives it in SP; the client only renders what it is sent. While the
     // dialog scripts run, Lua db.actor points at the body, so rewards and checks address the player.
@@ -167,6 +168,7 @@ public:
     virtual ~game_sv_Coop();
     virtual void Update();
     void PrepareClient(xrClientData* client);
+    void SendPlayerStore(xrClientData* client); // xrServer::OnCL_Connected, ahead of the connection data
     void ReleaseClient(xrClientData* client);
     virtual LPCSTR type_name() const { return "coop"; }
     virtual void Create(shared_str& options);
