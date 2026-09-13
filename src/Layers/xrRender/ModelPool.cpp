@@ -415,6 +415,16 @@ void CModelPool::Prefetch()
 	// prefetch visuals
 	string256 section;
 	strconcat(sizeof(section), section, "prefetch_visuals_", g_pGamePersistent->m_game_params.m_game_type);
+
+	// Same as the object pool: prefetching is an optimisation, and a
+	// singleplayer-only content set only ships the _single sections.
+	if (!pSettings->section_exist(section))
+	{
+		Msg("~ no [%s] section, skipping visual prefetch", section);
+		Logging(TRUE);
+		return;
+	}
+
 	CInifile::Sect& sect = pSettings->r_section(section);
 	for (CInifile::SectCIt I = sect.Data.begin(); I != sect.Data.end(); I++)
 	{

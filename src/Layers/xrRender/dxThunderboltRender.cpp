@@ -1,4 +1,7 @@
 #include "stdafx.h"
+
+// Only the isolated coop probe omits weather rendering resources.
+static bool coop_no_weather_graphics() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_weather_graphics")); }
 #include "dxThunderboltRender.h"
 
 #include "../../xrEngine/thunderbolt.h"
@@ -7,6 +10,7 @@
 
 dxThunderboltRender::dxThunderboltRender()
 {
+    if (coop_no_weather_graphics()) { Msg("[COOP_SERVER] LIGHTNING_GRAPHICS_SKIPPED geometry=0"); return; }
 	// geom
 	hGeom_model.create(D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1, RCache.Vertex.Buffer(), RCache.Index.Buffer());
 	hGeom_gradient.create(FVF::F_LIT, RCache.Vertex.Buffer(), RCache.QuadIB);
@@ -25,6 +29,7 @@ void dxThunderboltRender::Copy(IThunderboltRender& _in)
 
 void dxThunderboltRender::Render(CEffect_Thunderbolt& owner)
 {
+    if (coop_no_weather_graphics()) { return; }
 	VERIFY(owner.current);
 
 	// lightning model

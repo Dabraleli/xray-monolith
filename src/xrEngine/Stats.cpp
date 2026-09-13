@@ -496,7 +496,8 @@ void CStats::OnDeviceCreate()
 
 	// if (!strstr(Core.Params, "-dedicated"))
 #ifndef DEDICATED_SERVER
-	pFont = xr_new<CGameFont>("stat_font", CGameFont::fsDeviceIndependent);
+	if (!(strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_client_graphics"))) pFont = xr_new<CGameFont>("stat_font", CGameFont::fsDeviceIndependent);
+    else Msg("[COOP_SERVER] STATS_FONT_SKIPPED counters=retained");
 #endif
 
 	if (!pSettings->section_exist("evaluation")

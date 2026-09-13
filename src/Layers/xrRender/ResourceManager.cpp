@@ -45,6 +45,42 @@ BOOL reclaim(xr_vector<T*>& vec, const T* ptr)
 	return FALSE;
 }
 
+// Coop diagnostics (-coop_heap_check): a shader element freed while a registered shader still holds
+// it, a pass freed while a registered element holds it — the dead pass behind the coop client's
+// level-unload crashes (120–126): name the moment and the caller.
+void LogStackTrace(LPCSTR header, bool printStack);
+bool coop_shader_diag_enabled()
+{
+	static const bool enabled = !!strstr(Core.Params, "-coop_heap_check");
+	return enabled;
+}
+
+static void coop_report_held_element(const xr_vector<Shader*>& shaders, const ShaderElement* element)
+{
+	if (!coop_shader_diag_enabled()) return;
+	u32 holders = 0;
+	for (u32 i = 0; i < shaders.size(); ++i)
+		for (u32 e = 0; e < 6; ++e)
+			if (shaders[i]->E[e]._get() == element) ++holders;
+	if (!holders) return;
+	Msg("! [COOP_SHADER] element %p freed while %u registered shaders hold it (refcount %u, flags %u)", element, holders,
+	    u32(element->dwReference), element->dwFlags);
+	LogStackTrace("element freed while held (diagnostic, not a crash)", true);
+}
+
+void coop_report_held_pass(const xr_vector<ShaderElement*>& elements, const SPass* pass)
+{
+	if (!coop_shader_diag_enabled()) return;
+	u32 holders = 0;
+	for (u32 i = 0; i < elements.size(); ++i)
+		for (u32 p = 0; p < elements[i]->passes.size(); ++p)
+			if (elements[i]->passes[p]._get() == pass) ++holders;
+	if (!holders) return;
+	Msg("! [COOP_SHADER] pass %p freed while %u registered elements hold it (refcount %u, flags %u)", pass, holders,
+	    u32(pass->dwReference), pass->dwFlags);
+	LogStackTrace("pass freed while held (diagnostic, not a crash)", true);
+}
+
 //--------------------------------------------------------------------------------------------------------------
 IBlender* CResourceManager::_GetBlender(LPCSTR Name)
 {
@@ -161,6 +197,7 @@ ShaderElement* CResourceManager::_CreateElement(ShaderElement& S)
 void CResourceManager::_DeleteElement(const ShaderElement* S)
 {
 	xrCriticalSectionGuard guard(creationGuard);
+	coop_report_held_element(v_shaders, S);
 	if (0 == (S->dwFlags & xr_resource_flagged::RF_REGISTERED)) return;
 	if (reclaim(v_elements, S)) return;
 	Msg("! ERROR: Failed to find compiled 'shader-element'");

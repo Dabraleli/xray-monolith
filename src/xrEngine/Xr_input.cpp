@@ -170,6 +170,7 @@ HRESULT CInput::CreateInputDevice(LPDIRECTINPUTDEVICE8* device, GUID guidDevice,
 
 void CInput::SetAllAcquire(BOOL bAcquire)
 {
+    if ((strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw"))) bAcquire = FALSE;
 	if (pMouse) bAcquire ? pMouse->Acquire() : pMouse->Unacquire();
 	if (pKeyboard) bAcquire ? pKeyboard->Acquire() : pKeyboard->Unacquire();
 }
@@ -720,6 +721,7 @@ void CInput::DeactivateSoft()
 
 void CInput::OnFrame(void)
 {
+    if ((strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw"))) return; // native console receives Win32 input only
 	RDEVICE.Statistic->Input.Begin();
 	dwCurTime = RDEVICE.TimerAsync_MMT();
 	if (pKeyboard) KeyUpdate();
@@ -743,6 +745,7 @@ void CInput::unacquire()
 
 void CInput::acquire(const bool& exclusive)
 {
+    if ((strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw"))) { SetAllAcquire(FALSE); return; }
 	pKeyboard->SetCooperativeLevel(
 #ifdef INGAME_EDITOR
         Device.editor() ? Device.editor()->main_handle() :
@@ -764,6 +767,7 @@ void CInput::acquire(const bool& exclusive)
 
 void CInput::exclusive_mode(const bool& exclusive)
 {
+    if ((strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw"))) { g_exclusive = false; SetAllAcquire(FALSE); return; }
 	g_exclusive = exclusive;
 	unacquire();
 	acquire(exclusive);

@@ -596,6 +596,11 @@ BOOL CHW::support(D3DFORMAT fmt, DWORD type, DWORD usage)
 
 void CHW::updateWindowProps(HWND m_hWnd)
 {
+    if (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw"))
+    {
+        ShowWindow(m_hWnd, SW_HIDE);
+        return;
+    }
 	//	BOOL	bWindowed				= strstr(Core.Params,"-dedicated") ? TRUE : !psDeviceFlags.is	(rsFullscreen);
 	//#ifndef DEDICATED_SERVER
 	//	BOOL	bWindowed				= !psDeviceFlags.is	(rsFullscreen);

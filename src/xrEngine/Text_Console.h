@@ -8,6 +8,10 @@ private:
 	typedef CConsole inherited;
 
 private:
+    HWND m_coop_edit = nullptr;
+    ULONGLONG m_coop_started = 0;
+    int m_coop_scroll = 0;
+    bool m_coop_destroyed = false;
 	HWND* m_pMainWnd;
 
 	HWND m_hConsoleWnd;
@@ -49,6 +53,13 @@ public:
 
 	void AddString(LPCSTR string);
 	void OnPaint();
+    void CoopInitialize();
+    void CoopDestroy();
+    void CoopResize();
+    void CoopRefresh();
+    void CoopScroll(int delta);
+    void DrawCoopLog(HDC dc);
 }; // class TextConsole
 
-//extern ENGINE_API CTextConsole* TextConsole;
+ENGINE_API bool CoopConsoleEnabled();
+ENGINE_API void CoopConsoleSetInfo(const CServerInfo& info);

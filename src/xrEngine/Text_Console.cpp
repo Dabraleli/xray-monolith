@@ -2,6 +2,170 @@
 #include "Text_Console.h"
 #include "line_editor.h"
 
+// Coop uses the existing CTextConsole and Device HWND as the service window.
+static WNDPROC coop_parent_proc = nullptr;
+static WNDPROC coop_edit_proc = nullptr;
+static CServerInfo coop_server_info;
+static bool coop_console_close = false;
+
+bool CoopConsoleEnabled()
+{
+    return strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") &&
+        strstr(Core.Params, "-coop_server_console");
+}
+
+void CoopConsoleSetInfo(const CServerInfo& info) { coop_server_info = info; }
+
+static LRESULT CALLBACK CoopEditProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
+{
+    if (msg == WM_KEYDOWN && w == VK_RETURN)
+    {
+        char command[256] = {};
+        GetWindowText(hwnd, command, sizeof(command));
+        SetWindowText(hwnd, "");
+        Msg("> %s", command);
+        if (!_stricmp(command, "quit") || !_stricmp(command, "exit"))
+            PostMessage(Device.m_hWnd, WM_CLOSE, 0, 0);
+        else if (!_stricmp(command, "status"))
+        {
+            Msg("[COOP_CONSOLE] Status requested; engine_ready=%u", Device.b_is_Ready ? 1 : 0);
+            for (u32 i = 0; i < coop_server_info.Size(); ++i) Msg("%s", coop_server_info[i].name);
+        }
+        else if (!_stricmp(command, "help") || !command[0])
+            Msg("[COOP_CONSOLE] Probe commands: status, help, quit; anything else goes to the engine console (save <name>, load <name>, ...)");
+        else if (Console && Device.b_is_Ready)
+            Console->Execute(command); // the engine console: the server's save/load and the rest
+        else
+            Msg("[COOP_CONSOLE] engine not ready for: %s", command);
+        return 0;
+    }
+    if (msg == WM_CHAR && w == VK_RETURN) return 0;
+    return CallWindowProc(coop_edit_proc, hwnd, msg, w, l);
+}
+
+static LRESULT CALLBACK CoopParentProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
+{
+    CTextConsole* text = static_cast<CTextConsole*>(Console);
+    if (msg == WM_TIMER && w == 42)
+    {
+        text->CoopRefresh();
+        return 0;
+    }
+    if (msg == WM_SIZE)
+    {
+        if (w != SIZE_MINIMIZED) text->CoopResize();
+        return 0; // resizing a GDI service window must not reset D3D
+    }
+    if (msg == WM_GETMINMAXINFO)
+    {
+        reinterpret_cast<MINMAXINFO*>(l)->ptMinTrackSize = {640, 420};
+        return 0;
+    }
+    if (msg == WM_CLOSE)
+    {
+        coop_console_close = true;
+        Msg("[COOP_CONSOLE] CLOSE_REQUEST");
+        if (strstr(Core.Params, "-coop_console_test")) PostQuitMessage(0);
+        return 0;
+    }
+    // Keep simulation activation, but do not route GDI window messages through
+    // game cursor/fullscreen/ImGui handling (also valid before renderer startup).
+    if (msg == WM_ACTIVATE && !strstr(Core.Params, "-coop_console_test"))
+        return CallWindowProc(coop_parent_proc, hwnd, msg, w, l);
+    return DefWindowProc(hwnd, msg, w, l);
+}
+
+void CTextConsole::CoopResize()
+{
+    RECT rc; GetClientRect(Device.m_hWnd, &rc);
+    MoveWindow(m_hConsoleWnd, 0, 0, rc.right, _max(1L, rc.bottom - 34), TRUE);
+    MoveWindow(m_hLogWnd, 0, 0, rc.right, _max(1L, rc.bottom - 34), TRUE);
+    if (m_coop_edit) MoveWindow(m_coop_edit, 8, rc.bottom - 29, _max(1L, rc.right - 16), 24, TRUE);
+}
+
+void CTextConsole::CoopRefresh()
+{
+    InvalidateRect(m_hLogWnd, nullptr, FALSE);
+}
+
+void CTextConsole::CoopScroll(int delta)
+{
+    m_coop_scroll = _max(0, m_coop_scroll + delta);
+    CoopRefresh();
+}
+
+void CTextConsole::CoopInitialize()
+{
+    coop_console_close = false;
+    m_coop_started = GetTickCount64();
+    coop_parent_proc = WNDPROC(SetWindowLongPtr(Device.m_hWnd, GWLP_WNDPROC, LONG_PTR(CoopParentProc)));
+    SetWindowLongPtr(Device.m_hWnd, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN);
+    SetWindowText(Device.m_hWnd, "S.T.A.L.K.E.R.: Anomaly Coop Server");
+    m_coop_edit = CreateWindowEx(WS_EX_CLIENTEDGE, "EDIT", "", WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
+        8, 440, 620, 24, Device.m_hWnd, nullptr, GetModuleHandle(nullptr), nullptr);
+    R_ASSERT(m_coop_edit);
+    SendMessage(m_coop_edit, EM_SETLIMITTEXT, 255, 0);
+    SendMessage(m_coop_edit, WM_SETFONT, WPARAM(m_hLogWndFont), TRUE);
+    coop_edit_proc = WNDPROC(SetWindowLongPtr(m_coop_edit, GWLP_WNDPROC, LONG_PTR(CoopEditProc)));
+    SetWindowPos(Device.m_hWnd, HWND_NOTOPMOST, 0, 0, 800, 600,
+        SWP_NOMOVE | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    CoopResize();
+    R_ASSERT(SetTimer(Device.m_hWnd, 42, 250, nullptr));
+    Device.seqFrame.Add(this);
+    Msg("[COOP_CONSOLE] GDI_READY parent=Device_HWND engine_ready=%u", Device.b_is_Ready ? 1 : 0);
+}
+
+void CTextConsole::CoopDestroy()
+{
+    Device.seqFrame.Remove(this);
+    KillTimer(Device.m_hWnd, 42);
+    if (coop_parent_proc)
+    {
+        SetWindowLongPtr(Device.m_hWnd, GWLP_WNDPROC, LONG_PTR(coop_parent_proc));
+        coop_parent_proc = nullptr;
+    }
+    if (m_coop_edit) { DestroyWindow(m_coop_edit); m_coop_edit = nullptr; }
+    coop_server_info.ResetData();
+}
+
+void CTextConsole::DrawCoopLog(HDC dc)
+{
+    RECT rc; GetClientRect(m_hLogWnd, &rc);
+    FillRect(dc, &rc, HBRUSH(GetStockObject(BLACK_BRUSH)));
+    HFONT old = HFONT(SelectObject(dc, m_hLogWndFont));
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(180, 240, 180));
+    string128 heading;
+    xr_sprintf(heading, "Anomaly Coop | Uptime %llu s | %s", (GetTickCount64() - m_coop_started) / 1000,
+        strstr(Core.Params, "-coop_console_test") ? "Console test: no D3D" : "Server probe");
+    TextOut(dc, 10, 6, heading, xr_strlen(heading));
+    int y = 26;
+    for (u32 i = 0; i < coop_server_info.Size(); ++i)
+    {
+        SetTextColor(dc, coop_server_info[i].color);
+        TextOut(dc, 10 + (i % 2) * (rc.right / 2), y + (i / 2) * 18,
+            coop_server_info[i].name, xr_strlen(coop_server_info[i].name));
+    }
+    int boundary = 178;
+    if (!coop_server_info.Size())
+        TextOut(dc, 10, 30, "Commands: status, help, quit", 26);
+    xr_vector<xr_string> lines;
+    CopyLogTail(lines, 1000);
+    m_coop_scroll = _min(m_coop_scroll, _max(0, int(lines.size()) - 1));
+    int bottom = rc.bottom - 20;
+    for (int i = int(lines.size()) - 1 - m_coop_scroll; i >= 0 && bottom >= boundary; --i, bottom -= 17)
+    {
+        LPCSTR line = lines[i].c_str();
+        COLORREF color = RGB(210, 210, 210);
+        if (line[0] == '!' || strstr(line, "FATAL") || strstr(line, "ERROR")) color = RGB(255, 85, 85);
+        else if (strstr(line, "[COOP_")) color = RGB(110, 220, 130);
+        SetTextColor(dc, color);
+        TextOut(dc, 10, bottom, line, xr_strlen(line));
+    }
+    SelectObject(dc, old);
+}
+
+
 extern char const* const ioc_prompt;
 extern char const* const ch_cursor;
 int g_svTextConsoleUpdateRate = 1;
@@ -115,7 +279,7 @@ void CTextConsole::CreateLogWnd()
 	UpdateWindow(m_hLogWnd);
 	//-----------------------------------------------
 	LOGFONT lf;
-	lf.lfHeight = -12;
+	lf.lfHeight = CoopConsoleEnabled() ? -15 : -12;
 	lf.lfWidth = 0;
 	lf.lfEscapement = 0;
 	lf.lfOrientation = 0;
@@ -128,7 +292,7 @@ void CTextConsole::CreateLogWnd()
 	lf.lfClipPrecision = CLIP_STROKE_PRECIS;
 	lf.lfQuality = DRAFT_QUALITY;
 	lf.lfPitchAndFamily = VARIABLE_PITCH | FF_SWISS;
-	xr_sprintf(lf.lfFaceName, sizeof(lf.lfFaceName), "");
+	xr_sprintf(lf.lfFaceName, sizeof(lf.lfFaceName), "%s", CoopConsoleEnabled() ? "Consolas" : "");
 
 	m_hLogWndFont = CreateFontIndirect(&lf);
 	R_ASSERT2(m_hLogWndFont, "Unable to Create Font for Log Window");
@@ -171,10 +335,29 @@ void CTextConsole::Initialize()
 	UpdateWindow(m_hConsoleWnd);
 
 	m_server_info.ResetData();
+    if (CoopConsoleEnabled()) CoopInitialize();
 }
 
 void CTextConsole::Destroy()
 {
+    if (CoopConsoleEnabled())
+    {
+        if (m_coop_destroyed) return;
+        m_coop_destroyed = true;
+        CoopDestroy();
+        inherited::Destroy();
+        SelectObject(m_hDC_LogWnd_BackBuffer, m_hPrevFont);
+        SelectObject(m_hDC_LogWnd_BackBuffer, m_hOld_BM);
+        DeleteObject(m_hBB_BM);
+        DeleteObject(m_hLogWndFont);
+        DeleteDC(m_hDC_LogWnd_BackBuffer);
+        ReleaseDC(m_hLogWnd, m_hDC_LogWnd);
+        // Previous/stock objects belong to Windows, not to this console.
+        DestroyWindow(m_hLogWnd);
+        DestroyWindow(m_hConsoleWnd);
+        Msg("[COOP_CONSOLE] GDI_RELEASE");
+        return;
+    }
 	inherited::Destroy();
 
 	SelectObject(m_hDC_LogWnd_BackBuffer, m_hPrevFont);
@@ -199,6 +382,14 @@ void CTextConsole::OnRender()
 
 void CTextConsole::OnPaint()
 {
+    if (CoopConsoleEnabled())
+    {
+        PAINTSTRUCT paint;
+        BeginPaint(m_hLogWnd, &paint);
+        DrawCoopLog(paint.hdc);
+        EndPaint(m_hLogWnd, &paint);
+        return;
+    }
 	RECT wRC;
 	PAINTSTRUCT ps;
 	BeginPaint(m_hLogWnd, &ps);
@@ -340,6 +531,16 @@ inherited::IR_OnKeyboardPress( dik );
 */
 void CTextConsole::OnFrame()
 {
+    if (CoopConsoleEnabled())
+    {
+        if (coop_console_close && g_pGameLevel && g_pGameLevel->bReady)
+        {
+            coop_console_close = false;
+            Msg("[COOP_CONSOLE] STOP_REQUEST");
+            Execute("quit");
+        }
+        return;
+    }
 	inherited::OnFrame();
 	/* if ( !m_bNeedUpdate && m_dwLastUpdateTime + 1000/g_svTextConsoleUpdateRate > Device.dwTimeGlobal )
 	 {

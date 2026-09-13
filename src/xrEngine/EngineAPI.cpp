@@ -3,6 +3,8 @@
 //////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+static bool coop_no_device() { return strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_mesh") && strstr(Core.Params, "-coop_server_noaudio") && strstr(Core.Params, "-coop_server_cpu_level") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_client_graphics") && strstr(Core.Params, "-coop_server_no_weather_graphics") && strstr(Core.Params, "-coop_server_no_game_ui") && strstr(Core.Params, "-coop_server_no_ui_resources") && strstr(Core.Params, "-coop_server_no_particle_graphics") && strstr(Core.Params, "-coop_server_no_render_streams") && strstr(Core.Params, "-coop_server_no_residual_graphics") && strstr(Core.Params, "-coop_server_no_device"); }
+
 #include "EngineAPI.h"
 #include "../xrcdb/xrXRC.h"
 
@@ -390,7 +392,12 @@ void CEngineAPI::CreateRendererList()
             //SupportsDX11RenderingREF* test_dx11_rendering = (SupportsDX11RenderingREF*)GetProcAddress(hRender, "SupportsDX11Rendering");
             SupportsDX11RenderingREF* test_dx11_rendering = SupportsDX11Rendering;
             R_ASSERT(test_dx11_rendering);
-            bSupports_r4 = test_dx11_rendering();
+            if (coop_no_device())
+            {
+                bSupports_r4 = true; // Select the attached CPU factory; no GPU capability claim.
+                Msg("[COOP_SERVER] HARDWARE_PROBE_SKIPPED renderer=cpu");
+            }
+            else bSupports_r4 = test_dx11_rendering();
             //FreeLibrary(hRender);
         }
 #endif

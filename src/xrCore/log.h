@@ -20,6 +20,7 @@ void XRCORE_API CreateLog(BOOL no_log = FALSE);
 void InitLog();
 void CloseLog();
 void XRCORE_API FlushLog();
+u32 XRCORE_API CopyLogTail(xr_vector<xr_string>& out, u32 limit);
 
 extern XRCORE_API xr_vector<xr_string> LogFile;
 extern XRCORE_API BOOL LogExecCB;

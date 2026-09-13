@@ -64,6 +64,9 @@ light::~light()
 #if (RENDER==R_R2) || (RENDER==R_R3) || (RENDER==R_R4)
 void light::set_texture(LPCSTR name)
 {
+#if RENDER == R_R4
+    if ((strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_mesh") && strstr(Core.Params, "-coop_server_cpu_level") && strstr(Core.Params, "-coop_server_cpu_target"))) return; // projection shaders only; CPU light properties remain
+#endif
 	if ((0 == name) || (0 == name[0]))
 	{
 		// default shaders

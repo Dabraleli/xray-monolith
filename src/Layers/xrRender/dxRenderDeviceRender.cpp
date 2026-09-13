@@ -1,7 +1,18 @@
 #include "stdafx.h"
+static bool coop_no_device() { return strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_mesh") && strstr(Core.Params, "-coop_server_noaudio") && strstr(Core.Params, "-coop_server_cpu_level") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_client_graphics") && strstr(Core.Params, "-coop_server_no_weather_graphics") && strstr(Core.Params, "-coop_server_no_game_ui") && strstr(Core.Params, "-coop_server_no_ui_resources") && strstr(Core.Params, "-coop_server_no_particle_graphics") && strstr(Core.Params, "-coop_server_no_render_streams") && strstr(Core.Params, "-coop_server_no_residual_graphics") && strstr(Core.Params, "-coop_server_no_device"); }
+
 #include "dxRenderDeviceRender.h"
 
 #include "ResourceManager.h"
+
+static void coop_assert_no_device()
+{
+    R_ASSERT(!HW.pDevice);
+#if defined(USE_DX11) || defined(USE_DX10)
+    R_ASSERT(!HW.pContext && !HW.m_pSwapChain);
+#endif
+}
+
 
 dxRenderDeviceRender::dxRenderDeviceRender()
 	: Resources(0)
@@ -31,6 +42,7 @@ void dxRenderDeviceRender::setContrast(float fGamma)
 
 void dxRenderDeviceRender::updateGamma()
 {
+    if (coop_no_device()) return;
 	m_Gamma.Update();
 }
 
@@ -45,17 +57,20 @@ void dxRenderDeviceRender::OnDeviceDestroy(BOOL bKeepTextures)
 
 void dxRenderDeviceRender::ValidateHW()
 {
+    if (coop_no_device()) return;
 	HW.Validate();
 }
 
 void dxRenderDeviceRender::DestroyHW()
 {
 	xr_delete(Resources);
-	HW.DestroyDevice();
+    if (coop_no_device()) { coop_assert_no_device(); Msg("[COOP_SERVER] NO_DEVICE_RELEASE device=0 context=0 swapchain=0"); }
+    else HW.DestroyDevice();
 }
 
 void dxRenderDeviceRender::Reset(HWND hWnd, u32& dwWidth, u32& dwHeight, float& fWidth_2, float& fHeight_2)
 {
+    if (coop_no_device()) return;
 #ifdef DEBUG
     _SHOW_REF("*ref -CRenderDevice::ResetTotal: DeviceREF:",HW.pDevice);
 #endif // DEBUG
@@ -96,6 +111,7 @@ void dxRenderDeviceRender::Reset(HWND hWnd, u32& dwWidth, u32& dwHeight, float& 
 
 void dxRenderDeviceRender::SetupStates()
 {
+    if (coop_no_device()) return;
 	HW.Caps.Update();
 
 #if defined(USE_DX10) || defined(USE_DX11)
@@ -153,25 +169,35 @@ void dxRenderDeviceRender::OnDeviceCreate(LPCSTR shName)
 {
 	// Signal everyone - device created
 	RCache.OnDeviceCreate();
-	m_Gamma.Update();
+	if (!coop_no_device()) m_Gamma.Update();
 	Resources->OnDeviceCreate(shName);
 	::Render->create();
 	Device.Statistic->OnDeviceCreate();
 
 	//#ifndef DEDICATED_SERVER
-	if (!g_dedicated_server)
+	if (!g_dedicated_server && !(strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_client_graphics")))
 	{
 		m_WireShader.create("editor\\wire");
 		m_SelectionShader.create("editor\\selection");
 
 		DUImpl.OnDeviceCreate();
 	}
+    if ((strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_client_graphics"))) Msg("[COOP_SERVER] DEBUG_GRAPHICS_SKIPPED wire=0 selection=0 draw_utils=0");
 	//#endif
 }
 
 void dxRenderDeviceRender::Create(HWND hWnd, u32& dwWidth, u32& dwHeight, float& fWidth_2, float& fHeight_2,
                                   bool move_window)
 {
+    if (coop_no_device())
+    {
+        coop_assert_no_device();
+        // Logical viewport only: CPU camera/aspect calculations still need dimensions.
+        dwWidth = 640; dwHeight = 480; fWidth_2 = 320.f; fHeight_2 = 240.f;
+        Resources = xr_new<CResourceManager>();
+        Msg("[COOP_SERVER] NO_DEVICE_READY device=0 context=0 swapchain=0 resources=cpu");
+        return;
+    }
 	HW.CreateDevice(hWnd, move_window);
 #if defined(USE_DX11)
 	dwWidth = HW.m_ChainDesc.Width;
@@ -300,6 +326,7 @@ void dxRenderDeviceRender::ResourcesDumpMemoryUsage()
 
 dxRenderDeviceRender::DeviceState dxRenderDeviceRender::GetDeviceState()
 {
+    if (coop_no_device()) return dsOK;
 	HW.Validate();
 #if defined(USE_DX10) || defined(USE_DX11)
     HRESULT _hr = HW.m_pSwapChain->Present(0, DXGI_PRESENT_TEST);
@@ -345,6 +372,7 @@ u32 dxRenderDeviceRender::GetCacheStatPolys()
 
 void dxRenderDeviceRender::Begin()
 {
+    if (coop_no_device()) return;
 #if !defined(USE_DX10) && !defined(USE_DX11)
 	CHK_DX(HW.pDevice->BeginScene());
 #endif	//	USE_DX10
@@ -356,6 +384,7 @@ void dxRenderDeviceRender::Begin()
 
 void dxRenderDeviceRender::Clear()
 {
+    if (coop_no_device()) return;
 #if defined(USE_DX10) || defined(USE_DX11)
 	HW.pContext->ClearDepthStencilView(RCache.get_ZB(),
 	                                   D3D_CLEAR_DEPTH | D3D_CLEAR_STENCIL, 1.0f, 0);
@@ -379,6 +408,7 @@ void DoAsyncScreenshot();
 
 void dxRenderDeviceRender::End()
 {
+    if (coop_no_device()) return;
 	VERIFY(HW.pDevice);
 
 	if (HW.Caps.SceneMode) overdrawEnd();
@@ -421,6 +451,7 @@ void dxRenderDeviceRender::ResourcesDestroyNecessaryTextures()
 
 void dxRenderDeviceRender::ClearTarget()
 {
+    if (coop_no_device()) return;
 #if defined(USE_DX10) || defined(USE_DX11)
 	FLOAT ColorRGBA[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 	HW.pContext->ClearRenderTargetView(RCache.get_RT(), ColorRGBA);

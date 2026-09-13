@@ -434,26 +434,42 @@ void CSkeletonX_PM::Load(const char* N, IReader* data, u32 dwFlags)
 {
 	_Load(N, data, vCount);
 	void* _verts_ = data->pointer();
-	inherited1::Load(N, data, dwFlags | VLOAD_NOVERTICES);
+    const bool cpu_mesh = (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_mesh"));
+	inherited1::Load(N, data, dwFlags | VLOAD_NOVERTICES | (cpu_mesh ? VLOAD_CPU_MESH : 0));
 	::Render->shader_option_skinning(-1);
 #if defined(USE_DX10) || defined(USE_DX11)
 	_DuplicateIndices(N, data);
 #endif	//	USE_DX10
 	vBase = 0;
-	_Load_hw(*this, _verts_);
+    if (cpu_mesh)
+    {
+        R_ASSERT2(RenderMode == RM_SKINNING_SOFT, "CPU mesh did not retain software vertices");
+        R_ASSERT2(!p_rm_Vertices && !p_rm_Indices && !shader._get(), "CPU mesh allocated graphics resources");
+        Msg("[COOP_SERVER] CPU_MESH name=%s vertices=%u indices=%u gpu_buffers=0", N, vCount, iCount);
+    }
+    else
+	    _Load_hw(*this, _verts_);
 }
 
 void CSkeletonX_ST::Load(const char* N, IReader* data, u32 dwFlags)
 {
 	_Load(N, data, vCount);
 	void* _verts_ = data->pointer();
-	inherited1::Load(N, data, dwFlags | VLOAD_NOVERTICES);
+    const bool cpu_mesh = (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_mesh"));
+	inherited1::Load(N, data, dwFlags | VLOAD_NOVERTICES | (cpu_mesh ? VLOAD_CPU_MESH : 0));
 	::Render->shader_option_skinning(-1);
 #if defined(USE_DX10) || defined(USE_DX11)
 	_DuplicateIndices(N, data);
 #endif	//	USE_DX10
 	vBase = 0;
-	_Load_hw(*this, _verts_);
+    if (cpu_mesh)
+    {
+        R_ASSERT2(RenderMode == RM_SKINNING_SOFT, "CPU mesh did not retain software vertices");
+        R_ASSERT2(!p_rm_Vertices && !p_rm_Indices && !shader._get(), "CPU mesh allocated graphics resources");
+        Msg("[COOP_SERVER] CPU_MESH name=%s vertices=%u indices=%u gpu_buffers=0", N, vCount, iCount);
+    }
+    else
+	    _Load_hw(*this, _verts_);
 }
 
 #if defined(USE_DX10) || defined(USE_DX11)

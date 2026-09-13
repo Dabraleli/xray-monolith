@@ -1,4 +1,6 @@
 #include "stdafx.h"
+
+static bool coop_no_particle_graphics() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_particle_graphics")); }
 #pragma hdrstop
 
 #include "ParticleEffect.h"
@@ -244,6 +246,7 @@ void CParticleEffect::Copy(dxRender_Visual*)
 
 void CParticleEffect::OnDeviceCreate()
 {
+    if (coop_no_particle_graphics()) return;
 	if (m_Def)
 	{
 		if (m_Def->m_Flags.is(CPEDef::dfSprite))
@@ -571,6 +574,7 @@ void ParticleRenderStream(FVF::LIT* pv, u32 count, PAPI::Particle * particles, C
 
 void CParticleEffect::Render(float)
 {
+    if (coop_no_particle_graphics()) return;
 #ifdef _GPA_ENABLED
 		TAL_SCOPED_TASK_NAMED( "CParticleEffect::Render()" );
 #endif // _GPA_ENABLED
@@ -680,6 +684,7 @@ IC void FillSprite	(FVF::LIT*& pv, const Fvector& pos, const Fvector& dir, const
 
 void CParticleEffect::Render(float )
 {
+    if (coop_no_particle_graphics()) return;
 	u32			dwOffset,dwCount;
 	// Get a pointer to the particles in gp memory
     PAPI::Particle* particles;

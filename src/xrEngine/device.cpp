@@ -62,6 +62,7 @@ ENGINE_API float refresh_rate = 0;
 
 BOOL CRenderDevice::Begin()
 {
+    if (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw")) return FALSE; // No GPU frame submission in this probe.
 	PROF_EVENT();
 
 #ifndef DEDICATED_SERVER
@@ -239,6 +240,7 @@ void mt_Thread(void* ptr)
 
 void CRenderDevice::PreCache(u32 amount, bool b_draw_loadscreen, bool b_wait_user_input)
 {
+    if (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw")) amount = 0; // End() is not called without rendering.
 #ifdef DEDICATED_SERVER
     amount = 0;
 #else
@@ -370,6 +372,8 @@ extern int ps_framelimiter;
 extern u32 g_screenmode;
 
 CTimer FreezeTimer;
+static HANDLE freezeStopEvent = NULL;
+static HANDLE freezeDoneEvent = NULL;
 void mt_FreezeThread(void *ptr) {
 	float freezetime = 0.f;
 	float repeatcheck = 500.f;
@@ -393,12 +397,16 @@ void mt_FreezeThread(void *ptr) {
 		}
 		STOP_PROFILE;
 
-		Sleep(repeatcheck);
+		if (WaitForSingleObject(freezeStopEvent, DWORD(repeatcheck)) == WAIT_OBJECT_0)
+			break;
 	}
+	SetEvent(freezeDoneEvent);
 }
 
 void CRenderDevice::on_idle()
 {
+    const bool server_nodraw = (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw"));
+    const ULONGLONG server_tick_start = server_nodraw ? GetTickCount64() : 0;
 	FreezeTimer.Start();
 
 	if (!b_is_Ready)
@@ -425,7 +433,8 @@ void CRenderDevice::on_idle()
 		PROF_EVENT("Pop loading event");
 		if (g_loading_events.front()())
 			g_loading_events.pop_front();
-		pApp->LoadDraw();
+		if (!server_nodraw) pApp->LoadDraw();
+        else Sleep(1);
 		return;
 	}
 
@@ -503,7 +512,7 @@ void CRenderDevice::on_idle()
 	STOP_PROFILE;
 
 #ifdef ECO_RENDER // ECO_RENDER START
-	if (Device.Paused() || IsMainMenuActive() || ps_framelimiter)
+	if (!server_nodraw && (Device.Paused() || IsMainMenuActive() || ps_framelimiter))
 	{
 		PROF_EVENT("Eco Render");
 
@@ -531,7 +540,7 @@ void CRenderDevice::on_idle()
 	Statistic->RenderTOTAL_Real.FrameStart();
 	Statistic->RenderTOTAL_Real.Begin();
 
-	if (b_is_Active && Begin())
+	if (!server_nodraw && b_is_Active && Begin())
 	{
 		START_PROFILE("Process seqRender");
 		seqRender.Process(rp_Render);
@@ -581,6 +590,11 @@ void CRenderDevice::on_idle()
     if (FrameTime < DSUpdateDelta)
         Sleep(DSUpdateDelta - FrameTime);
 #endif
+    if (server_nodraw)
+    {
+        ULONGLONG elapsed = GetTickCount64() - server_tick_start;
+        if (elapsed < 20) Sleep(DWORD(20 - elapsed)); // maximum 50 server ticks/s
+    }
 	if (!b_is_Active)
 		Sleep(1);
 }
@@ -670,14 +684,35 @@ void CRenderDevice::Run()
 	// InitializeCriticalSection (&mt_csLeave);
 	mt_csEnter.Enter();
 	mt_bMustExit = FALSE;
+	freezeStopEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+	freezeDoneEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+	R_ASSERT(freezeStopEvent && freezeDoneEvent);
 	thread_spawn(mt_FreezeThread, "Freeze detecting thread", 0, 0);
 	thread_spawn(mt_Thread, "X-RAY Secondary thread", 0, this);
 	thread_spawn(mt_DiscordThread, "X-RAY Discord thread", 0, 0);
 	// Message cycle
 	seqAppStart.Process(rp_AppStart);
-	m_pRender->ClearTarget();
-	SetForegroundWindow(m_hWnd);
+    if (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw"))
+    {
+        if ((strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_console")))
+            SetWindowPos(m_hWnd, HWND_NOTOPMOST, 0, 0, 800, 600, SWP_NOMOVE | SWP_SHOWWINDOW);
+        else
+            ShowWindow(m_hWnd, SW_HIDE);
+        ClipCursor(NULL);
+        Msg("[COOP_SERVER] NODRAW_ACTIVE tick_limit=50Hz rendering=disabled");
+    }
+    else
+    {
+	    m_pRender->ClearTarget();
+	    SetForegroundWindow(m_hWnd);
+    }
 	message_loop();
+	// Finish log access before application and filesystem teardown.
+	SetEvent(freezeStopEvent);
+	WaitForSingleObject(freezeDoneEvent, INFINITE);
+	CloseHandle(freezeStopEvent);
+	CloseHandle(freezeDoneEvent);
+	freezeStopEvent = freezeDoneEvent = NULL;
 	seqAppEnd.Process(rp_AppEnd);
 	// Stop Balance-Thread
 	mt_bMustExit = TRUE;
@@ -827,6 +862,13 @@ bool CRenderDevice::Paused()
 
 void CRenderDevice::OnWM_Activate(WPARAM wParam, LPARAM lParam)
 {
+    if (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw"))
+    {
+        Device.b_is_Active = TRUE; // simulation is independent of window focus
+        Device.b_hide_cursor = FALSE;
+        ClipCursor(NULL);
+        return;
+    }
 	u16 fActive = LOWORD(wParam);
 	BOOL fMinimized = (BOOL)HIWORD(wParam);
 	BOOL bActive = ((fActive != WA_INACTIVE) && (!fMinimized)) ? TRUE : FALSE;

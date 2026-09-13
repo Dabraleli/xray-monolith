@@ -1,4 +1,6 @@
 #include "stdafx.h"
+
+static bool coop_no_render_streams() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_mesh") && strstr(Core.Params, "-coop_server_cpu_level") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_ui_resources") && strstr(Core.Params, "-coop_server_no_particle_graphics") && strstr(Core.Params, "-coop_server_no_render_streams")); }
 #include "dxWallMarkArray.h"
 
 #include "dxUIShader.h"
@@ -16,6 +18,12 @@ dxWallMarkArray::~dxWallMarkArray()
 
 void dxWallMarkArray::AppendMark(LPCSTR s_textures)
 {
+    if (coop_no_render_streams())
+    {
+        static bool reported = false;
+        if (!reported) { Msg("[COOP_SERVER] WALLMARK_SHADERS_SKIPPED materials=retained"); reported = true; }
+        return;
+    }
 	ref_shader s;
 
 #if defined(USE_DX11)

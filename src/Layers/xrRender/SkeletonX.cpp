@@ -236,7 +236,8 @@ void CSkeletonX::_Load(const char* N, IReader* data, u32& dwVertCount)
 
 	//u16			hw_bones_cnt		= u16((HW.Caps.geometry.dwRegisters-22)/3);
 	//	Igor: some shaders in r1 need more free constant registers
-	u16 hw_bones_cnt = u16((HW.Caps.geometry.dwRegisters - 22 - 3) / 3);
+	const bool cpu_mesh = (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_mesh"));
+	u16 hw_bones_cnt = cpu_mesh ? 0 : u16((HW.Caps.geometry.dwRegisters - 22 - 3) / 3);
 
 #if RENDER == R_R1
 	if (ps_r1_SoftwareSkinning == 1)
@@ -278,14 +279,14 @@ void CSkeletonX::_Load(const char* N, IReader* data, u32& dwVertCount)
 			crc						= crc32	(data->pointer(),size);
 			Vertices1W.create		(crc,dwVertCount,(vertBoned1W*)data->pointer());
 #else
-			if (1 == bids.size())
+			if (!cpu_mesh && 1 == bids.size())
 			{
 				// HW- single bone
 				RenderMode = RM_SINGLE;
 				RMS_boneid = *bids.begin();
 				Render->shader_option_skinning(0);
 			}
-			else if (sw_bones_cnt <= hw_bones_cnt)
+			else if (!cpu_mesh && sw_bones_cnt <= hw_bones_cnt)
 			{
 				// HW- one weight
 				RenderMode = RM_SKINNING_1B;
@@ -321,7 +322,7 @@ void CSkeletonX::_Load(const char* N, IReader* data, u32& dwVertCount)
 					bids.push_back(VB.matrix1);
 			}
 			//.			R_ASSERT(sw_bones_cnt<=hw_bones_cnt);
-			if (sw_bones_cnt <= hw_bones_cnt)
+			if (!cpu_mesh && sw_bones_cnt <= hw_bones_cnt)
 			{
 				// HW- two weights
 				RenderMode = RM_SKINNING_2B;
@@ -355,7 +356,7 @@ void CSkeletonX::_Load(const char* N, IReader* data, u32& dwVertCount)
 				}
 			}
 			//.			R_ASSERT(sw_bones_cnt<=hw_bones_cnt);
-			if ((sw_bones_cnt <= hw_bones_cnt))
+			if (!cpu_mesh && (sw_bones_cnt <= hw_bones_cnt))
 			{
 				RenderMode = RM_SKINNING_3B;
 				RMS_bonecount = sw_bones_cnt + 1;
@@ -388,7 +389,7 @@ void CSkeletonX::_Load(const char* N, IReader* data, u32& dwVertCount)
 				}
 			}
 			//.			R_ASSERT(sw_bones_cnt<=hw_bones_cnt);
-			if (sw_bones_cnt <= hw_bones_cnt)
+			if (!cpu_mesh && sw_bones_cnt <= hw_bones_cnt)
 			{
 				RenderMode = RM_SKINNING_4B;
 				RMS_bonecount = sw_bones_cnt + 1;

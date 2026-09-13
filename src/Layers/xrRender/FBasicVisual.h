@@ -7,6 +7,8 @@
 #include "../../Include/xrRender/RenderVisual.h"
 
 #define VLOAD_NOVERTICES		(1<<0)
+// Explicit CPU skeletal mesh load: retain physics data, no shaders/buffers.
+#define VLOAD_CPU_MESH (1<<1)
 
 // The class itself
 class CKinematicsAnimated;

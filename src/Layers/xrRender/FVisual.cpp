@@ -38,6 +38,21 @@ void Fvisual::Release()
 void Fvisual::Load(const char* N, IReader* data, u32 dwFlags)
 {
 	dxRender_Visual::Load(N, data, dwFlags);
+    if (dwFlags & VLOAD_CPU_MESH)
+    {
+        // Skeletal vertices were loaded by CSkeletonX::_Load. CPU indices are
+        // retained by _DuplicateIndices; do not allocate any graphics buffers.
+        R_ASSERT2(dwFlags & VLOAD_NOVERTICES, "CPU mesh path requires skeletal vertex data");
+        IReader* indices = data->open_chunk(OGF_INDICES);
+        R_ASSERT2(indices && indices->length() >= sizeof(u32), "CPU mesh missing index chunk");
+        iCount = indices->r_u32();
+        R_ASSERT2(iCount % 3 == 0 && iCount <= (indices->length() - sizeof(u32)) / sizeof(u16),
+            "CPU mesh invalid index count");
+        indices->close();
+        iBase = vBase = 0;
+        dwPrimitives = iCount / 3;
+        return;
+    }
 
 	D3DVERTEXELEMENT9 dcl [MAX_FVF_DECL_SIZE];
 	D3DVERTEXELEMENT9* vFormat = 0;

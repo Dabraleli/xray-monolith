@@ -1,4 +1,6 @@
 #include "stdafx.h"
+
+static bool coop_no_render_streams() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_mesh") && strstr(Core.Params, "-coop_server_cpu_level") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_ui_resources") && strstr(Core.Params, "-coop_server_no_particle_graphics") && strstr(Core.Params, "-coop_server_no_render_streams")); }
 #pragma hdrstop
 
 #if defined(USE_DX10) || defined(USE_DX11)
@@ -114,6 +116,14 @@ void CBackend::CreateQuadIB()
 // Device dependance
 void CBackend::OnDeviceCreate()
 {
+    if (coop_no_render_streams())
+    {
+        QuadIB = nullptr;
+        R_ASSERT(!Vertex.Buffer() && !Index.Buffer());
+        Invalidate();
+        Msg("[COOP_SERVER] RENDER_STREAMS_SKIPPED vertex=0 index=0 quad=0 debug_draw=0");
+        return;
+    }
 	CreateQuadIB();
 
 	// streams
@@ -128,6 +138,12 @@ void CBackend::OnDeviceCreate()
 
 void CBackend::OnDeviceDestroy()
 {
+    if (coop_no_render_streams())
+    {
+        R_ASSERT(!Vertex.Buffer() && !Index.Buffer() && !QuadIB);
+        Msg("[COOP_SERVER] RENDER_STREAMS_RELEASE vertex=0 index=0 quad=0");
+        return;
+    }
 	// streams
 	Index.Destroy();
 	Vertex.Destroy();

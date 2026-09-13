@@ -1,4 +1,7 @@
 #include "stdafx.h"
+
+// Only the isolated coop probe omits weather rendering resources.
+static bool coop_no_weather_graphics() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_weather_graphics")); }
 #include "dxEnvironmentRender.h"
 
 #include "dxRenderDeviceRender.h"
@@ -160,6 +163,7 @@ void dxEnvDescriptorMixerRender::lerp(IEnvDescriptorRender* inA, IEnvDescriptorR
 
 void dxEnvDescriptorRender::OnDeviceCreate(CEnvDescriptor& owner)
 {
+    if (coop_no_weather_graphics()) { return; }
 	dxEnvDescriptorMixerRender& mixRen = *(dxEnvDescriptorMixerRender*)&*g_pGamePersistent
 	                                                                     ->Environment().CurrentEnv->m_pDescriptorMixer;
 
@@ -206,12 +210,23 @@ void dxEnvDescriptorRender::OnDeviceDestroy()
 
 dxEnvironmentRender::dxEnvironmentRender()
 {
+    if (coop_no_weather_graphics()) { return; }
 	tsky0 = DEV->_CreateTexture("$user$sky0");
 	tsky1 = DEV->_CreateTexture("$user$sky1");
 }
 
 void dxEnvironmentRender::OnFrame(CEnvironment& env)
 {
+    if (coop_no_weather_graphics()) {
+        // Called after CPU weather interpolation and effect updates, before texture access.
+        static u32 next_log = 0;
+        if (Device.dwTimeGlobal >= next_log)
+        {
+            next_log = Device.dwTimeGlobal + 5000;
+            Msg("[COOP_SERVER] WEATHER_CPU time=%.1f rain=%.3f wind=%.3f far=%.1f",
+                env.fGameTime, env.CurrentEnv->rain_density, env.CurrentEnv->wind_velocity, env.CurrentEnv->far_plane);
+        }
+        return; }
 	dxEnvDescriptorMixerRender& mixRen = *(dxEnvDescriptorMixerRender*)&*env.CurrentEnv->m_pDescriptorMixer;
 
 	if (::Render->get_generation() == IRender_interface::GENERATION_R2)
@@ -262,6 +277,7 @@ void dxEnvironmentRender::OnFrame(CEnvironment& env)
 
 void dxEnvironmentRender::OnLoad()
 {
+    if (coop_no_weather_graphics()) { return; }
 	tonemap = DEV->_CreateTexture("$user$tonemap"); //. hack
 }
 
@@ -272,6 +288,7 @@ void dxEnvironmentRender::OnUnload()
 
 void dxEnvironmentRender::RenderSky(CEnvironment& env, bool OnlyMV)
 {
+    if (coop_no_weather_graphics()) { return; }
 	// clouds_sh.create		("clouds","null");
 	//. this is the bug-fix for the case when the sky is broken
 	//. for some unknown reason the geoms happen to be invalid sometimes
@@ -357,6 +374,7 @@ void dxEnvironmentRender::RenderSky(CEnvironment& env, bool OnlyMV)
 
 void dxEnvironmentRender::RenderClouds(CEnvironment& env)
 {
+    if (coop_no_weather_graphics()) { return; }
 	::Render->rmFar();
 
 	Fmatrix mXFORM, mScale;
@@ -399,6 +417,7 @@ void dxEnvironmentRender::RenderClouds(CEnvironment& env)
 
 void dxEnvironmentRender::OnDeviceCreate()
 {
+    if (coop_no_weather_graphics()) { Msg("[COOP_SERVER] WEATHER_GRAPHICS_SKIPPED sky=0 clouds=0 descriptors=0"); return; }
 	sh_2sky.create(&m_b_skybox, "skybox_2t");
 	sh_2geom.create(v_skybox_fvf, RCache.Vertex.Buffer(), RCache.Index.Buffer());
 	clouds_sh.create("clouds", "null");
@@ -407,6 +426,7 @@ void dxEnvironmentRender::OnDeviceCreate()
 
 void dxEnvironmentRender::OnDeviceDestroy()
 {
+    if (coop_no_weather_graphics()) { Msg("[COOP_SERVER] WEATHER_GRAPHICS_RELEASE"); return; }
 	tsky0->surface_set(NULL);
 	tsky1->surface_set(NULL);
 

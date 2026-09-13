@@ -506,8 +506,9 @@ IC void ref_sound::play_no_feedback(CObject* O, u32 flags, float d, Fvector* pos
 IC void ref_sound::set_position(const Fvector& pos)
 {
 	VERIFY(!::Sound->i_locked());
-	VERIFY(_feedback());
-	_feedback()->set_position(pos);
+	// No emitter when the sound core is off (-nosound) or the play was culled: as the other setters.
+	// CEffect_Rain::OnFrame sets the rain's position right after play and crashed a -nosound client.
+	if (_feedback()) _feedback()->set_position(pos);
 }
 
 IC void ref_sound::set_frequency(float freq)

@@ -8,7 +8,7 @@
 
 void CRenderDevice::_Destroy(BOOL bKeepTextures)
 {
-	DU->OnDeviceDestroy();
+	if (!(strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_client_graphics"))) DU->OnDeviceDestroy();
 
 	// before destroy
 	b_is_Ready = FALSE;

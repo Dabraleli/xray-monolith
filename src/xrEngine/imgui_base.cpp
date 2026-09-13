@@ -14,6 +14,8 @@ static bool xrayOpenInShellFn_Disabled(ImGuiContext*, const char*)
     return true;
 }
 
+static bool coop_no_client_graphics() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_client_graphics")); }
+
 namespace xr_imgui
 {
     static bool imgui_demo = false;
@@ -51,12 +53,14 @@ namespace xr_imgui
 
     void ide::OnDeviceCreate()
     {
+        if (coop_no_client_graphics()) { Msg("[COOP_SERVER] IMGUI_SKIPPED backend=0 font_upload=0"); return; }
         m_render = RenderFactory->CreateImGuiRender();
         m_render->OnDeviceCreate(m_context);
     }
 
     void ide::OnDeviceDestroy()
     {
+        if (coop_no_client_graphics()) { R_ASSERT(!m_render); Msg("[COOP_SERVER] IMGUI_RELEASE backend=0"); return; }
         m_render->OnDeviceDestroy();
         RenderFactory->DestroyImGuiRender(m_render);
         m_render = nullptr;
@@ -64,16 +68,19 @@ namespace xr_imgui
 
     void ide::OnDeviceResetBegin() const
     {
+        if (coop_no_client_graphics()) { return; }
         m_render->OnDeviceResetBegin();
     }
 
     void ide::OnDeviceResetEnd() const
     {
+        if (coop_no_client_graphics()) { return; }
         m_render->OnDeviceResetEnd();
     }
 
     void ide::OnAppStart()
     {
+        if (coop_no_client_graphics()) { return; }
         ImGuiIO& io = ImGui::GetIO();
 
         string_path fName;
@@ -127,6 +134,7 @@ namespace xr_imgui
 
     void ide::OnAppEnd()
     {
+        if (coop_no_client_graphics()) { return; }
         ImGuiIO& io = ImGui::GetIO();
         xr_free(io.IniFilename);
         xr_free(io.LogFilename);
@@ -143,6 +151,7 @@ namespace xr_imgui
 
     void ide::OnFrame()
     {
+        if (coop_no_client_graphics()) { return; }
         if (!!!Device.b_is_Active) return;
 
         const float frametime = m_timer.GetElapsed_sec();
@@ -183,6 +192,7 @@ namespace xr_imgui
 
     void ide::OnRender()
     {
+        if (coop_no_client_graphics()) { return; }
         ImGui::Render();
         m_render->Render(ImGui::GetDrawData());
 
@@ -256,6 +266,7 @@ namespace xr_imgui
 
     void ide::Show(bool bShow)
     {
+        if (coop_no_client_graphics()) { return; }
         if (m_shown == bShow) return;
 
         m_shown = bShow;

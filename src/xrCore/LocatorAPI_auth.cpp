@@ -46,6 +46,10 @@ void CLocatorAPI::auth_runtime(void* params)
 	CMemoryWriter writer;
 	pSettingsAuth->save_as(writer);
 	m_auth_code = crc32(writer.pointer(), writer.size());
+	// Coop diagnostics (-coop_auth_debug): the pieces of the version digest, so a "Different
+	// version" between a server and a client is found by diffing their logs.
+	const bool coop_auth_debug = !!strstr(Core.Params, "-coop_auth_debug");
+	if (coop_auth_debug) Msg("[COOP_AUTH] settings crc=0x%08x", u32(m_auth_code));
 
 #ifdef DEBUG
     if (strstr(Core.Params, "auth_debug"))
@@ -98,6 +102,7 @@ void CLocatorAPI::auth_runtime(void* params)
                     if (strstr(Core.Params, "auth_debug"))
                         Msg("auth %s = 0x%08x", f.name, crc);
 #endif // DEBUG
+					if (coop_auth_debug) Msg("[COOP_AUTH] %s = 0x%08x", f.name, crc);
 
 					FS.r_close(r);
 					m_auth_code ^= u64(crc);
@@ -110,6 +115,7 @@ void CLocatorAPI::auth_runtime(void* params)
 #ifdef DEBUG
         Msg("auth_code = %d", m_auth_code);
 #endif // DEBUG
+		if (coop_auth_debug) Msg("[COOP_AUTH] code=%llu", m_auth_code);
 	}
 #ifdef DEBUG
     else

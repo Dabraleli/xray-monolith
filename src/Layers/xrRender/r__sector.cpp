@@ -277,7 +277,13 @@ void CSector::load(IReader& fs)
 		count--;
 	}
 
-	if (g_dedicated_server) m_root = 0;
+    // Sector/portal topology is independent of the static rendering tree.
+#if RENDER == R_R4
+    const bool cpu_level = (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_mesh") && strstr(Core.Params, "-coop_server_cpu_level"));
+#else
+    const bool cpu_level = false;
+#endif
+	if (g_dedicated_server || cpu_level) m_root = 0;
 	else
 	{
 		// Assign visual

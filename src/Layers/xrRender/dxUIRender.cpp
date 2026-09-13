@@ -1,4 +1,6 @@
 #include "stdafx.h"
+
+static bool coop_no_ui_resources() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_game_ui") && strstr(Core.Params, "-coop_server_no_ui_resources")); }
 #include "dxUIRender.h"
 
 #include "dxUIShader.h"
@@ -7,6 +9,7 @@ dxUIRender UIRenderImpl;
 
 void dxUIRender::CreateUIGeom()
 {
+    if (coop_no_ui_resources()) { Msg("[COOP_SERVER] UI_GEOMETRY_SKIPPED"); return; }
 	hGeom_TL.create(FVF::F_TL, RCache.Vertex.Buffer(), 0);
 	hGeom_LIT.create(FVF::F_LIT, RCache.Vertex.Buffer(), 0);
 }
@@ -190,6 +193,7 @@ void dxUIRender::PushPoint(int x, int y, u32 c, float u, float v)
 
 void dxUIRender::PushPoint(float x, float y, float z, u32 C, float u, float v)
 {
+    if (coop_no_ui_resources()) { return; }
 	//.	VERIFY(m_PointType==pttLIT);
 	switch (m_PointType)
 	{
@@ -206,6 +210,7 @@ void dxUIRender::PushPoint(float x, float y, float z, u32 C, float u, float v)
 
 void dxUIRender::StartPrimitive(u32 iMaxVerts, ePrimitiveType primType, ePointType pointType)
 {
+    if (coop_no_ui_resources()) { return; }
 	VERIFY(PrimitiveType==ptNone);
 	VERIFY(m_PointType==pttNone);
 	//.	R_ASSERT(pointType==pttLIT);
@@ -229,6 +234,7 @@ void dxUIRender::StartPrimitive(u32 iMaxVerts, ePrimitiveType primType, ePointTy
 
 void dxUIRender::FlushPrimitive()
 {
+    if (coop_no_ui_resources()) { return; }
 	u32 primCount = 0;
 	_D3DPRIMITIVETYPE d3dPrimType = D3DPT_FORCE_DWORD;
 	std::ptrdiff_t p_cnt = 0;

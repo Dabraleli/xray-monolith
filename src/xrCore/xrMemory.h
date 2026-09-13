@@ -153,5 +153,8 @@ extern BOOL mem_initialized;
 
 XRCORE_API void vminfo(size_t* _free, size_t* reserved, size_t* committed);
 XRCORE_API void log_vminfo();
+// Coop diagnostics (-coop_heap_check): a tagged CRT heap check, to bracket a corruption that
+// mem_usage finds only at the end of a level load (coop client, 121).
+XRCORE_API void coop_heap_check(LPCSTR where);
 
 #endif // xrMemoryH

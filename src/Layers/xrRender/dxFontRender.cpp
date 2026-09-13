@@ -1,4 +1,6 @@
 #include "stdafx.h"
+
+static bool coop_no_ui_resources() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_game_ui") && strstr(Core.Params, "-coop_server_no_ui_resources")); }
 #include "dxFontRender.h"
 
 #include "../../xrEngine/GameFont.h"
@@ -15,6 +17,7 @@ dxFontRender::~dxFontRender()
 
 void dxFontRender::Initialize(LPCSTR cShader, LPCSTR cTexture)
 {
+    if (coop_no_ui_resources()) { Msg("[COOP_SERVER] FONT_CPU texture=%s metrics=retained gpu=0", cTexture); return; }
 	pShader.create(cShader, cTexture);
 	pGeom.create(FVF::F_TL, RCache.Vertex.Buffer(), RCache.QuadIB);
 }
@@ -24,6 +27,7 @@ extern ENGINE_API Fvector2 g_current_font_scale;
 
 void dxFontRender::OnRender(CGameFont& owner)
 {
+    if (coop_no_ui_resources()) { return; }
 	VERIFY(g_bRendering);
 	if (pShader) RCache.set_Shader(pShader);
 

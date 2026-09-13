@@ -1,4 +1,6 @@
 #include "stdafx.h"
+static bool coop_no_device() { return strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_mesh") && strstr(Core.Params, "-coop_server_noaudio") && strstr(Core.Params, "-coop_server_cpu_level") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_client_graphics") && strstr(Core.Params, "-coop_server_no_weather_graphics") && strstr(Core.Params, "-coop_server_no_game_ui") && strstr(Core.Params, "-coop_server_no_ui_resources") && strstr(Core.Params, "-coop_server_no_particle_graphics") && strstr(Core.Params, "-coop_server_no_render_streams") && strstr(Core.Params, "-coop_server_no_residual_graphics") && strstr(Core.Params, "-coop_server_no_device"); }
+
 #include "r4.h"
 #include "../xrRender/fbasicvisual.h"
 #include "../../xrEngine/xr_object.h"
@@ -18,6 +20,30 @@
 #include "../../xrCore/ShaderSourceCRC.h"
 
 #include "D3DX10Core.h"
+
+static bool coop_cpu_target() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_mesh") && strstr(Core.Params, "-coop_server_cpu_level") && strstr(Core.Params, "-coop_server_cpu_target")); }
+
+// Compatibility surface for camera/UI metadata; post-processing has no server
+// output. This object owns no textures, shaders, buffers or device references.
+class CCoopRenderTarget final : public IRender_Target
+{
+public:
+    void set_blur(float) override {}
+    void set_gray(float) override {}
+    void set_duality_h(float) override {}
+    void set_duality_v(float) override {}
+    void set_noise(float) override {}
+    void set_noise_scale(float) override {}
+    void set_noise_fps(float) override {}
+    void set_color_base(u32) override {}
+    void set_color_gray(u32) override {}
+    void set_color_add(const Fvector&) override {}
+    u32 get_width() override { return Device.dwWidth ? Device.dwWidth : 800; }
+    u32 get_height() override { return Device.dwHeight ? Device.dwHeight : 600; }
+    void set_cm_imfluence(float) override {}
+    void set_cm_interpolate(float) override {}
+    void set_cm_textures(const shared_str&, const shared_str&) override {}
+};
 
 CRender RImplementation;
 
@@ -204,6 +230,8 @@ void CRender::create()
 	m_skinning = -1;
 	m_MSAASample = -1;
 
+    if (!coop_no_device())
+    {
 	// hardware
 	o.smapsize = 2048;
 	o.mrt = (HW.Caps.raster.dwMRT_count >= 3);
@@ -514,6 +542,13 @@ void CRender::create()
 	Msg("- SSS MOTION BLUR SHADER INSTALLED %i", o.ssfx_motionblur);
 	Msg("- SSS TAA SHADER INSTALLED %i", o.ssfx_taa);
 
+    }
+    else
+    {
+        ZeroMemory(&o, sizeof(o));
+        Msg("[COOP_SERVER] RENDER_CPU_CONFIG hardware_caps=unused");
+    }
+
 	// constants
 	CResourceManager* RM = dxRenderDeviceRender::Instance().Resources;
 	RM->RegisterConstantSetup("parallax", &binder_parallax);
@@ -530,10 +565,18 @@ void CRender::create()
 
 	m_bMakeAsyncSS = false;
 
-	Target = xr_new<CRenderTarget>(); // Main target
+	Target = coop_cpu_target() ? nullptr : xr_new<CRenderTarget>(); // Main target
 
 	Models = xr_new<CModelPool>();
 	PSLibrary.OnCreate();
+    if (coop_cpu_target())
+    {
+        marker = 0;
+        ZeroMemory(q_sync_point, sizeof(q_sync_point));
+        R_ASSERT(!Target && Models);
+        Msg("[COOP_SERVER] CPU_TARGET screen_buffers=0 gpu_queries=0 fluid=0 model_pool=retained");
+        return;
+    }
 	HWOCC.occq_create(occq_size);
 
 	rmNormal();
@@ -561,6 +604,17 @@ void CRender::create()
 
 void CRender::destroy()
 {
+    if (coop_cpu_target())
+    {
+        R_ASSERT(!Target);
+        m_bMakeAsyncSS = false;
+        xr_delete(Models);
+        PSLibrary.OnDestroy();
+        Device.seqFrame.Remove(this);
+        r_dsgraph_destroy();
+        Msg("[COOP_SERVER] CPU_TARGET_RELEASE");
+        return;
+    }
 	m_bMakeAsyncSS = false;
 	FluidManager.Destroy();
 	::PortalTraverser.destroy();
@@ -579,6 +633,7 @@ void CRender::destroy()
 
 void CRender::reset_begin()
 {
+    if (coop_cpu_target()) return;
 	// Update incremental shadowmap-visibility solver
 	// BUG-ID: 10646
 	{
@@ -599,7 +654,7 @@ void CRender::reset_begin()
 	}
 
 	//AVO: let's reload details while changed details options on vid_restart
-	if (b_loaded && ((dm_current_size != dm_size) || (ps_r__Detail_density != ps_current_detail_density) || (
+	if (b_loaded && !(strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_mesh") && strstr(Core.Params, "-coop_server_cpu_level")) && ((dm_current_size != dm_size) || (ps_r__Detail_density != ps_current_detail_density) || (
 		ps_r__Detail_height != ps_current_detail_height)))
 	{
 		Details->Unload();
@@ -617,6 +672,7 @@ void CRender::reset_begin()
 
 void CRender::reset_end()
 {
+    if (coop_cpu_target()) return;
 	D3D_QUERY_DESC qdesc;
 	qdesc.MiscFlags = 0;
 	qdesc.Query = D3D_QUERY_EVENT;
@@ -634,7 +690,7 @@ void CRender::reset_end()
 	Target = xr_new<CRenderTarget>();
 
 	//AVO: let's reload details while changed details options on vid_restart
-	if (b_loaded && ((dm_current_size != dm_size) || (ps_r__Detail_density != ps_current_detail_density) || (
+	if (b_loaded && !(strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_mesh") && strstr(Core.Params, "-coop_server_cpu_level")) && ((dm_current_size != dm_size) || (ps_r__Detail_density != ps_current_detail_density) || (
 		ps_r__Detail_height != ps_current_detail_height)))
 	{
 		Details = xr_new<CDetailManager>();
@@ -662,6 +718,7 @@ void CRender::OnFrame()
 {
 	PROF_EVENT("CRender::OnFrame()");
 	Models->DeleteQueue();
+    if (coop_cpu_target()) return; // retain model lifetime, skip visual visibility/grass work
 	if (ps_r2_ls_flags.test(R2FLAG_EXP_MT_CALC))
 	{
 		// MT-details (@front)
@@ -826,7 +883,15 @@ FSlideWindowItem* CRender::getSWI(int id)
 	return &SWIs[id];
 }
 
-IRender_Target* CRender::getTarget() { return Target; }
+IRender_Target* CRender::getTarget()
+{
+    if (coop_cpu_target())
+    {
+        static CCoopRenderTarget server_target;
+        return &server_target;
+    }
+    return Target;
+}
 
 IRender_Light* CRender::light_create() { return Lights.Create(); }
 IRender_Glow* CRender::glow_create() { return xr_new<CGlow>(); }
@@ -907,6 +972,7 @@ void CRender::set_Object(IRenderable* O)
 
 void CRender::rmNear()
 {
+    if (coop_cpu_target()) return;
 	IRender_Target* T = getTarget();
 	D3D_VIEWPORT VP = {0, 0, (float)T->get_width(), (float)T->get_height(), 0, 0.02f};
 
@@ -916,6 +982,7 @@ void CRender::rmNear()
 
 void CRender::rmFar()
 {
+    if (coop_cpu_target()) return;
 	IRender_Target* T = getTarget();
 	D3D_VIEWPORT VP = {0, 0, (float)T->get_width(), (float)T->get_height(), 0.99999f, 1.f};
 
@@ -925,6 +992,7 @@ void CRender::rmFar()
 
 void CRender::rmNormal()
 {
+    if (coop_cpu_target()) return;
 	IRender_Target* T = getTarget();
 	D3D_VIEWPORT VP = {0, 0, (float)T->get_width(), (float)T->get_height(), 0, 1.f};
 

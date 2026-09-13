@@ -241,7 +241,10 @@ PROTECT_API void InitConsole()
 #else
 	// else
 	{
-		Console = xr_new<CConsole>();
+		if (strstr(Core.Params, "-coop_server_probe"))
+			Console = xr_new<CTextConsole>();
+		else
+			Console = xr_new<CConsole>();
 	}
 #endif
 	Console->Initialize();
@@ -621,6 +624,59 @@ void Startup()
 
 	ResetStartupMonitor();
 #endif
+
+    // Explicit autonomous coop probe; ordinary SP/MP startup stays unchanged.
+    if (strstr(Core.Params, "-coop_server_probe"))
+    {
+        R_ASSERT2(!strstr(Core.Params, "-start ") && !strstr(Core.Params, "-load "),
+            "COOP_SERVER: use coop_server.ltx, not simultaneous -start/-load");
+        string_path config_path;
+        FS.update_path(config_path, "$app_data_root$", "coop_server.ltx");
+        R_ASSERT2(FS.exist(config_path), "COOP_SERVER: missing appdata/coop_server.ltx");
+        CInifile config(config_path);
+        R_ASSERT2(!xr_strcmp(config.r_string("server", "world"), "all"),
+            "COOP_SERVER probe currently supports world=all only");
+        Msg("[COOP_SERVER] START mode=probe renderer=retained binder=minimal");
+        // [server] load = <name> in coop_server.ltx, or -coop_load <name> ("..." for names with
+        // spaces) on the command line: continue a saved world (the server's own save, see
+        // game_sv_Coop::save_game) instead of a new game; a missing file falls back to a new one.
+        // r_string_wb: the ini parser drops the spaces of an unquoted value ("player - quicksave_1"
+        // became player-quicksave_1); a quoted value keeps them and loses the quotes here.
+        const shared_str load_value = config.line_exist("server", "load") ? config.r_string_wb("server", "load") : shared_str();
+        LPCSTR load = load_value.c_str();
+        string_path load_arg;
+        load_arg[0] = 0;
+        if (LPCSTR arg = strstr(Core.Params, "-coop_load "))
+        {
+            arg += xr_strlen("-coop_load ");
+            while (*arg == ' ') ++arg;
+            const bool quoted = *arg == '"';
+            if (quoted) ++arg;
+            u32 n = 0;
+            while (*arg && n < sizeof(load_arg) - 1 && (quoted ? *arg != '"' : *arg != ' ')) load_arg[n++] = *arg++;
+            load_arg[n] = 0;
+            if (n) load = load_arg;
+        }
+        string_path save_file;
+        if (load && xr_strlen(load))
+        {
+            string_path save_name;
+            strconcat(sizeof(save_name), save_name, load, ".scop");
+            FS.update_path(save_file, "$game_saves$", save_name);
+        }
+        if (load && xr_strlen(load) && FS.exist(save_file))
+        {
+            string512 command;
+            xr_sprintf(command, "start server(%s/coop/alife/load) client(localhost)", load);
+            Msg("[COOP_SERVER] START load=%s", load);
+            Console->Execute(command);
+        }
+        else
+        {
+            if (load && xr_strlen(load)) Msg("! [COOP_SERVER] START save not found: %s (new game)", load);
+            Console->Execute("start server(all/coop/alife/new) client(localhost)");
+        }
+    }
 
 	// ...command line for auto start
 	{
@@ -1032,6 +1088,9 @@ int APIENTRY WinMain_impl(HINSTANCE hInstance,
     g_dedicated_server = true;
 #endif // DEDICATED_SERVER
 
+    // Core.Params is not initialized yet at this startup stage.
+    if (!(strstr(lpCmdLine, "-coop_server_probe") && strstr(lpCmdLine, "-coop_server_nodraw")))
+    {
 	// Title window
 	logoWindow = CreateDialog(GetModuleHandle(NULL), MAKEINTRESOURCE(IDD_STARTUP), 0, logDlgProc);
 
@@ -1063,6 +1122,7 @@ int APIENTRY WinMain_impl(HINSTANCE hInstance,
 	);
 
 	UpdateWindow(logoWindow);
+    }
 
 	// AVI
 	g_bIntroFinished = TRUE;
@@ -1132,6 +1192,34 @@ int APIENTRY WinMain_impl(HINSTANCE hInstance,
 		InitInput();
 
 		InitConsole();
+
+        if (CoopConsoleEnabled() && strstr(Core.Params, "-coop_console_test"))
+        {
+            // Same Device HWND and CTextConsole; stop before renderer discovery,
+            // Engine.External.Initialize, Startup and Device.Create.
+            R_ASSERT(!Device.b_is_Ready);
+            Msg("[COOP_CONSOLE] TEST_READY renderer=not_initialized d3d=not_created");
+            MSG message;
+            while (GetMessage(&message, nullptr, 0, 0) > 0)
+            {
+                TranslateMessage(&message);
+                DispatchMessage(&message);
+            }
+            Console->Destroy();
+            xr_delete(Console);
+            destroyInput();
+            DestroyWindow(Device.m_hWnd);
+            Device.m_hWnd = nullptr;
+            // External.Initialize was never called: do not call DLL detach paths.
+            Engine.Sheduler.Destroy();
+            Engine.Event._destroy();
+            destroySettings();
+            R_ASSERT(!Device.b_is_Ready);
+            Msg("[COOP_CONSOLE] TEST_STOPPED renderer=not_initialized d3d=not_created");
+            FlushLog();
+            Core._destroy();
+            return 0;
+        }
 
 		Engine.External.CreateRendererList();
 
@@ -1448,8 +1536,11 @@ void CApplication::OnEvent(EVENT E, u64 P1, u64 P2)
 		if (g_pGameLevel)
 		{
 			Console->Hide();
+			coop_heap_check("disconnect: before net_Stop");
 			g_pGameLevel->net_Stop();
+			coop_heap_check("disconnect: after net_Stop");
 			DEL_INSTANCE(g_pGameLevel);
+			coop_heap_check("disconnect: level deleted");
 			Console->Show();
 
 			if ((FALSE == Engine.Event.Peek("KERNEL:quit")) && (FALSE == Engine.Event.Peek("KERNEL:start")))
@@ -1554,6 +1645,7 @@ PROTECT_API void CApplication::LoadDraw()
 	PROF_EVENT();
 
 	if (g_appLoaded) return;
+    if (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw")) return;
 	Device.dwFrame += 1;
 
 

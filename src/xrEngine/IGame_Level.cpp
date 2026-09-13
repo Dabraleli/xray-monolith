@@ -40,7 +40,9 @@ IGame_Level::~IGame_Level()
 	xr_delete(pLevel);
 
 	// Render-level unload
+	coop_heap_check("~IGame_Level: before render level_Unload");
 	Render->level_Unload();
+	coop_heap_check("~IGame_Level: after render level_Unload");
 	xr_delete(m_pCameras);
 	// Unregister
 	Device.seqParallel.clear_not_free();
@@ -87,6 +89,7 @@ bool IGame_Level::Load(u32 dwNum)
 	//SECUROM_MARKER_PERFORMANCE_ON(10)
 
 	// Initialize level data
+	coop_heap_check("level load: begin");
 	pApp->Level_Set(dwNum);
 	string_path temp;
 	if (!FS.exist(temp, "$level$", "level.ltx"))
@@ -120,7 +123,9 @@ bool IGame_Level::Load(u32 dwNum)
 		g_hud = (CCustomHUD*)NEW_INSTANCE(CLSID_HUDMANAGER);
 
 	// Render-level Load
+	coop_heap_check("level load: before render level_Load");
 	Render->level_Load(LL_Stream);
+	coop_heap_check("level load: after render level_Load");
 	// tscreate.FrameEnd ();
 	// Msg ("* S-CREATE: %f ms, %d times",tscreate.result,tscreate.count);
 
@@ -129,11 +134,12 @@ bool IGame_Level::Load(u32 dwNum)
 	R_ASSERT(Load_GameSpecific_Before());
 	Objects.Load();
 	//. ANDY R_ASSERT (Load_GameSpecific_After ());
+	coop_heap_check("level load: objects loaded");
 
 	// Done
 	FS.r_close(LL_Stream);
 	bReady = true;
-	if (!g_dedicated_server) IR_Capture();
+	if (!g_dedicated_server && !(strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw"))) IR_Capture();
 #ifndef DEDICATED_SERVER
 	Device.seqRender.Add(this);
 #endif

@@ -229,8 +229,37 @@ SVS* CResourceManager::_CreateVS(LPCSTR _name)
 	}
 }
 
+// Coop diagnostics (-coop_heap_check): a vertex or pixel shader freed while a registered pass still
+// holds it is the dead pass behind the coop client's level-unload crashes (120–126); name the moment.
+void LogStackTrace(LPCSTR header, bool printStack);
+bool coop_shader_diag_enabled(); // ResourceManager.cpp
+static void coop_report_held_vs(const xr_vector<SPass*>& passes, const SVS* vs)
+{
+	if (!coop_shader_diag_enabled()) return;
+	u32 holders = 0;
+	for (u32 i = 0; i < passes.size(); ++i)
+		if (passes[i]->vs._get() == vs) ++holders;
+	if (!holders) return;
+	Msg("! [COOP_SHADER] VS '%s' freed while %u registered passes hold it (refcount %u, flags %u)", *vs->cName, holders,
+	    u32(vs->dwReference), vs->dwFlags);
+	LogStackTrace("VS freed while held (diagnostic, not a crash)", true);
+}
+
+static void coop_report_held_ps(const xr_vector<SPass*>& passes, const SPS* ps)
+{
+	if (!coop_shader_diag_enabled()) return;
+	u32 holders = 0;
+	for (u32 i = 0; i < passes.size(); ++i)
+		if (passes[i]->ps._get() == ps) ++holders;
+	if (!holders) return;
+	Msg("! [COOP_SHADER] PS '%s' freed while %u registered passes hold it (refcount %u, flags %u)", *ps->cName, holders,
+	    u32(ps->dwReference), ps->dwFlags);
+	LogStackTrace("PS freed while held (diagnostic, not a crash)", true);
+}
+
 void CResourceManager::_DeleteVS(const SVS* vs)
 {
+	coop_report_held_vs(v_passes, vs);
 	if (0 == (vs->dwFlags & xr_resource_flagged::RF_REGISTERED)) return;
 	xrCriticalSectionGuard guard(creationGuard);
 	LPSTR N = LPSTR(*vs->cName);
@@ -361,6 +390,7 @@ SPS* CResourceManager::_CreatePS(LPCSTR _name)
 
 void CResourceManager::_DeletePS(const SPS* ps)
 {
+	coop_report_held_ps(v_passes, ps);
 	if (0 == (ps->dwFlags & xr_resource_flagged::RF_REGISTERED)) return;
 	xrCriticalSectionGuard guard(creationGuard);
 	LPSTR N = LPSTR(*ps->cName);

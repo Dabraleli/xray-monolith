@@ -1,5 +1,7 @@
 #include "stdafx.h"
 
+static bool coop_no_render_streams() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_mesh") && strstr(Core.Params, "-coop_server_cpu_level") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_ui_resources") && strstr(Core.Params, "-coop_server_no_particle_graphics") && strstr(Core.Params, "-coop_server_no_render_streams")); }
+
 #include "dxApplicationRender.h"
 #include "../../xrEngine/GameFont.h"
 
@@ -12,6 +14,12 @@ void dxApplicationRender::Copy(IApplicationRender& _in)
 
 void dxApplicationRender::LoadBegin()
 {
+    if (coop_no_render_streams())
+    {
+        discord_gameinfo.loadscreen = true;
+        Msg("[COOP_SERVER] LOADING_GRAPHICS_SKIPPED textures=0 geometry=0");
+        return;
+    }
 	ll_hGeom.create(FVF::F_TL, RCache.Vertex.Buffer(), RCache.QuadIB);
 	sh_progress.create("hud\\default", "ui\\ui_actor_loadgame_screen");
 	hLevelLogo_Add.create("hud\\default", "ui\\ui_actor_widescreen_sidepanels.dds");
@@ -46,6 +54,7 @@ void dxApplicationRender::destroy_loading_shaders()
 
 void dxApplicationRender::setLevelLogo(LPCSTR pszLogoName)
 {
+    if (coop_no_render_streams()) return;
 	hLevelLogo.create("hud\\default", pszLogoName);
 }
 
@@ -60,6 +69,7 @@ extern void render_reshade_effects();
 
 void dxApplicationRender::load_draw_internal(CApplication& owner)
 {
+    if (coop_no_render_streams()) return;
 #if defined(USE_DX10) || defined(USE_DX11)
 	//	TODO: DX10: remove this???
 	RImplementation.rmNormal();

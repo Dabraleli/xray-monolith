@@ -24,6 +24,7 @@ void CRender::level_Load(IReader* fs)
 {
 	R_ASSERT(0!=g_pGameLevel);
 	R_ASSERT(!b_loaded);
+    const bool cpu_level = (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_mesh") && strstr(Core.Params, "-coop_server_cpu_level"));
 
 	// Begin
 	pApp->LoadBegin();
@@ -33,6 +34,7 @@ void CRender::level_Load(IReader* fs)
 	// Shaders
 	//	g_pGamePersistent->LoadTitle		("st_loading_shaders");
 	g_pGamePersistent->LoadTitle();
+    if (!cpu_level)
 	{
 		chunk = fs->open_chunk(fsL_SHADERS);
 		R_ASSERT2(chunk, "Level doesn't builded correctly.");
@@ -57,7 +59,7 @@ void CRender::level_Load(IReader* fs)
 	Wallmarks = xr_new<CWallmarksEngine>();
 	Details = xr_new<CDetailManager>();
 
-	if (!g_dedicated_server)
+	if (!g_dedicated_server && !cpu_level)
 	{
 		// VB,IB,SWI
 		//		g_pGamePersistent->LoadTitle("st_loading_geometry");
@@ -97,7 +99,7 @@ void CRender::level_Load(IReader* fs)
 	LoadSectors(fs);
 
 	// 3D Fluid
-	Load3DFluid();
+	if (!cpu_level) Load3DFluid();
 
 	// HOM
 	HOM.Load();
@@ -115,6 +117,21 @@ void CRender::level_Load(IReader* fs)
 	mapLOD.clear();
 	mapWater.clear();
 
+    if (cpu_level)
+    {
+        // Physics was loaded separately by IGame_Level before level_Load.
+        CDB::MODEL* collision = g_pGameLevel->ObjectSpace.GetStaticModel();
+        R_ASSERT2(collision && collision->get_tris_count() > 0 && collision->get_verts_count() > 0,
+            "CPU level requires real collision geometry");
+        R_ASSERT2(!Sectors.empty(), "CPU level requires sectors");
+        const CDB::TRI* tris = collision->get_tris();
+        for (int i = 0; i < collision->get_tris_count(); ++i)
+            R_ASSERT2(tris[i].sector < Sectors.size(), "Collision triangle references missing sector");
+        R_ASSERT2(Shaders.empty() && Visuals.empty() && nVB.empty() && xVB.empty() &&
+            nIB.empty() && xIB.empty() && SWIs.empty(), "CPU level loaded static graphics resources");
+        Msg("[COOP_SERVER] CPU_LEVEL triangles=%d vertices=%d sectors=%u portals=%u static_gpu_buffers=0",
+            collision->get_tris_count(), collision->get_verts_count(), u32(Sectors.size()), u32(Portals.size()));
+    }
 	// signal loaded
 	b_loaded = TRUE;
 }
@@ -130,7 +147,7 @@ void CRender::level_Unload()
 	HOM.Unload();
 
 	//*** Details
-	Details->Unload();
+    if (!(strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_mesh") && strstr(Core.Params, "-coop_server_cpu_level"))) Details->Unload();
 
 	//*** Sectors
 	// 1.
@@ -188,6 +205,7 @@ void CRender::level_Unload()
 		//Msg("The Level Unloaded.======================== %d", ++unload_counter);
 	}
 
+    if ((strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_mesh") && strstr(Core.Params, "-coop_server_cpu_level"))) Msg("[COOP_SERVER] CPU_LEVEL_RELEASE");
 	b_loaded = FALSE;
 }
 

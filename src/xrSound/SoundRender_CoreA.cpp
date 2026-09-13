@@ -10,6 +10,15 @@
 
 #include <AL/efx.h>
 
+// Probe only: retain source metadata, virtual emitters and AI events without
+// opening an audio device. Do not use -nosound, which disables the sound core.
+static bool coop_audio_simulation_only()
+{
+    return strstr(Core.Params, "-coop_server_probe") &&
+        strstr(Core.Params, "-coop_server_nodraw") &&
+        strstr(Core.Params, "-coop_server_noaudio");
+}
+
 BOOL reverb_overwrite = FALSE;
 
 float psReverbDensity                = AL_EAXREVERB_DEFAULT_DENSITY;
@@ -367,6 +376,23 @@ void CSoundRender_CoreA::switch_device(LPCSTR device_name)
 
 void CSoundRender_CoreA::_initialize(int stage)
 {
+    if (coop_audio_simulation_only())
+    {
+        m_is_supported = false;
+        if (stage == 0)
+            return;
+        Listener.position.set(0.f, 0.f, 0.f);
+        Listener.prevVelocity.set(0.f, 0.f, 0.f);
+        Listener.curVelocity.set(0.f, 0.f, 0.f);
+        Listener.accVelocity.set(0.f, 0.f, 0.f);
+        Listener.orientation[0].set(0.f, 0.f, 1.f);
+        Listener.orientation[1].set(0.f, 1.f, 0.f);
+        inherited::_initialize(stage);
+        R_ASSERT2(s_targets.empty() && !pDevice && !pContext && !pDeviceList,
+            "Server sound created playback resources");
+        Msg("[COOP_SERVER] AUDIO_SIMULATION device=none targets=0 sources=enabled");
+        return;
+    }
 	if (stage == 0)
 	{
 		pDeviceList = xr_new<ALDeviceList>();
@@ -510,6 +536,7 @@ void CSoundRender_CoreA::_initialize(int stage)
 
 void CSoundRender_CoreA::set_master_volume(float f)
 {
+    if (coop_audio_simulation_only()) return;
 	if (bPresent)
 	{
 		A_CHK(alListenerf (AL_GAIN,f));
@@ -519,6 +546,11 @@ void CSoundRender_CoreA::set_master_volume(float f)
 void CSoundRender_CoreA::_clear()
 {
 	inherited::_clear();
+    if (coop_audio_simulation_only())
+    {
+        Msg("[COOP_SERVER] AUDIO_SIMULATION_RELEASE");
+        return;
+    }
 	// remove targets
 	CSoundRender_Target* T = nullptr;
 	for (u32 tit = 0; tit < s_targets.size(); tit++)
@@ -541,6 +573,14 @@ void CSoundRender_CoreA::update_listener(const Fvector& P, const Fvector& D, con
 {
 	PROF_EVENT("Sound: update_listener");
 	inherited::update_listener(P, D, N, dt);
+    if (coop_audio_simulation_only())
+    {
+        // Base update_listener is empty. Preserve the position used by emitters.
+        Listener.position.set(P);
+        Listener.orientation[0].set(D.x, D.y, -D.z);
+        Listener.orientation[1].set(N.x, N.y, -N.z);
+        return;
+    }
 
 	Listener.curVelocity.sub(P, Listener.position);
 

@@ -65,3 +65,13 @@ size_t xrMemory::mem_usage()
 	}
 	return bytesUsed;
 }
+
+XRCORE_API void coop_heap_check(LPCSTR where)
+{
+	static const bool enabled = !!strstr(Core.Params, "-coop_heap_check");
+	if (!enabled) return;
+	const u32 started = GetTickCount();
+	const int status = _heapchk();
+	Msg("[COOP_HEAP] %s status=%s (%u ms)", where, status == _HEAPOK ? "ok" : "BAD", GetTickCount() - started);
+	if (status != _HEAPOK) FATAL("coop heap check failed");
+}

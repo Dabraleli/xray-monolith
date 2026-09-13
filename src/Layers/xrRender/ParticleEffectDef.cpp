@@ -1,4 +1,6 @@
 #include "stdafx.h"
+
+static bool coop_no_particle_graphics() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_particle_graphics")); }
 #pragma hdrstop
 
 #include "ParticleEffectDef.h"
@@ -59,6 +61,12 @@ float CPEDef::GetFStep()
 
 void CPEDef::CreateShader()
 {
+    if (coop_no_particle_graphics())
+    {
+        static bool reported = false;
+        if (!reported) { Msg("[COOP_SERVER] PARTICLE_GRAPHICS_SKIPPED shaders=0 textures=0 definitions=retained"); reported = true; }
+        return;
+    }
 	if (*m_ShaderName && *m_TextureName)
 		m_CachedShader.create(*m_ShaderName, *m_TextureName);
 }

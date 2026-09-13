@@ -2,6 +2,8 @@
 //////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+static bool coop_no_device() { return strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_mesh") && strstr(Core.Params, "-coop_server_noaudio") && strstr(Core.Params, "-coop_server_cpu_level") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_client_graphics") && strstr(Core.Params, "-coop_server_no_weather_graphics") && strstr(Core.Params, "-coop_server_no_game_ui") && strstr(Core.Params, "-coop_server_no_ui_resources") && strstr(Core.Params, "-coop_server_no_particle_graphics") && strstr(Core.Params, "-coop_server_no_render_streams") && strstr(Core.Params, "-coop_server_no_residual_graphics") && strstr(Core.Params, "-coop_server_no_device"); }
+
 #pragma hdrstop
 
 #pragma warning(disable:4995)
@@ -1082,6 +1084,7 @@ extern void unregister_reshade();
 
 void CHW::OnAppActivate()
 {
+    if (coop_no_device()) return;
 #if defined(USE_DX11)
     BOOL is_windowed = m_ChainDescFullscreen.Windowed;
 #elif defined(USE_DX10)
@@ -1126,6 +1129,7 @@ void CHW::OnAppActivate()
 
 void CHW::OnAppDeactivate()
 {
+    if (coop_no_device()) return;
 #if defined(USE_DX11)
     BOOL is_windowed = m_ChainDescFullscreen.Windowed;
 #elif defined(USE_DX10)
@@ -1184,6 +1188,13 @@ BOOL CHW::support(D3DFORMAT fmt, DWORD type, DWORD usage)
 
 void CHW::updateWindowProps(HWND m_hWnd)
 {
+    if (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw"))
+    {
+        ShowWindow(m_hWnd, (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_console")) ? SW_SHOW : SW_HIDE);
+        ClipCursor(NULL);
+        Msg("[COOP_SERVER] DX11_WINDOW service_console=%u", (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_console")) ? 1 : 0);
+        return;
+    }
 	//	BOOL	bWindowed				= strstr(Core.Params,"-dedicated") ? TRUE : !psDeviceFlags.is	(rsFullscreen);
     BOOL bWindowed = (g_screenmode != 2);
 

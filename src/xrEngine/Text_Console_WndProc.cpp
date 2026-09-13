@@ -36,6 +36,11 @@ LRESULT CALLBACK TextConsole_WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM
 
 LRESULT CALLBACK TextConsole_LogWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+    if (CoopConsoleEnabled() && uMsg == WM_MOUSEWHEEL)
+    {
+        static_cast<CTextConsole*>(Console)->CoopScroll(-short(HIWORD(wParam)) / WHEEL_DELTA * 3);
+        return 0;
+    }
 	switch (uMsg)
 	{
 	case WM_ERASEBKGND:

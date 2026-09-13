@@ -40,7 +40,7 @@ void dxRender_Visual::Release()
 
 //CStatTimer						tscreate;
 
-void dxRender_Visual::Load(const char* N, IReader* data, u32)
+void dxRender_Visual::Load(const char* N, IReader* data, u32 flags)
 {
 	dbg_name = N;
 	dbg_id = 1;
@@ -55,7 +55,7 @@ void dxRender_Visual::Load(const char* N, IReader* data, u32)
 		R_ASSERT2(hdr.format_version==xrOGF_FormatVersion, "Invalid visual version");
 		Type = hdr.type;
 		//if (hdr.shader_id)	shader	= ::Render->getShader	(hdr.shader_id);
-		if (hdr.shader_id) shader = ::RImplementation.getShader(hdr.shader_id);
+		if (hdr.shader_id && !(flags & VLOAD_CPU_MESH)) shader = ::RImplementation.getShader(hdr.shader_id);
 		vis.box.set(hdr.bb.min, hdr.bb.max);
 		vis.sphere.set(hdr.bs.c, hdr.bs.r);
 	}
@@ -65,7 +65,7 @@ void dxRender_Visual::Load(const char* N, IReader* data, u32)
 	}
 
 	// Shader
-	if (data->find_chunk(OGF_TEXTURE))
+	if (!(flags & VLOAD_CPU_MESH) && data->find_chunk(OGF_TEXTURE))
 	{
 		string256 fnT, fnS;
 		data->r_stringZ(fnT, sizeof(fnT));

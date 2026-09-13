@@ -181,6 +181,8 @@ PROTECT_API void CRenderDevice::Create()
 		psCurrentVidMode[1] = h;
 	}
 
+    if (!((strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw")) && strstr(Core.Params, "-coop_server_console")))
+    {
 	DWORD style;
 	if (g_screenmode == 0)
 	{
@@ -195,6 +197,12 @@ PROTECT_API void CRenderDevice::Create()
 
 	SetWindowLongPtr(m_hWnd, GWL_STYLE, style);
 	SetWindowPos(m_hWnd, HWND_TOP, monX, monY, w, h, SWP_FRAMECHANGED);
+    }
+    else
+    {
+        g_screenmode = 0;
+        Msg("[COOP_CONSOLE] KEEP_SERVICE_WINDOW_SIZE");
+    }
 
 	Statistic = xr_new<CStats>();
 #ifdef DEBUG
@@ -235,8 +243,11 @@ PROTECT_API void CRenderDevice::Create()
 	clientWidth = winRect.right;
 	clientHeight = winRect.bottom;
 	MapWindowPoints(m_hWnd, nullptr, reinterpret_cast<LPPOINT>(&winRect), 2);
-	ClipCursor(&winRect);
-	SetActiveWindow(m_hWnd);
+    if (!(strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw")))
+    {
+	    ClipCursor(&winRect);
+	    SetActiveWindow(m_hWnd);
+    }
 
 	string_path fname;
 	FS.update_path(fname, "$game_data$", "shaders.xr");

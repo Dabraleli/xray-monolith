@@ -3,6 +3,8 @@
 //////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+
+static bool coop_no_particle_graphics() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_particle_graphics")); }
 #include "WallmarksEngine.h"
 
 #include "../../xrEngine/xr_object.h"
@@ -63,7 +65,8 @@ CWallmarksEngine::CWallmarksEngine()
 {
 	static_pool.reserve(256);
 	marks.reserve(256);
-	hGeom.create(FVF::F_LIT, RCache.Vertex.Buffer(), NULL);
+	if (!coop_no_particle_graphics()) hGeom.create(FVF::F_LIT, RCache.Vertex.Buffer(), NULL);
+    else Msg("[COOP_SERVER] WALLMARK_GEOMETRY_SKIPPED");
 }
 
 CWallmarksEngine::~CWallmarksEngine()
@@ -386,6 +389,7 @@ ICF void FlushStream(ref_geom hGeom, ref_shader shader, u32& w_offset, FVF::LIT*
 
 void CWallmarksEngine::Render()
 {
+    if (coop_no_particle_graphics()) return;
 	//	if (marks.empty())			return;
 	// Projection and xform
 	float _43 = Device.mProject._43;

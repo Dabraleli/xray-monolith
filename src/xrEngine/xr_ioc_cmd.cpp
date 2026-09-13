@@ -407,6 +407,21 @@ public:
 		strlwr(op_server);
 		protect_Name_strlwr(op_client);
 
+        if (strstr(Core.Params, "-coop_bootstrap"))
+        {
+            char* single = strstr(op_server, "/single/");
+            if (single && strstr(single, "/alife/new"))
+            {
+                string4096 suffix;
+                xr_strcpy(suffix, single + xr_strlen("/single/"));
+                *single = 0;
+                xr_strcat(op_server, "/coop/");
+                xr_strcat(op_server, suffix);
+                if (!op_client[0]) xr_strcpy(op_client, "localhost");
+                Msg("[COOP_BOOTSTRAP] new-game command converted to coop");
+            }
+        }
+
 		if (!op_client[0] && strstr(op_server, "single"))
 			xr_strcpy(op_client, "localhost");
 
@@ -558,6 +573,7 @@ public:
 
 	virtual void Execute(LPCSTR args)
 	{
+        if (((strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw")) && strstr(Core.Params, "-coop_server_console"))) { g_screenmode = 0; ClipCursor(NULL); return; }
 		u32 prev_mode = g_screenmode;
 		CCC_Token::Execute(args);
 
@@ -1048,6 +1064,11 @@ void CCC_Register()
     CMD1(CCC_DbgMemCheck, "dbg_mem_check");
 #endif // DEBUG_MEMORY_MANAGER
 
+    // Physics runs on the secondary thread while the network spawns objects on
+    // the main one, so being able to move it back is worth having outside a
+    // debug build: create_physics_world() reads this flag when a level starts.
+    CMD3(CCC_Mask, "mt_physics", &psDeviceFlags, mtPhysics);
+
 #ifdef DEBUG
     CMD3(CCC_Mask, "mt_particles", &psDeviceFlags, mtParticles);
 
@@ -1055,7 +1076,6 @@ void CCC_Register()
     CMD1(CCC_DbgStrDump, "dbg_str_dump");
 
     CMD3(CCC_Mask, "mt_sound", &psDeviceFlags, mtSound);
-    CMD3(CCC_Mask, "mt_physics", &psDeviceFlags, mtPhysics);
     CMD3(CCC_Mask, "mt_network", &psDeviceFlags, mtNetwork);
 
     // Events

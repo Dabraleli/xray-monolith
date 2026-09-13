@@ -1,4 +1,7 @@
 #include "stdafx.h"
+
+// Only the isolated coop probe omits weather rendering resources.
+static bool coop_no_weather_graphics() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_weather_graphics")); }
 #include "dxRainRender.h"
 
 #include "../../xrEngine/Rain.h"
@@ -23,8 +26,9 @@ const float particles_time = .3f;
 
 int current_items;
 
-dxRainRender::dxRainRender()
+dxRainRender::dxRainRender() : DM_Drop(nullptr)
 {
+    if (coop_no_weather_graphics()) { current_items = 0; Msg("[COOP_SERVER] RAIN_GRAPHICS_SKIPPED mesh=0 shaders=0"); return; }
 	current_items = 0;
 
 	IReader* F = FS.r_open("$game_meshes$", "dm\\rain.dm");
@@ -47,6 +51,7 @@ dxRainRender::dxRainRender()
 
 dxRainRender::~dxRainRender()
 {
+    if (coop_no_weather_graphics()) { return; }
 	::RImplementation.model_Delete(DM_Drop);
 }
 
@@ -59,6 +64,7 @@ void dxRainRender::Copy(IRainRender& _in)
 
 void dxRainRender::Render(CEffect_Rain& owner)
 {
+    if (coop_no_weather_graphics()) { return; }
 	float factor = g_pGamePersistent->Environment().CurrentEnv->rain_density;
 	if (factor < EPS_L) return;
 
@@ -336,5 +342,6 @@ void dxRainRender::Render(CEffect_Rain& owner)
 
 const Fsphere& dxRainRender::GetDropBounds() const
 {
+	R_ASSERT2(DM_Drop, "Rain splash bounds requested without a visual drop model");
 	return DM_Drop->bv_sphere;
 }

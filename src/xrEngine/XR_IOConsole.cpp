@@ -669,6 +669,7 @@ void CConsole::ExecuteCommand(LPCSTR cmd_str, bool record_cmd)
 
 void CConsole::Show()
 {
+    if ((strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_console"))) return; // GDI console uses native input and its own refresh timer
 	//SECUROM_MARKER_HIGH_SECURITY_ON(11)
 
 	if (bVisible)

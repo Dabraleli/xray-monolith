@@ -23,6 +23,17 @@ void IGame_ObjectPool::prefetch()
 	string256 section;
 	// prefetch objects
 	strconcat(sizeof(section), section, "prefetch_objects_", g_pGamePersistent->m_game_params.m_game_type);
+
+	// Prefetching is an optimisation, not a requirement, and a singleplayer-only
+	// content set only ships prefetch_objects_single. Skip rather than abort so
+	// the other game types can start at all.
+	if (!pSettings->section_exist(section))
+	{
+		Msg("~ no [%s] section, skipping object prefetch", section);
+		::Render->model_Logging(TRUE);
+		return;
+	}
+
 	CInifile::Sect const& sect = pSettings->r_section(section);
 	for (CInifile::SectCIt I = sect.Data.begin(); I != sect.Data.end(); I++)
 	{

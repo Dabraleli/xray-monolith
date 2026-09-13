@@ -98,10 +98,13 @@ SPass* CResourceManager::_CreatePass(const SPass& proto)
 	return v_passes.back();
 }
 
+void coop_report_held_pass(const xr_vector<ShaderElement*>& elements, const SPass* pass); // ResourceManager.cpp
+
 void CResourceManager::_DeletePass(const SPass* P)
 {
-	if (0 == (P->dwFlags & xr_resource_flagged::RF_REGISTERED)) return;
 	xrCriticalSectionGuard guard(creationGuard);
+	coop_report_held_pass(v_elements, P);
+	if (0 == (P->dwFlags & xr_resource_flagged::RF_REGISTERED)) return;
 	if (reclaim(v_passes, P)) return;
 	Msg("! ERROR: Failed to find compiled pass");
 }

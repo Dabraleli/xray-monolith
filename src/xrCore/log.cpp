@@ -28,6 +28,15 @@ static xrCriticalSection logCS;
 xr_vector<xr_string> LogFile;
 static LogCallback LogCB = 0;
 
+u32 CopyLogTail(xr_vector<xr_string>& out, u32 limit)
+{
+    logCS.Enter();
+    u32 count = u32(LogFile.size());
+    out.assign(LogFile.begin() + (count > limit ? count - limit : 0), LogFile.end());
+    logCS.Leave();
+    return count;
+}
+
 void FlushLog()
 {
 	PROF_EVENT();

@@ -1,4 +1,7 @@
 #include "stdafx.h"
+
+// Only the isolated coop probe omits weather rendering resources.
+static bool coop_no_weather_graphics() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_weather_graphics")); }
 #include "dxLensFlareRender.h"
 #include "../../xrEngine/xr_efflensflare.h"
 #include "../../xrEngine/iGame_persistent.h"
@@ -13,6 +16,7 @@ void dxFlareRender::Copy(IFlareRender& _in)
 
 void dxFlareRender::CreateShader(LPCSTR sh_name, LPCSTR tex_name)
 {
+    if (coop_no_weather_graphics()) { return; }
 	if (tex_name && tex_name[0])
 		hShader.create(sh_name, tex_name);
 }
@@ -29,6 +33,7 @@ void dxLensFlareRender::Copy(ILensFlareRender& _in)
 
 void dxLensFlareRender::Render(CLensFlare& owner, BOOL bSun, BOOL bFlares, BOOL bGradient)
 {
+    if (coop_no_weather_graphics()) { return; }
 	Fcolor dwLight;
 	Fcolor color;
 	Fvector vec, vecSx, vecSy;
@@ -145,6 +150,7 @@ void dxLensFlareRender::Render(CLensFlare& owner, BOOL bSun, BOOL bFlares, BOOL 
 
 void dxLensFlareRender::OnDeviceCreate()
 {
+    if (coop_no_weather_graphics()) { return; }
 	hGeom.create(FVF::F_LIT, RCache.Vertex.Buffer(), RCache.QuadIB);
 }
 
