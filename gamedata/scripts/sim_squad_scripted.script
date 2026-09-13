@@ -226,7 +226,7 @@ function sim_squad_scripted:update()
 
 	local sim = alife()
 	local se_actor = sim:actor()
-	self.dist_to_actor = coop_spatial.distance(self.position, self.m_game_vertex_id, se_actor.position)
+	self.dist_to_actor = self.position:distance_to(se_actor.position)
 
 	self:check_invulnerability()
 
@@ -617,7 +617,7 @@ function sim_squad_scripted:add_squad_member(spawn_section, spawn_position, lv_i
 	--self.sound_manager:register_npc(obj.id)
 
 	local actor = sim:actor()
-	if (simulation_objects.is_on_the_same_level(obj, actor) and coop_spatial.distance(spawn_position, gv_id, actor.position) <= sim:switch_distance()) then
+	if (simulation_objects.is_on_the_same_level(obj, actor) and spawn_position:distance_to_sqr(actor.position) <= sim:switch_distance()^2) then
 		db.spawned_vertex_by_id[obj.id] = lv_id
 	end
 	-- Alundaio
@@ -1079,7 +1079,7 @@ function sim_squad_scripted:check_online_status()
 		if (b == nil and db.actor) then
 			if (db.actor:has_info("enforce_online_exclusion")) then -- For story needs
 				if (self.online) then -- exclude from coming online except if already online or storied
-					if (self.was_forced_offline or coop_spatial.distance(self.position, self.m_game_vertex_id, db.actor:position()) >= 2500) then
+					if (self.was_forced_offline or self.position:distance_to(db.actor:position()) >= 2500) then
 						self.was_forced_offline = false
 						b = false -- switch online to offline
 					end
@@ -1090,7 +1090,7 @@ function sim_squad_scripted:check_online_status()
 				if not (self.online) then
 					local dist = excl_dist
 					if (dist > 0 and not db.actor:has_info("actor_is_sleeping")) then 
-						if (coop_spatial.distance(self.position, self.m_game_vertex_id, db.actor:position()) <= dist) then
+						if (self.position:distance_to(db.actor:position()) <= dist) then
 							b = false -- force offline for online exclusion
 						end
 					end

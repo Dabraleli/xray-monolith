@@ -260,11 +260,45 @@ local function send_world_callback(name, ...)
     if axr_main[name] then axr_main[name](...) end
 end
 
+-- Dynamic anomalies (bind_anomaly_field): the toggle pass is a time event in the world's context that
+-- compares every anomaly with one actor position (db.actor:position() = the player nearest to the
+-- world actor here). Each anomaly is judged against the player nearest to it instead; the module's
+-- private tables are read through the original's upvalues at call time (they are reassigned on load).
+local function install_dynamic_anomalies()
+    local module = bind_anomaly_field
+    if not (module and module.dyn_anomalies_update and module.add_marker) then return end
+    local original = module.dyn_anomalies_update
+    local function upvalue(name)
+        for i = 1, 40 do
+            local n, v = debug.getupvalue(original, i)
+            if not n then return nil end
+            if n == name then return v end
+        end
+    end
+    module.dyn_anomalies_update = function()
+        local anomalies, current, safe = upvalue('dyn_anomalies'), upvalue('current_level'), upvalue('dyn_ano_safe_dist')
+        if not (anomalies and current and safe) then return original() end
+        if not anomalies[current] then return true end
+        local legacy = db.actor and db.actor:position()
+        for id, state in pairs(anomalies[current]) do
+            local obj = level.object_by_id(id)
+            if obj and coop_spatial.distance(obj:position(), obj:game_vertex_id(), legacy or obj:position()) > safe then
+                obj:enable_anomaly()
+                if state == false then obj:disable_anomaly() end
+                module.add_marker(current, obj:section(), id, state)
+            end
+        end
+        return true
+    end
+    printf('[COOP_SERVER] DYNAMIC_ANOMALIES per-player distance')
+end
+
 function install_world_callbacks() -- module function: called from reinit above
     if original_send_callback then return end
     original_send_callback = _G.SendScriptCallback
     _G.SendScriptCallback = send_world_callback
     install_emissions()
+    install_dynamic_anomalies()
     -- Meteorites and distant thunder are particles and sounds around the actor: presentation.
     level_weathers.WeatherManager.meteorites = function() end
     level_weathers.WeatherManager.distant_storm = function() end
@@ -1606,6 +1640,29 @@ end
 -- bind_stalker.actor_binder:update for the world: the first update (on_game_load has run, ALife
 -- spawned everything) and the per-tick services. The player-side parts (dialog weapon lowering,
 -- outfit transitions, psy-antenna screen effects) belong to the clients.
+-- -coop_anchor_probe: the actor position Lua sees in the world's context (the player nearest to the
+-- world actor) and, per online squad, dist_to_actor as sim_squad_scripted:update computed it against
+-- the activation distance of that squad (the same nearest-player distance the engine uses).
+local anchor_probe = nil
+if string.find(command_line(), '-coop_anchor_probe', 1, true) then
+    anchor_probe = function()
+        local sim = alife()
+        local world = sim and sim:actor()
+        if not world then return end
+        local function pos(v) return v and string.format('%.1f,%.1f,%.1f', v.x, v.y, v.z) or 'nil' end
+        printf('[COOP_ANCHOR] world_actor position=%s db_actor=%s', pos(world.position), pos(db.actor and db.actor:position()))
+        local n = 0
+        for id in pairs(SIMBOARD.squads or {}) do
+            local squad = sim:object(id)
+            if squad and squad.online and squad.dist_to_actor and n < 6 then
+                n = n + 1
+                printf('[COOP_ANCHOR] squad=%s dist_to_actor=%s activation=%s', tostring(squad:name()),
+                    string.format('%.1f', squad.dist_to_actor), string.format('%.1f', sim:activation_distance(squad.position, squad.m_game_vertex_id)))
+            end
+        end
+    end
+end
+
 local function update_world(self, delta)
     if self.first_update_pending then
         self.first_update_pending = nil
@@ -1633,6 +1690,10 @@ local function update_world(self, delta)
         update_companions()
     end
     update_stats(self)
+    if anchor_probe and now >= (self.next_anchor_probe or 0) then
+        self.next_anchor_probe = now + 5000
+        anchor_probe()
+    end
     if probe_enabled and now >= (self.next_unarmed_scan or 0) then
         self.next_unarmed_scan = now + 30000
         unarmed_probe()
