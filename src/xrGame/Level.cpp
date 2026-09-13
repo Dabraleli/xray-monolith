@@ -1060,7 +1060,11 @@ void CLevel::OnFrame()
 	}
 	Fvector temp_vector;
 	m_feel_deny.feel_touch_update(temp_vector, 0.f);
-	if (GameID() != eGameIDSingle && !IsGameTypeCoop()) // coop as SP: crows fly
+	// Coop keeps the MP rule: every object gets its UpdateCL each frame. The "crow" mode updates
+	// out-of-view objects only on their schedule, and the headless server has no view at all: NPC
+	// animation clocks then advance 66 ms per scheduled update (CKinematicsAnimated::UpdateTracks
+	// caps the step), the exported phases crawl and the replicas keep re-synchronising their legs.
+	if (GameID() != eGameIDSingle)
 		psDeviceFlags.set(rsDisableObjectsAsCrows, true);
 	else
 		psDeviceFlags.set(rsDisableObjectsAsCrows, false);
