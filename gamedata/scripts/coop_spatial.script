@@ -1,0 +1,9 @@
+-- Explicit spatial query; never changes db.actor or sim:actor().
+-- No connected player on this level returns a very large distance.
+function distance(position, game_vertex_id, legacy_position)
+    local sim = alife()
+    if sim and sim:uses_player_anchors() then
+        return sim:activation_distance(position, game_vertex_id)
+    end
+    return position:distance_to(legacy_position)
+end

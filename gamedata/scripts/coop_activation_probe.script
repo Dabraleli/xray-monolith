@@ -1,0 +1,74 @@
+-- Test-only observer: no replacement of positions, ownership or distance results.
+local bodies, points = {}, {}
+local last_report, empty_checked, both_checked, one_checked, end_checked = 0, false, false, false, false
+
+function body_spawn(id)
+    bodies[id] = true
+end
+
+function update()
+    local now = time_global()
+    if now - last_report < 1000 then return end
+    last_report = now
+    local sim = alife()
+    local world = sim:actor()
+    if not empty_checked and next(bodies) == nil then
+        assert(sim:activation_distance(world.position, world.m_game_vertex_id) > 1e20, 'world was used as spatial anchor')
+        empty_checked = true
+        printf('[COOP_SPATIAL_TEST] EMPTY_OK world=%s', tostring(world.id))
+        printf('[COOP_SPATIAL_TEST] SETTINGS switch=%s factor=%s normal=%s auto=%s', tostring(sim:switch_distance()), tostring(ini_sys:r_float_ex('alife','switch_factor')), tostring(ini_sys:r_float_ex('alife','auto_switch_distance_normal')), tostring(ini_sys:r_bool_ex('alife','auto_switch')))
+    end
+    for id in pairs(bodies) do
+        local body = sim:object(id)
+        if body and not points[id] and sim:activation_distance(body.position, body.m_game_vertex_id) < 2 then
+            local pos = vector():set(body.position)
+            local item = sim:create('af_medusa', pos, body.m_level_vertex_id, body.m_game_vertex_id)
+            assert(item, 'spatial test artefact not created')
+            points[id] = {position=pos, gvid=body.m_game_vertex_id, item=item.id}
+            printf('[COOP_SPATIAL_TEST] ITEM body=%s item=%s', tostring(id), tostring(item.id))
+        end
+    end
+    local count, near, online, near_online, far_offline = 0, 0, 0, 0, 0
+    for id,p in pairs(points) do
+        count = count + 1
+        local distance = sim:activation_distance(p.position, p.gvid)
+        local item = sim:object(p.item)
+        assert(item, 'test artefact disappeared from ALife')
+        local is_near = distance < 20
+        if math.floor(now/1000) % 5 == 0 then
+            printf('[COOP_SPATIAL_TEST] STATE body=%s item=%s distance=%s online=%s parent=%s can_offline=%s', tostring(id), tostring(p.item), tostring(distance), tostring(item.online), tostring(item.parent_id), tostring(item:can_switch_offline()))
+            printf('[COOP_SPATIAL_TEST] ITEM_DISTANCE id=%s actual=%s switch=%s', tostring(item.id), tostring(sim:activation_distance(item.position, item.m_game_vertex_id)), tostring(sim:switch_distance()))
+        end
+        if is_near then near=near+1 end
+        if item.online then online=online+1 end
+        if is_near and item.online then near_online=near_online+1 end
+        if not is_near and not item.online then far_offline=far_offline+1 end
+        assert(math.abs(coop_spatial.distance(p.position, p.gvid, world.position)-distance) < 0.01, 'Lua/C++ distance mismatch')
+    end
+    if count == 2 and near == 2 and online == 2 and not both_checked then
+        local first
+        for id,p in pairs(points) do
+            if first then
+                local offline_radius = sim:switch_distance() * (1 + ini_sys:r_float('alife','switch_factor'))
+                assert(first:distance_to(p.position)>offline_radius+50, 'test players inside each others offline radius')
+                printf('[COOP_SPATIAL_TEST] SEPARATION meters=%s offline_radius=%s', tostring(first:distance_to(p.position)), tostring(offline_radius))
+            else first=p.position end
+        end
+        local world_level = game_graph():vertex(world.m_game_vertex_id):level_id()
+        local other_vertex = 0
+        while game_graph():valid_vertex_id(other_vertex) and game_graph():vertex(other_vertex):level_id() == world_level do other_vertex=other_vertex+1 end
+        assert(game_graph():valid_vertex_id(other_vertex), 'no other level for query test')
+        assert(sim:activation_distance(first, other_vertex)>1e20, 'other level counted as nearby')
+        both_checked=true
+        printf('[COOP_SPATIAL_TEST] TWO_AREAS_OK items=2 cross_level=excluded')
+    end
+    if both_checked and count == 2 and near == 1 and near_online == 1 and far_offline == 1 and not one_checked then
+        one_checked=true
+        printf('[COOP_SPATIAL_TEST] ONE_LEFT_OK remaining_online=1 departed_offline=1')
+    end
+    if one_checked and count == 2 and near == 0 and online == 0 and not end_checked then
+        end_checked=true
+        assert(db.actor:id()==world.id, 'world identity changed')
+        printf('[COOP_SPATIAL_TEST] ALL_LEFT_OK items_offline=2 world_preserved=1')
+    end
+end

@@ -1,0 +1,297 @@
+-- Coop join screen. The engine calls install() before the main menu is built on a coop client
+-- started without -start (CMainMenu::ReloadUI): the main menu gets a "Network game" entry
+-- (ui_coop_mm.xml through CUIMMShniaga:SetPage) that opens the join screen - server address, the
+-- persistent character name, and the SP character creation (ui_mm_faction_select: faction, icon,
+-- loadout, money) - whose result rides on the connection ("coop=" client option,
+-- game_sv_Coop::SpawnBody). The identity lives in axr_options.ltx [coop] on this machine.
+-- Single-player entries stay as they are.
+local installed = false
+
+local texts = {
+    eng = { title = 'Cooperative game', address = 'Server', name = 'Character name', character = 'Character',
+            character_none = 'not created yet - press Character (faction, look, gear)',
+            character_fmt = 'faction: %s, gear: %d items, money: %d',
+            btn_character = 'Character', btn_connect = 'Connect', btn_back = 'Back',
+            need_name = 'Enter a character name', need_character = 'Create the character first',
+            connecting = 'Connecting to %s...' },
+    rus = { title = 'Кооперативная игра', address = 'Сервер', name = 'Имя персонажа', character = 'Персонаж',
+            character_none = 'ещё не создан - нажмите "Персонаж" (фракция, внешность, снаряжение)',
+            character_fmt = 'фракция: %s, снаряжение: %d предм., деньги: %d',
+            btn_character = 'Персонаж', btn_connect = 'Подключиться', btn_back = 'Назад',
+            need_name = 'Введите имя персонажа', need_character = 'Сначала создайте персонажа',
+            connecting = 'Подключение к %s...' },
+}
+
+local function T(key)
+    local lang = 'eng'
+    local ok, ini = pcall(ini_file, 'localization.ltx')
+    if ok and ini and ini:r_string_ex('string_table', 'language') == 'rus' then lang = 'rus' end
+    return (texts[lang] or texts.eng)[key] or key
+end
+
+-- ---- identity ([coop] in axr_options.ltx) ----------------------------------------------------------
+local function config()
+    return axr_main and axr_main.config
+end
+
+function load_identity()
+    local cfg = config()
+    local id = { server = '127.0.0.1:1235', name = '', faction = '', icon = '', loadout = '', money = 0 }
+    if not cfg then return id end
+    id.server = cfg:r_value('coop', 'server', 0, id.server)
+    id.name = cfg:r_value('coop', 'name', 0, '')
+    id.faction = cfg:r_value('coop', 'faction', 0, '')
+    id.icon = cfg:r_value('coop', 'icon', 0, '')
+    id.loadout = cfg:r_value('coop', 'loadout', 0, '')
+    id.money = tonumber(cfg:r_value('coop', 'money', 0, 0)) or 0
+    return id
+end
+
+function save_identity(id)
+    local cfg = config()
+    if not cfg then return end
+    cfg:w_value('coop', 'server', id.server)
+    cfg:w_value('coop', 'name', id.name)
+    cfg:w_value('coop', 'faction', id.faction)
+    cfg:w_value('coop', 'icon', id.icon)
+    cfg:w_value('coop', 'loadout', id.loadout)
+    cfg:w_value('coop', 'money', tostring(id.money or 0))
+    cfg:save()
+end
+
+-- The SP loadout is sections only; its ammo comes with the weapons (ui_mm_faction_select
+-- on_game_load): the same rule here, as boxes ("section*count" entries for the server).
+local function loadout_with_ammo(sections)
+    local ini_itm = ini_file('items\\settings\\new_game_loadouts.ltx')
+    local counts, order = {}, {}
+    local function add(sec, n)
+        if not counts[sec] then counts[sec] = 0; table.insert(order, sec) end
+        counts[sec] = counts[sec] + n
+    end
+    local ammo_to_spawn = {}
+    for _, sec in ipairs(sections) do
+        if ini_sys:section_exist(sec) then
+            add(sec, 1)
+            if ini_sys:r_string_ex(sec, 'ammo_class') then
+                local slot = ini_sys:r_float_ex(sec, 'slot')
+                local ani_slot = ini_sys:r_float_ex(sec, 'animation_slot')
+                if slot and (((slot == 0) and (ani_slot == 1)) or (slot == 1) or (slot == 2)) then
+                    local ammo_tbl = str_explode(ini_sys:r_string_ex(sec, 'ammo_class'), ',')
+                    local sec_ammo = ammo_tbl[1]
+                    local ammo_type = ini_itm:r_string_ex('ammo_type_per_wpn', sec)
+                    if ammo_type and ini_sys:section_exist(ammo_type) then sec_ammo = ammo_type end
+                    local box_size = ini_sys:r_float_ex(sec_ammo, 'box_size') or 50
+                    local count = ini_itm:r_float_ex('ammo_count', sec_ammo)
+                    if not count then count = (box_size < 30) and (2 * box_size) or box_size end
+                    ammo_to_spawn[sec_ammo] = (ammo_to_spawn[sec_ammo] or 0) + count
+                end
+            end
+        end
+    end
+    for sec_ammo, count in pairs(ammo_to_spawn) do
+        local box_size = ini_sys:r_float_ex(sec_ammo, 'box_size') or 50
+        add(sec_ammo, math.max(1, math.ceil(count / box_size)))
+    end
+    local parts = {}
+    for _, sec in ipairs(order) do
+        table.insert(parts, counts[sec] > 1 and (sec .. '*' .. counts[sec]) or sec)
+    end
+    return table.concat(parts, ',')
+end
+
+-- ---- join screen -------------------------------------------------------------------------------------
+class 'UICoopJoin' (CUIScriptWnd)
+
+function UICoopJoin:__init(owner) super()
+    self.owner = owner
+    self.identity = load_identity()
+    self:InitControls()
+    self:InitCallBacks()
+end
+
+function UICoopJoin:__finalize()
+end
+
+function UICoopJoin:InitControls()
+    self:SetWndRect(Frect():set(0, 0, 1024, 768))
+    self:SetAutoDelete(true)
+    local xml = CScriptXmlInit()
+    xml:ParseFile('ui_coop_join.xml')
+    xml:InitStatic('background', self)
+    self.dialog = xml:InitStatic('main_dialog:frame', self)
+    xml:InitStatic('main_dialog:cap_title', self.dialog):TextControl():SetText(T('title'))
+    xml:InitStatic('main_dialog:cap_address', self.dialog):TextControl():SetText(T('address'))
+    self.input_address = xml:InitEditBox('main_dialog:input_address', self.dialog)
+    self:Register(self.input_address, 'input_address')
+    self.input_address:SetText(self.identity.server)
+    xml:InitStatic('main_dialog:cap_name', self.dialog):TextControl():SetText(T('name'))
+    self.input_name = xml:InitEditBox('main_dialog:input_name', self.dialog)
+    self:Register(self.input_name, 'input_name')
+    self.input_name:SetText(self.identity.name)
+    xml:InitStatic('main_dialog:cap_character', self.dialog):TextControl():SetText(T('character'))
+    self.text_character = xml:InitTextWnd('main_dialog:text_character', self.dialog)
+    self.text_status = xml:InitTextWnd('main_dialog:text_status', self.dialog)
+    local btn = xml:Init3tButton('main_dialog:btn_character', self.dialog)
+    btn:TextControl():SetText(T('btn_character'))
+    self:Register(btn, 'btn_character')
+    btn = xml:Init3tButton('main_dialog:btn_connect', self.dialog)
+    btn:TextControl():SetText(T('btn_connect'))
+    self:Register(btn, 'btn_connect')
+    btn = xml:Init3tButton('main_dialog:btn_back', self.dialog)
+    btn:TextControl():SetText(T('btn_back'))
+    self:Register(btn, 'btn_back')
+    self:UpdateSummary()
+end
+
+function UICoopJoin:InitCallBacks()
+    self:AddCallback('btn_character', ui_events.BUTTON_CLICKED, self.OnCharacter, self)
+    self:AddCallback('btn_connect', ui_events.BUTTON_CLICKED, self.OnConnect, self)
+    self:AddCallback('btn_back', ui_events.BUTTON_CLICKED, self.OnBack, self)
+end
+
+function UICoopJoin:UpdateSummary()
+    local id = self.identity
+    if id.faction == '' or id.loadout == '' then
+        self.text_character:SetText(T('character_none'))
+    else
+        local items = 0
+        for _ in string.gmatch(id.loadout, '[^,]+') do items = items + 1 end
+        self.text_character:SetText(string.format(T('character_fmt'), game.translate_string('st_' .. id.faction), items, id.money))
+    end
+    self.text_status:SetText('')
+end
+
+-- The SP character creation: its "Start" calls owner:StartGame() - here the choices are kept
+-- instead of a new single-player game.
+function UICoopJoin:OnCharacter()
+    self.identity.name = self.input_name:GetText()
+    self.identity.server = self.input_address:GetText()
+    if not self.new_game_dlg then
+        self.new_game_dlg = ui_mm_faction_select.UINewGame(self)
+    end
+    if self.identity.name ~= '' and self.new_game_dlg.character_name then
+        self.new_game_dlg.character_name:SetText(self.identity.name)
+    end
+    self.new_game_dlg:ShowDialog(true)
+    self:HideDialog()
+    self:Show(false)
+end
+
+function UICoopJoin:StartGame() -- UINewGame:OnStartGame after it wrote [character_creation]
+    local cfg = config()
+    local id = self.identity
+    if cfg then
+        local name = cfg:r_value('character_creation', 'new_game_character_name', 3) or ''
+        id.name = tostring(name) -- spaces as '_' (the SP way; the ini keeps no spaces)
+        id.faction = cfg:r_value('character_creation', 'new_game_faction', 3) or ''
+        id.icon = cfg:r_value('character_creation', 'new_game_icon', 3) or ''
+        local sections = str_explode(cfg:r_value('character_creation', 'new_game_loadout', 3) or '', ',')
+        id.loadout = loadout_with_ammo(sections)
+        id.money = tonumber(cfg:r_value('character_creation', 'new_game_money', 2)) or 0
+        -- not a single-player new game: nothing must wait in [character_creation]
+        for _, key in ipairs({ 'new_game_character_name', 'new_game_faction', 'new_game_icon', 'new_game_loadout',
+                               'new_game_money', 'new_game_map', 'new_game_difficulty', 'new_game_economy',
+                               'new_game_economy_treasure', 'new_game_hardcore_mode', 'new_game_hardcore_mode_lives',
+                               'new_game_hardcore_mode_regenerate', 'new_game_story_mode', 'new_game_azazel_mode',
+                               'new_game_survival_mode', 'new_game_campfire_mode', 'new_game_conditions_mode',
+                               'new_game_opened_routes', 'new_game_warfare', 'new_game_timer_mode' }) do
+            cfg:w_value('character_creation', key)
+        end
+    end
+    save_identity(id)
+    self.input_name:SetText(id.name)
+    printf('[COOP_CLIENT] MENU character name=%s faction=%s icon=%s items=%s money=%s', id.name, id.faction, id.icon,
+        tostring(#str_explode(id.loadout, ',')), tostring(id.money))
+    if self.new_game_dlg then
+        if self.new_game_dlg:IsShown() then self.new_game_dlg:HideDialog() end
+        self.new_game_dlg:Show(false)
+    end
+    self:ShowDialog(true)
+    self:Show(true)
+    self:UpdateSummary()
+end
+
+function UICoopJoin:OnConnect()
+    local id = self.identity
+    id.name = (self.input_name:GetText() or ''):gsub('^%s+', ''):gsub('%s+$', ''):gsub('%s+', '_')
+    id.server = (self.input_address:GetText() or ''):gsub('%s', '')
+    if id.name == '' then self.text_status:SetText(T('need_name')); return end
+    if id.faction == '' or id.loadout == '' then self.text_status:SetText(T('need_character')); return end
+    if id.server == '' then id.server = '127.0.0.1:1235' end
+    save_identity(id)
+    local host, port = string.match(id.server, '^([^:]+):?(%d*)$')
+    host = host or id.server
+    if not port or port == '' then port = '1235' end
+    local name = string.sub(id.name, 1, 32):gsub('[/=]', '_')
+    local profile = string.format('faction:%s;icon:%s;money:%d;loadout:%s', id.faction, id.icon, id.money or 0, id.loadout)
+    if #profile > 700 then
+        profile = string.sub(profile, 1, 700)
+        profile = profile:gsub(',[^,]*$', '') -- a whole entry
+    end
+    local command = string.format('start client(%s/port=%s/name=%s/coop=%s)', host, port, name, profile)
+    printf('[COOP_CLIENT] MENU connect: %s', command)
+    self.text_status:SetText(string.format(T('connecting'), id.server))
+    self:HideDialog()
+    self:Show(false)
+    if self.owner then
+        self.owner:HideDialog()
+        self.owner:Show(false)
+    end
+    exec_console_cmd(command)
+    exec_console_cmd('main_menu off')
+end
+
+function UICoopJoin:OnBack()
+    self.identity.name = self.input_name:GetText()
+    self.identity.server = self.input_address:GetText()
+    save_identity(self.identity)
+    self:HideDialog()
+    self:Show(false)
+    if self.owner then
+        self.owner:ShowDialog(true)
+        self.owner:Show(true)
+    end
+end
+
+function UICoopJoin:OnKeyboard(dik, keyboard_action)
+    if keyboard_action == ui_events.WINDOW_KEY_PRESSED and dik == DIK_keys.DIK_ESCAPE then
+        self:OnBack()
+        return true
+    end
+    return CUIScriptWnd.OnKeyboard(self, dik, keyboard_action)
+end
+
+-- ---- main menu hook ------------------------------------------------------------------------------
+function show(menu)
+    if not menu.coop_join then menu.coop_join = UICoopJoin(menu) end
+    menu.coop_join:ShowDialog(true)
+    menu.coop_join:Show(true)
+    menu:HideDialog()
+    menu:Show(false)
+end
+
+function install()
+    if installed then return end
+    installed = true
+    local mm = ui_main_menu and ui_main_menu.main_menu
+    if not mm then
+        printf('! [COOP_CLIENT] MENU ui_main_menu.main_menu is not available')
+        return
+    end
+    -- the "Network game" entry on the main list (not in the in-game menu), its click opens the join screen
+    local init_controls = mm.InitControls
+    mm.InitControls = function(self)
+        init_controls(self)
+        if self.shniaga and not level.present() then
+            self.shniaga:SetPage(CUIMMShniaga.epi_main, 'ui_coop_mm.xml', 'menu_main')
+            self.shniaga:ShowPage(CUIMMShniaga.epi_main)
+        end
+    end
+    mm.OnButton_coop = function(self) show(self) end
+    local init_callbacks = mm.InitCallBacks
+    mm.InitCallBacks = function(self)
+        init_callbacks(self)
+        self:AddCallback('btn_coop', ui_events.BUTTON_CLICKED, self.OnButton_coop, self)
+    end
+    printf('[COOP_CLIENT] MENU coop entry installed (Network game -> join)')
+end

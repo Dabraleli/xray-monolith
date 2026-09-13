@@ -1,0 +1,1316 @@
+-- Coop client: binder of the local body plus the Anomaly presentation layer for this player.
+-- World simulation, ALife and NPC binders remain on the server. Here db.actor is the own body and
+-- only the client-side modules run against it: HUD state/booster indicators (actor_status), item-use
+-- and weapon-switch animations with the health/bleeding/radiation screen effects (actor_effects),
+-- HUD messages (actor_menu), thirst and sleep deprivation (simulated here, state kept on the server
+-- between connections), and the per-player item-use rule (itms_manager.actor_on_item_before_use),
+-- which the engine asks through _G.CInventory__eat before the eat request leaves for the server.
+
+local layer_installed = false
+
+-- ---- The story book and the item verbs -----------------------------------------------------
+-- The server keeps one book of info portions (the world actor's, shared by every body); this
+-- client mirrors it (infos|... on join, then every GE_INFO_TRANSFER to an actor through
+-- CLevel::cl_Process_Event -> on_world_info), so has_alife_info answers here as in SP.
+-- The world itself is the server's: what Anomaly's item scripts create, release or change on
+-- this client (workshop, repair kits, consumables, the mechanic window) goes to the server as
+-- item|<verb>|... (coop_server_actor.item_verb); set_condition, set_remaining_uses,
+-- set_ammo_elapsed, unload_magazine, give_money, give_info_portion and the repair button send
+-- theirs from the engine (game_cl_Coop::ItemVerb).
+local world_infos = {}
+
+function on_world_info(info_id, add) -- called by the engine (CLevel::cl_Process_Event)
+    world_infos[info_id] = add and true or nil
+end
+
+local function apply_world_infos(text)
+    for _, info_id in ipairs(text and text ~= '' and str_explode(text, ',') or {}) do
+        world_infos[info_id] = true
+    end
+end
+
+function on_upgrade_window(npc_id) -- called by the engine (CUITalkWnd::SwitchToUpgrade)
+    -- the mechanic of the inventory_upgrades functors (get_speaker): the NPC binder's use_callback
+    -- sets it in SP; here the dialog is the server's
+    SetEvent('used_npc_id', npc_id)
+end
+
+-- The workbench: this body used a vise (bind_awr on the server) - the workshop window with the
+-- mechanic's tiers opens here on the replicas; repairs, crafts and upgrades leave as item verbs.
+local function apply_workshop(mechanic, flags_text)
+    if not ui_workshop then return end
+    local flags = {}
+    for i, v in ipairs(str_explode(flags_text or '', ',')) do flags[i] = v == '1' end
+    if actor_effects and actor_effects.play_item_fx then actor_effects.play_item_fx('workshop_dummy') end
+    local ui = ui_workshop.get_workshop_ui(get_hud(), mechanic ~= '' and mechanic or nil, flags)
+    if ui then ui:ShowDialog(true) end
+end
+
+-- The dialog line "I want to upgrade my gear" ran on the server for this body (npc:start_upgrade
+-- -> game_sv_Coop::UpgradeStartFor): the mechanic window opens here on the replicas, the engine's
+-- own (CUIGameSP::StartUpgrade), as it would in SP from the same line.
+local function apply_upgrade_window(npc_id)
+    local npc = npc_id and level.object_by_id(npc_id)
+    if not (npc and db.actor) then return end
+    on_upgrade_window(npc_id)
+    hide_hud_inventory()
+    npc:start_upgrade(db.actor)
+end
+
+local function item_verb(text)
+    level.coop_send_lua(0, text)
+end
+
+local function item_props_text(t)
+    if type(t) ~= 'table' then return '' end
+    local parts = {}
+    for _, key in ipairs({ 'cond', 'uses', 'ammo' }) do
+        if type(t[key]) == 'number' then table.insert(parts, key .. '=' .. tostring(t[key])) end
+    end
+    if type(t.cond_r) == 'table' and #t.cond_r >= 2 then
+        table.insert(parts, 'cond=' .. tostring(math.random(t.cond_r[1] * 100, t.cond_r[2] * 100) / 100))
+    end
+    return table.concat(parts, ';')
+end
+
+-- Anomaly helpers that index alife(). On the coop client alife() is nil: they read the mirrors, send
+-- the verbs or do nothing. Installed only when alife() is nil, so nothing changes where ALife exists.
+local function install_client_globals()
+    if alife() ~= nil then return end
+    -- SP sets this in warfare.on_game_start (server only); an unset global auto-loads the script
+    -- of that name as the module - a truthy WARFARE, and the contacts tab took the warfare page.
+    _G.WARFARE = false
+    _G.has_alife_info = function(info_id)
+        if world_infos[info_id] then return true end
+        return db.actor ~= nil and db.actor:has_info(info_id) or false
+    end
+    _G.alife_object = function(id) return nil end
+    -- get_object_by_id (modded exes, _g_patches) looks in the registry of callbacks_gameobject first; that
+    -- module is not loaded here (no NPC binders), the fallback level.object_by_id is what the client has
+    _G.gameobjects_registry = _G.gameobjects_registry or {}
+    -- alife_create(section, position, level vertex, game vertex [, parent id]) - the Anomaly helper;
+    -- with a parent the item goes into that owner (this body only), else into the world here.
+    _G.alife_create = function(section, pos, lvid, gvid, parent_id)
+        if type(pos) == 'userdata' and pos.id and type(pos.id) == 'function' then -- alife_create(sec, obj, with_id)
+            local obj, with_id = pos, lvid
+            if with_id and obj:id() ~= AC_ID then
+                printf('! [COOP_CLIENT] alife_create inside another owner is the server\'s: %s', section)
+            elseif with_id then
+                item_verb('item|create|' .. section .. '|body')
+            else
+                local p = obj:position()
+                item_verb(string.format('item|create|%s|world:%f,%f,%f,%d,%d', section, p.x, p.y, p.z, obj:level_vertex_id(), obj:game_vertex_id()))
+            end
+        elseif parent_id and parent_id ~= 65535 then
+            if parent_id == AC_ID then item_verb('item|create|' .. section .. '|body') end
+        elseif pos then
+            item_verb(string.format('item|create|%s|world:%f,%f,%f,%d,%d', section, pos.x, pos.y, pos.z,
+                tonumber(lvid) or db.actor:level_vertex_id(), tonumber(gvid) or db.actor:game_vertex_id()))
+        end
+        return nil
+    end
+    _G.alife_create_item = function(section, obj, t)
+        if not section then return nil end
+        local props = item_props_text(t)
+        if type(obj) == 'table' and obj.pos then
+            item_verb(string.format('item|create|%s|world:%f,%f,%f,%d,%d|%s', section, obj.pos.x, obj.pos.y, obj.pos.z,
+                tonumber(obj.lvid) or db.actor:level_vertex_id(), tonumber(obj.gvid) or db.actor:game_vertex_id(), props))
+        elseif obj == nil or (type(obj.id) == 'function' and obj:id() == AC_ID) or (type(obj.id) == 'number' and obj.id == AC_ID) then
+            item_verb('item|create|' .. section .. '|body|' .. props)
+        else
+            printf('! [COOP_CLIENT] alife_create_item for another owner is the server\'s: %s', section)
+        end
+        return nil
+    end
+    _G.alife_release = function(obj)
+        local id = obj and (type(obj.id) == 'function' and obj:id() or type(obj.id) == 'number' and obj.id)
+        if id then item_verb('item|release|' .. id) end
+    end
+    _G.alife_release_id = function(id)
+        if id then item_verb('item|release|' .. id) end
+    end
+    -- The PDA's Lua tabs: contacts from the stalker replicas here (db.OnlineStalkers), relations
+    -- and the ranking from the server's mirrors (install_pda below), asked for when the tab opens.
+    -- Tasks, map and logs are engine windows fed by the server (M_COOP_PDA).
+    if pda and pda.set_active_subdialog then
+        local original = pda.set_active_subdialog
+        pda.set_active_subdialog = function(section)
+            if section == 'eptRanking' then
+                level.coop_send_lua(0, 'pda|rankings')
+            elseif section == 'eptRelations' then
+                level.coop_send_lua(0, 'pda|relations')
+            end
+            return original(section)
+        end
+    end
+    -- Opening the PDA sends "ui_pda", whose listener ranks every server stalker through alife().
+    if pda and pda.calculate_rankings then pda.calculate_rankings = function() end end
+    -- Game statistics and the rank they raise are the server's (shared standing); the presentation
+    -- modules that count things here (surge_manager.end_surge: "emissions") must not touch the
+    -- actor's rank on a replica (change_character_rank crashed both clients at the end of 112).
+    if game_statistics then
+        game_statistics.increment_statistic = function() end
+        game_statistics.increment_rank = function() end
+    end
+end
+
+-- Per-player state that must outlive the connection: the thirst and sleep modules keep it in
+-- module locals and expose it only through their save_state/load_state (the SP save hooks).
+-- The client serialises that table as Lua source and hands it to the server
+-- (level.coop_player_store); the server keeps it under the connection name and sends it back
+-- on the next join (game_cl_Coop -> on_player_store). Health penalties of these modules reach
+-- the server body through db.actor:change_health (GE_COOP_HEALTH_CHANGE).
+local STORE_MODULES = { "actor_status_thirst", "actor_status_sleep" }
+local store_interval = 15000 -- ms
+local store_next = 0
+local pending_store = nil
+
+local function encode_value(v, out)
+    local t = type(v)
+    if t == "table" then
+        out[#out + 1] = "{"
+        for k, val in pairs(v) do
+            local kt = type(k)
+            if (kt == "string" or kt == "number") and val ~= nil then
+                out[#out + 1] = "["
+                encode_value(k, out)
+                out[#out + 1] = "]="
+                encode_value(val, out)
+                out[#out + 1] = ","
+            end
+        end
+        out[#out + 1] = "}"
+    elseif t == "string" then
+        out[#out + 1] = string.format("%q", v)
+    elseif t == "number" then
+        out[#out + 1] = string.format("%.17g", v)
+    elseif t == "boolean" then
+        out[#out + 1] = tostring(v)
+    else
+        out[#out + 1] = "nil"
+    end
+end
+
+local function store_collect()
+    local data = {}
+    for _, name in ipairs(STORE_MODULES) do
+        local module = _G[name]
+        if module and module.save_state then module.save_state(data) end
+    end
+    local out = {}
+    encode_value(data, out)
+    return table.concat(out)
+end
+
+local function store_apply(blob)
+    local ok, data = pcall(function()
+        local chunk = loadstring("return " .. blob)
+        return chunk and chunk() or nil
+    end)
+    if not ok or type(data) ~= "table" then
+        printf("! [COOP_CLIENT] PLAYER_STORE_BAD bytes=%s", tostring(#blob))
+        return
+    end
+    for _, name in ipairs(STORE_MODULES) do
+        local module = _G[name]
+        if module and module.load_state then module.load_state(data) end
+    end
+    printf("[COOP_CLIENT] PLAYER_STORE_LOADED bytes=%s", tostring(#blob))
+end
+
+local function store_send()
+    if level.coop_player_store == nil then return end
+    level.coop_player_store(store_collect())
+end
+
+-- Called by the engine (game_cl_Coop::OnPlayerStore) when the server returns the kept state.
+function on_player_store(blob)
+    if type(blob) ~= "string" or blob == "" then return end
+    if layer_installed then
+        store_apply(blob)
+    else
+        pending_store = blob
+    end
+end
+
+-- Mutant looting: the window is ours, the loot table and the items are the server's
+-- (coop_server_actor: ui_mutant_loot.start offers the list, mutant_loot_take creates the parts).
+local function install_mutant_loot()
+    if not ui_mutant_loot or not ui_mutant_loot.UIMutantLoot then return end
+    local UI = ui_mutant_loot.UIMutantLoot
+    UI.FillList = function(self) -- the list came from the server (self.coop_list)
+        local inv = self.coop_list or {}
+        if #inv == 0 then
+            actor_menu.set_msg(1, "st_body_useless", 3)
+            return false
+        end
+        self:ShowDialog(true)
+        self.CC:Reinit(inv)
+        return true
+    end
+    UI.Loot = function(self, loot_all) -- ask the server; it answers with what is left
+        local sections = {}
+        if loot_all then
+            for _, sec in ipairs(self.coop_list or {}) do sections[#sections + 1] = sec end
+        else
+            for _, ci in pairs(self.CC.cell) do
+                if ci.flags.selected then sections[#sections + 1] = ci.section end
+            end
+        end
+        if #sections == 0 then return end
+        level.coop_send_lua(0, string.format('mutant_loot_take|%s|%s', tostring(self.id), table.concat(sections, ',')))
+        if actor_effects then actor_effects.play_item_fx("mutant_looting") end
+        xr_sound.set_sound_play(AC_ID, "inv_mutant_loot_animal")
+        self:Close()
+    end
+end
+
+local function mutant_loot_show(id, list, after_take)
+    local obj = level.object_by_id(id)
+    if not obj or not ui_mutant_loot then return end
+    if after_take and (#list == 0 or (actor_effects and actor_effects.is_animations_on())) then return end
+    ui_mutant_loot.GUI = ui_mutant_loot.GUI or ui_mutant_loot.UIMutantLoot()
+    local gui = ui_mutant_loot.GUI
+    if gui:IsShown() then return end
+    gui.coop_list = list
+    if gui:Reset(obj) then -- as ui_mutant_loot.start does in SP
+        gui:ShowDialog(true)
+        Register_UI("UIMutantLoot", "ui_mutant_loot")
+    end
+end
+
+-- Weather is the server's (its level_weathers picks the cycles and the emission effects); the
+-- engine calls it made are replayed here. The cycle name is one of the engine's weather cycles.
+local function apply_weather(op, name, arg)
+    if op == 'set' then
+        level.set_weather(name, arg == '1')
+    elseif op == 'fx' then
+        level.set_weather_fx(name)
+    elseif op == 'fx_time' then
+        if not level.is_wfx_playing() then level.start_weather_fx_from_time(name, tonumber(arg) or 0) end
+    elseif op == 'stop_fx' then
+        if level.is_wfx_playing() then level.stop_weather_fx() end
+    end
+    printf('[COOP_CLIENT] WEATHER op=%s name=%s arg=%s', tostring(op), tostring(name), tostring(arg))
+end
+
+-- ---- Emissions and psi-storms (presentation) ---------------------------------------------------
+-- The server's surge_manager / psi_storm_manager decide when an emission runs and what it does to
+-- the world and to the players; this client runs the same managers' timeline for what the player
+-- sees and hears: sounds, screen effects, HUD indicators, wave and vortex particles. The server
+-- starts and ends it (surge|start, surge|end, psi|start, psi|end), places the wave planes and the
+-- vortices (surge|wave, psi|vortex) and tells the cover state (surge|cover), which replaces
+-- actor_status' zone scan — there are no zones on the client. Hits the managers deal here are
+-- events the server drops; the real ones are the server's.
+local emissions_installed = false
+local cover_current, cover_near = false, false
+
+local function parse_time(text)
+    local p = str_explode(text or '', ',')
+    local t = game.CTime()
+    t:set(tonumber(p[1]) or 0, tonumber(p[2]) or 0, tonumber(p[3]) or 0, tonumber(p[4]) or 0, tonumber(p[5]) or 0, tonumber(p[6]) or 0, tonumber(p[7]) or 0)
+    return t
+end
+
+local function install_emissions()
+    if emissions_installed then return end
+    emissions_installed = true
+    local SM = surge_manager.CSurgeManager
+    local PM = psi_storm_manager.CPsiStormManager
+    -- decisions are the server's
+    SM.start = function() end
+    SM.launch_rockets = function() end
+    SM.give_surge_hide_task = function() end
+    SM.kill_objects_at_pos = function() end
+    SM.kill_crows_at_pos = function() end
+    SM.kill_actor_at_pos = function() end
+    SM.kill_all_unhided = function() end
+    SM.start_wave = function() end -- the wave plane comes with surge|wave (see below)
+    PM.start = function() end
+    PM.launch_rockets = function() end
+    PM.give_psi_storm_hide_task = function() end
+    PM.kill_objects_at_pos = function() end
+    PM.kill_crows_at_pos = function() end
+    PM.vortex = function() end -- vortices come with psi|vortex
+    -- the covers this player is in / near, as the server sees them
+    actor_status.scan_safe_zone_old = function() return cover_current, cover_near, 0 end
+    -- an end decided here (the managers' own checks: level validity, options) is reported
+    local surge_end, surge_skip, psi_finish = SM.end_surge, SM.skip_surge, PM.finish
+    SM.end_surge = function(self, manual) printf('[COOP_CLIENT] SURGE end_surge started=%s', tostring(self.started)) surge_end(self, manual) end
+    SM.skip_surge = function(self) printf('[COOP_CLIENT] SURGE skip_surge started=%s', tostring(self.started)) surge_skip(self) end
+    PM.finish = function(self, manual) printf('[COOP_CLIENT] PSI_STORM finish started=%s', tostring(self.started)) psi_finish(self, manual) end
+    -- the weather manager instance fills level_weathers.valid_levels (SP: the binder creates it);
+    -- the managers end an emission on a level not in it
+    level_weathers.get_weather_manager()
+    -- the managers initialise as from the SP binder's load (no packet: nothing to read)
+    surge_manager.actor_on_load(nil, nil)
+    psi_storm_manager.actor_on_load(nil, nil)
+    printf('[COOP_CLIENT] EMISSIONS_INSTALLED valid_level=%s', tostring(level_weathers.valid_levels[level.name()]))
+end
+
+-- SP CSurgeManager:start (the running part) with the server's start time.
+local function surge_begin(time_text)
+    local sm = surge_manager.get_surge_manager()
+    if sm.started then return end
+    sm:finalize()
+    sm.inited_time = parse_time(time_text)
+    sm.game_time_factor = level.get_time_factor()
+    sm.started, sm.finished = true, false
+    sm.task_given = true -- the hide task is the server's, mirrored through the PDA
+    sm.blowout_waves = empty_table(sm.blowout_waves)
+    sm.objects_to_kill = empty_table(sm.objects_to_kill)
+    sm.stages = empty_table(sm.stages)
+    sm.body_tears = empty_table(sm.body_tears)
+    sm.hitFactor = 0
+    sm.zombie_count = 0
+    printf('[COOP_CLIENT] SURGE start time=%s', tostring(time_text))
+end
+
+-- SP CSurgeManager:start_wave with the plane where the server put it.
+local function surge_wave(num, z, inited_time)
+    local sm = surge_manager.get_surge_manager()
+    if not sm.started or not db.actor then
+        printf('[COOP_CLIENT] SURGE wave=%s ignored started=%s', tostring(num), tostring(sm.started))
+        return
+    end
+    local actor_pos = db.actor:position()
+    local effect = particles_object('crommcruac\\blowout_wave_blend')
+    local inited_pos = vector():set(actor_pos.x, actor_pos.y / 2, z)
+    sm.blowout_waves[num] = { effect = effect, inited_time = inited_time, inited_pos = inited_pos }
+    effect:play_at_pos(inited_pos)
+    if not sm.wave_sound then
+        xr_sound.play_sound_looped(AC_ID, 'blowout_particle_wave_looped')
+        xr_sound.set_volume_sound_looped(AC_ID, 'blowout_particle_wave_looped', 0)
+        sm.wave_sound = true
+    end
+    printf('[COOP_CLIENT] SURGE wave=%s z=%s', tostring(num), tostring(z))
+end
+
+-- The player was outside cover when the second wave passed and the survive condlist let them live
+-- (SP kill_actor_at_pos): the blackout and the wade back in.
+local function surge_survive()
+    level.add_cam_effector('camera_effects\\surge_02.anm', 3, false, 'surge_manager.surge_callback')
+    level.add_pp_effector('surge_fade.ppe', 4, false)
+end
+
+local function psi_begin(time_text)
+    local pm = psi_storm_manager.get_psi_storm_manager()
+    if pm.started then return end
+    pm:finalize()
+    pm.inited_time = parse_time(time_text)
+    pm.game_time_factor = level.get_time_factor()
+    pm.started, pm.finished = true, false
+    pm.hitFactor = 0
+    pm.stages = empty_table(pm.stages)
+    pm.vortexes = empty_table(pm.vortexes)
+    pm.humanParticles = empty_table(pm.humanParticles)
+    pm.next_vortex_at = nil
+    pm.task_given = true
+    printf('[COOP_CLIENT] PSI_STORM start time=%s', tostring(time_text))
+end
+
+-- SP CPsiStormManager:vortex at the position the server chose (around one of the players).
+local function psi_vortex(x, y, z, start_time)
+    local pm = psi_storm_manager.get_psi_storm_manager()
+    if not pm.started or not db.actor then return end
+    pm.vortex_index = pm.vortex_index + 1
+    local particle_pos = vector():set(x, y, z)
+    local sound_pos = vector():set(x, y + 40, z)
+    local vortex = { effect = particles_object('crommcruac\\psi_storm_01'), particle_pos = particle_pos,
+        sound = sound_object('anomaly\\psi_storm_01'), sound_pos = sound_pos, start_time = start_time, hit = false }
+    pm.vortexes[pm.vortex_index] = vortex
+    vortex.effect:play_at_pos(particle_pos)
+    vortex.sound:play_at_pos(db.actor, sound_pos)
+    vortex.sound.volume = 1
+end
+
+local function apply_emission(parts)
+    local kind, op = parts[1], parts[2]
+    if kind == 'surge' then
+        if op == 'start' then surge_begin(parts[3])
+        elseif op == 'end' then
+            local sm = surge_manager.get_surge_manager()
+            if sm.started then sm:end_surge() end
+            printf('[COOP_CLIENT] SURGE end')
+        elseif op == 'wave' then surge_wave(tonumber(parts[3]) or 1, tonumber(parts[4]) or 0, tonumber(parts[5]) or 0)
+        elseif op == 'cover' then
+            cover_current = parts[3] == '1'
+            cover_near = tonumber(parts[4]) or false
+        elseif op == 'survive' then surge_survive()
+        end
+    elseif kind == 'psi' then
+        if op == 'start' then psi_begin(parts[3])
+        elseif op == 'end' then
+            local pm = psi_storm_manager.get_psi_storm_manager()
+            if pm.started then pm:finish() end
+            printf('[COOP_CLIENT] PSI_STORM end')
+        elseif op == 'vortex' then psi_vortex(tonumber(parts[3]) or 0, tonumber(parts[4]) or 0, tonumber(parts[5]) or 0, tonumber(parts[6]) or 0)
+        end
+    end
+end
+
+-- ---- Sleep and tutorials ------------------------------------------------------------------------
+-- Sleeping is the SP dialog (ui_sleep_dialog) on this client: the sleep zones start its "press use"
+-- tutorial through the server (zone logic runs there, game.start_tutorial is relayed), the dialog's
+-- checks read the cover state the server sends, and the time skip is the server's: the dialog asks
+-- for it (sleep|hours) and the world's clock moves for everyone. The other players get the blackout.
+local sleep_installed = false
+
+local function install_sleep()
+    if sleep_installed or not ui_sleep_dialog then return end
+    sleep_installed = true
+    -- the server started the tutorial only inside a sleep zone: no zone list to check here
+    ui_sleep_dialog.sleep_in_zone = function()
+        level.coop_send_lua(0, 'tutorial|done')
+        give_info('sleep_active')
+        ui_sleep_dialog.sleep()
+    end
+    -- SP dream_callback: the waking effector, the time skip and actor_on_sleep; the skip is the server's
+    ui_sleep_dialog.dream_callback = function()
+        local gui = ui_sleep_dialog.GUI
+        local hours = gui and (gui.forced or gui.time_track:GetIValue()) or 0
+        if gui and gui.forced then
+            level.add_cam_effector('camera_effects\\surge_01.anm', 10, false, 'ui_sleep_dialog.dream_callback2')
+        else
+            level.add_cam_effector('camera_effects\\sleep.anm', 10, false, 'ui_sleep_dialog.dream_callback2')
+        end
+        level.coop_send_lua(0, 'sleep|' .. tostring(hours))
+        SendScriptCallback('actor_on_sleep', hours) -- this player's thirst and sleep deprivation
+        printf('[COOP_CLIENT] SLEEP hours=%s', tostring(hours))
+    end
+end
+
+local function apply_sleep(hours, sleeper)
+    if sleeper == AC_ID then return end -- the sleeper's own dialog plays its sequence
+    level.add_pp_effector('surge_fade.ppe', 11, false)
+    actor_menu.set_msg(1, string.format('%s hours pass while a companion sleeps', tostring(hours)), 6)
+    printf('[COOP_CLIENT] SLEEP by=%s hours=%s', tostring(sleeper), tostring(hours))
+end
+
+local function apply_tutorial(op, name)
+    if op == 'start' then
+        if not game.has_active_tutorial() then game.start_tutorial(name) end
+    elseif op == 'stop' then
+        if game.has_active_tutorial() then game.stop_tutorial() end
+    end
+end
+
+-- Level transitions: the SP box (ui_sr_teleport.msg_box_ui) opens here when the server's zone
+-- logic asks for it (srteleport|ask); "yes" asks the server for the change (it moves everyone
+-- once the others stand near), "no" steps back to the zone's reject point as in SP. The zone
+-- checks (section, known route) are the server's — the box's own are bypassed.
+local sr_teleport_installed = false
+local sr_teleport_box = nil
+
+local function install_sr_teleport()
+    if sr_teleport_installed or not ui_sr_teleport then return end
+    sr_teleport_installed = true
+    local box = ui_sr_teleport.msg_box_ui
+    box.OnMsgOk = function(self)
+        sr_teleport_box = nil
+        level.add_pp_effector('sleep_fade.ppe', 1313, false)
+        level.coop_send_lua(0, 'srteleport|ok|' .. tostring(self.name))
+        printf('[COOP_CLIENT] SR_TELEPORT ok zone=%s', tostring(self.name))
+    end
+    local step_back = box.OnMsgCancel
+    box.OnMsgCancel = function(self)
+        sr_teleport_box = nil
+        level.coop_send_lua(0, 'srteleport|cancel|' .. tostring(self.name))
+        printf('[COOP_CLIENT] SR_TELEPORT cancel zone=%s', tostring(self.name))
+        step_back(self)
+    end
+end
+
+local function apply_sr_teleport(name, hint)
+    if not sr_teleport_installed or not name or name == '' then return end
+    if sr_teleport_box and sr_teleport_box.message_box and sr_teleport_box.message_box:IsShown() then return end
+    local state = alife_storage_manager.get_state()
+    if state then state.opened_routes = true end -- the route check was the server's
+    local zone = { name = function() return name end, id = function() return 65535 end }
+    sr_teleport_box = ui_sr_teleport.msg_box_ui(zone, nil, nil)
+    printf('[COOP_CLIENT] SR_TELEPORT ask zone=%s hint=%s', name, tostring(hint))
+end
+
+-- ---- Player death: downed, revive, respawn ----------------------------------------------------------
+-- The server decides (game_sv_Coop): a body that would die goes down (down|id|seconds|player|killer),
+-- every second downed|id|left|reviver|progress, a teammate's "use" starts revive|id|by|seconds,
+-- revived|id|by, or died|id|player|reason and respawn|new|corpse|player. This side: the own body
+-- crawls without a weapon (engine: level.coop_set_downed), a bleed-out clock on the HUD, the blood
+-- overlay; the others see the revive hint on the body and their progress while reviving.
+local DOWNED_PPE = 27001
+local downed = {} -- body id -> { player = name, left = seconds, reviver = id, progress = percent }
+local downed_texts = {
+    eng = { revive = 'Revive', down_self = 'You are down. Wait for help: %d s', down_other = '%s is down!',
+            reviving = 'Reviving %s: %d%%', being_revived = '%s is reviving you: %d%%',
+            revived_self = 'You are back on your feet', revived_other = '%s is back up',
+            died_self = 'You died. Your body and gear stay where you fell', died_other = '%s died',
+            respawn_self = 'A new life at the level entry, empty-handed' },
+    rus = { revive = 'Поднять', down_self = 'Вы ранены. Ждите помощи: %d с', down_other = '%s ранен!',
+            reviving = 'Поднимаем %s: %d%%', being_revived = '%s поднимает вас: %d%%',
+            revived_self = 'Вы снова на ногах', revived_other = '%s снова на ногах',
+            died_self = 'Вы погибли. Тело и снаряжение остались на месте', died_other = '%s погиб',
+            respawn_self = 'Новая жизнь у входа на уровень, с пустыми руками' },
+}
+
+local function downed_text(key)
+    local lang = 'eng'
+    local ok, ini = pcall(ini_file, 'localization.ltx')
+    if ok and ini and ini:r_string_ex('string_table', 'language') == 'rus' then lang = 'rus' end
+    return (downed_texts[lang] or downed_texts.eng)[key] or key
+end
+
+local function hud_text(static_name, text)
+    local hud = get_hud()
+    if not hud then return end
+    if not text then
+        if hud:GetCustomStatic(static_name) then hud:RemoveCustomStatic(static_name) end
+        return
+    end
+    local static = hud:GetCustomStatic(static_name) or hud:AddCustomStatic(static_name, true)
+    if static then static:wnd():TextControl():SetText(text) end
+end
+
+local function downed_self_apply(on)
+    if not db.actor then return end
+    if on then
+        db.actor:hide_weapon()
+        level.add_pp_effector('bloody.ppe', DOWNED_PPE, true)
+    else
+        level.remove_pp_effector(DOWNED_PPE)
+        db.actor:restore_weapon()
+        hud_text('mp_force_respawn_time', nil)
+        hud_text('mp_warm_up', nil)
+    end
+end
+
+local function apply_down(id, seconds, player, killer)
+    if not id then return end
+    downed[id] = { player = player or '?', left = seconds or 0, reviver = 65535, progress = 0 }
+    level.coop_set_downed(id, true)
+    level.coop_revive_hint(downed_text('revive'))
+    if id == AC_ID then
+        downed_self_apply(true)
+        hud_text('mp_force_respawn_time', string.format(downed_text('down_self'), seconds or 0))
+    else
+        actor_menu.set_msg(1, string.format(downed_text('down_other'), player or '?'), 6)
+    end
+    printf('[COOP_CLIENT] DOWN id=%s self=%s player=%s by=%s', tostring(id), tostring(id == AC_ID), tostring(player), tostring(killer))
+end
+
+local function apply_downed_tick(id, left, reviver, progress)
+    local state = downed[id]
+    if not state then return end
+    state.left, state.reviver, state.progress = left or 0, reviver or 65535, progress or 0
+    if id == AC_ID then
+        if state.reviver ~= 65535 then
+            local by = downed[state.reviver] and downed[state.reviver].player or (level.object_by_id(state.reviver) and level.object_by_id(state.reviver):character_name()) or '?'
+            hud_text('mp_force_respawn_time', string.format(downed_text('being_revived'), by, state.progress))
+        else
+            hud_text('mp_force_respawn_time', string.format(downed_text('down_self'), state.left))
+        end
+    elseif state.reviver == AC_ID then
+        hud_text('mp_warm_up', string.format(downed_text('reviving'), state.player, state.progress))
+    else
+        hud_text('mp_warm_up', nil)
+    end
+end
+
+local function apply_revive(id, by, seconds, by_name)
+    local state = downed[id]
+    if not state then return end
+    state.reviver = by or 65535
+    if state.reviver == 65535 and by ~= AC_ID then hud_text('mp_warm_up', nil) end
+    printf('[COOP_CLIENT] REVIVE id=%s by=%s', tostring(id), tostring(by))
+end
+
+local function downed_clear(id)
+    downed[id] = nil
+    level.coop_set_downed(id, false)
+    if id == AC_ID then downed_self_apply(false) else hud_text('mp_warm_up', nil) end
+end
+
+local function apply_revived(id, by)
+    local state = downed[id]
+    downed_clear(id)
+    if id == AC_ID then
+        actor_menu.set_msg(1, downed_text('revived_self'), 5)
+    else
+        actor_menu.set_msg(1, string.format(downed_text('revived_other'), state and state.player or '?'), 5)
+    end
+    printf('[COOP_CLIENT] REVIVED id=%s by=%s', tostring(id), tostring(by))
+end
+
+local function apply_died(id, player, reason)
+    downed_clear(id)
+    if id == AC_ID then
+        actor_menu.set_msg(1, downed_text('died_self'), 8)
+    else
+        actor_menu.set_msg(1, string.format(downed_text('died_other'), player or '?'), 6)
+    end
+    printf('[COOP_CLIENT] DIED id=%s self=%s reason=%s', tostring(id), tostring(id == AC_ID), tostring(reason))
+end
+
+local function apply_respawn(new_id, corpse_id, player)
+    -- The new body's spawn follows (or came first): its binder takes over (client_actor:net_spawn).
+    if corpse_id == AC_ID or (db.actor and db.actor:id() == corpse_id) then
+        actor_menu.set_msg(1, downed_text('respawn_self'), 8)
+    end
+    printf('[COOP_CLIENT] RESPAWN new=%s corpse=%s player=%s', tostring(new_id), tostring(corpse_id), tostring(player))
+end
+
+-- ---- Items: workshop, repair kits, disassembly, consumables ------------------------------------
+-- Anomaly's item scripts run here as in SP (the engine actor menu carries their use[1-10]
+-- functors); what they change reaches the server as item verbs (above). Two kinds of server
+-- data they read are mirrored: the parts table of a weapon or outfit (item_parts, kept by the
+-- server in its ALife storage: parts|id|sec=con,... on join, on take and after every change);
+-- the learned recipes and notes are the encyclopedia's (the PDA block below). Taking a thing
+-- apart is the server's (item|disassemble); the animation is ours.
+local items_installed = false
+local parts_mirror = {} -- item id -> { [part section] = condition (0-100) }
+
+local function parts_text(data)
+    local parts = {}
+    for sec, con in pairs(data or {}) do table.insert(parts, sec .. '=' .. tostring(con)) end
+    return table.concat(parts, ',')
+end
+
+local function apply_parts(id, text)
+    id = tonumber(id)
+    if not id then return end
+    if not text or text == '' then parts_mirror[id] = nil; return end
+    local data = {}
+    for _, pair in ipairs(str_explode(text, ',')) do
+        local sec, con = string.match(pair, '^(.-)=(.*)$')
+        if sec then data[sec] = tonumber(con) or con end
+    end
+    parts_mirror[id] = data
+end
+
+local function install_items()
+    if items_installed or not item_parts then return end
+    items_installed = true
+    -- parts tables: read from the mirror, changes go to the server
+    item_parts.get_parts_con = function(obj, id, evaluate)
+        id = id or (obj and obj:id())
+        return id and parts_mirror[id]
+    end
+    item_parts.evaluate_parts = function(obj) return obj and parts_mirror[obj:id()] end
+    item_parts.set_parts_con = function(id, data)
+        if not id then return end
+        parts_mirror[id] = data and dup_table(data) or nil
+        item_verb('item|parts_set|' .. id .. '|' .. parts_text(data))
+    end
+    item_parts.clear_parts_con = function(id)
+        if not id then return end
+        parts_mirror[id] = nil
+        item_verb('item|parts_clear|' .. id)
+    end
+    item_parts.copy_parts_con = function(id_from, id_to)
+        if not (id_from and id_to) then return end
+        parts_mirror[id_to] = parts_mirror[id_from] and dup_table(parts_mirror[id_from]) or nil
+        item_verb('item|parts_copy|' .. id_from .. '|' .. id_to)
+    end
+    -- disassembly: item_parts.func_disassembly keeps its checks and messages, the work is the server's
+    for _, name in ipairs({ 'disassembly_weapon', 'disassembly_outfit', 'disassembly_item' }) do
+        item_parts[name] = function(obj, obj_d)
+            if not obj then return end
+            actor_effects.play_item_fx('disassemble_metal_fast')
+            item_verb(string.format('item|disassemble|%d|%d', obj:id(), obj_d and obj_d:id() or 0))
+        end
+    end
+    -- the item scripts' listeners (use, drag-drop, focus highlight, keys)
+    RegisterScriptCallback('actor_on_item_use', itms_manager.actor_on_item_use)
+    RegisterScriptCallback('ActorMenu_on_item_drag_drop', itms_manager.ActorMenu_on_item_drag_drop)
+    RegisterScriptCallback('ActorMenu_on_item_focus_receive', itms_manager.ActorMenu_on_item_focus_receive)
+    local modules = { 'item_repair', 'item_cooking', 'item_map_kit', 'item_money', 'item_backpack', 'item_tent', 'item_parts', 'item_weapon', 'item_device' }
+    for _, name in ipairs(modules) do
+        local module = _G[name]
+        if module and module.on_game_start then
+            local ok, err = pcall(module.on_game_start)
+            if not ok then printf('! [COOP_CLIENT] ITEMS %s.on_game_start: %s', name, tostring(err)) end
+        end
+    end
+    -- Backpack stashes (item_backpack): alife_create returns nothing here, so the SP flow after
+    -- it (map spot, stash list, taking the backpack, moving the loot) is asked of the server as a
+    -- whole (item|stash); the naming window and the "no backpack" message stay ours.
+    if item_backpack then
+        if item_backpack.UICreateStash then
+            item_backpack.UICreateStash.OnAccept = function(self)
+                local name = self.input and self.input:GetText() or ''
+                item_verb(string.format('item|stash|%d|ui|%s', self.id or 0, (string.gsub(name, '|', '/'))))
+                self:Close()
+            end
+        end
+        if item_backpack.actor_on_item_use then
+            UnregisterScriptCallback('actor_on_item_use', item_backpack.actor_on_item_use)
+            item_backpack.actor_on_item_use = function(obj)
+                if not (obj and obj:section() == 'itm_actor_backpack') then return end
+                if db.actor:item_in_slot(13) then
+                    item_verb('item|stash|0|use|')
+                else
+                    actor_menu.set_msg(1, game.translate_string('st_stash_no_backpack_found'), 4)
+                end
+            end
+            RegisterScriptCallback('actor_on_item_use', item_backpack.actor_on_item_use)
+        end
+    end
+    -- Listeners of those modules that read server objects every frame (item_weapon.actor_on_update:
+    -- the overheat from the weapon's packet, alife_object) stay off; axr_main keeps its listener
+    -- table private, the callback function closes over it.
+    local skip = { actor_on_update = { item_weapon = true } }
+    local intercepts
+    for i = 1, 20 do
+        local upname, value = debug.getupvalue(axr_main.make_callback, i)
+        if not upname then break end
+        if upname == 'intercepts' then intercepts = value; break end
+    end
+    for callback_name, sources in pairs(skip) do
+        for func in pairs(intercepts and intercepts[callback_name] or {}) do
+            local info = type(func) == 'function' and debug.getinfo(func, 'S')
+            local source = info and string.match(info.source or '', '([%w_]+)%.script')
+            if source and sources[source] then
+                UnregisterScriptCallback(callback_name, func)
+                printf('[COOP_CLIENT] ITEMS skip %s.%s', source, callback_name)
+            end
+        end
+    end
+    printf('[COOP_CLIENT] ITEMS installed')
+end
+
+-- ---- PDA: encyclopedia, statistics, ranking, relations ----------------------------------------
+-- The PDA's Lua tabs and the ranking window read the world's shared data (coop_server_actor,
+-- "PDA"): the encyclopedia tables of ui_pda_encyclopedia_tab (articles|.. and notes|.. on join,
+-- article|sec / note|sec when one unlocks anywhere in the party: the SP guide window and
+-- notification play here), game_statistics (stats|rank|rep|counts|achievements|levels: the
+-- module's tables, the shared rank and reputation on this body), the character ranking
+-- (ranking|i|.. entries for pda.coc_rankings_*, asked for when the ranking tab opens) and the
+-- factions matrix with this body's community goodwill (relations|a|.. / goodwill|.., the
+-- relations tab and the NPC attitudes shown here). The contacts tab lists the stalker replicas
+-- present (db.OnlineStalkers from level.coop_online_stalkers). The encyclopedia interactions
+-- (items taken, dialogs, the level, the faction) and the achievement functors run here as in
+-- SP; what they unlock is asked of the world (item|article, item|note, item|achievement).
+local pda_installed = false
+local rankings_mirror = {} -- ranking index -> { actor = bool, name, desc, hint, icon }
+local enc_original = {} -- unlock_article / unlock_note of the module (the SP presentation)
+local next_contacts = 0
+
+-- The encyclopedia keeps its tables in module locals; the functions that read them close over them.
+local function enc_tables()
+    local t = {}
+    if not ui_pda_encyclopedia_tab then return t end
+    for _, f in ipairs({ ui_pda_encyclopedia_tab.is_unlocked_article, ui_pda_encyclopedia_tab.is_unlocked_note }) do
+        for i = 1, 4 do
+            local name, value = debug.getupvalue(f, i)
+            if not name then break end
+            t[name] = value
+        end
+    end
+    return t
+end
+
+-- the world's list on join: unlocked quietly (no guide window, no notification)
+local function apply_enc_list(kind, text)
+    local t = enc_tables()
+    local unlocked = kind == 'notes' and t.unlocked_notes or t.unlocked_articles
+    local locked = kind == 'notes' and t.locked_notes or t.locked_articles
+    if not unlocked then return end
+    for _, sec in ipairs(text and text ~= '' and str_explode(text, ',') or {}) do
+        unlocked[sec] = true
+        if locked then locked[sec] = nil end
+    end
+end
+
+-- one unlocked now, by anyone: the SP presentation (guide window, HUD notification, sound)
+local function apply_enc_unlock(kind, sec)
+    local f = enc_original[kind]
+    if not (f and sec and sec ~= '') then return end
+    local ok, err = pcall(f, sec)
+    if not ok then printf('! [COOP_CLIENT] ENCYCLOPEDIA %s %s: %s', kind, sec, tostring(err)) end
+end
+
+local function apply_stats(parts)
+    if not game_statistics then return end
+    local rank, rep = tonumber(parts[2]), tonumber(parts[3])
+    for _, pair in ipairs(parts[4] and parts[4] ~= '' and str_explode(parts[4], ',') or {}) do
+        local name, count = string.match(pair, '^(.-)=(.*)$')
+        if name then
+            game_statistics.actor_statistics[name] = game_statistics.actor_statistics[name] or { count = 0, rank = 0, rept = 0 }
+            game_statistics.actor_statistics[name].count = tonumber(count) or 0
+        end
+    end
+    local unlocked = {}
+    for _, name in ipairs(parts[5] and parts[5] ~= '' and str_explode(parts[5], ',') or {}) do unlocked[name] = true end
+    for name, a in pairs(game_statistics.actor_achievements) do
+        a.unlocked = unlocked[name] == true
+        unlocked[name] = nil
+    end
+    for name in pairs(unlocked) do game_statistics.actor_achievements[name] = { unlocked = true } end
+    for name in pairs(game_statistics.actor_visited_levels) do game_statistics.actor_visited_levels[name] = false end
+    for _, name in ipairs(parts[6] and parts[6] ~= '' and str_explode(parts[6], ',') or {}) do
+        game_statistics.actor_visited_levels[name] = true
+    end
+    if db.actor and rank and rep then
+        if db.actor:character_rank() ~= rank then db.actor:set_character_rank(rank) end
+        if db.actor:character_reputation() ~= rep then db.actor:set_character_reputation(rep) end
+    end
+end
+
+local function apply_ranking(parts)
+    local index = tonumber(parts[2])
+    if not index then return end
+    rankings_mirror[index] = { actor = parts[3] == '1', name = parts[4] or '', desc = parts[5] or '', hint = parts[6] or '', icon = parts[7] or '' }
+end
+
+local function apply_rankings_done(count)
+    local size = pda.get_rankings_array_size()
+    for index in pairs(rankings_mirror) do
+        if index > count and index <= size then rankings_mirror[index] = nil end
+    end
+end
+
+local function apply_relations(parts)
+    if parts[2] == 'done' then
+        local menu = ActorMenu and ActorMenu.get_pda_menu and ActorMenu.get_pda_menu()
+        if menu and menu:GetActiveSection() == 'eptRelations' and ui_pda_relations_tab then ui_pda_relations_tab.get_ui() end
+        return
+    end
+    local a = parts[2]
+    if not (a and a ~= '') then return end
+    for _, pair in ipairs(parts[3] and parts[3] ~= '' and str_explode(parts[3], ',') or {}) do
+        local b, v = string.match(pair, '^(.-)=(.*)$')
+        if b and tonumber(v) then relation_registry.set_community_relation(a, b, tonumber(v)) end
+    end
+end
+
+local function apply_goodwill(text)
+    if not (AC_ID and AC_ID ~= 0) then return end
+    for _, pair in ipairs(text and text ~= '' and str_explode(text, ',') or {}) do
+        local f, v = string.match(pair, '^(.-)=(.*)$')
+        if f and tonumber(v) then relation_registry.set_community_goodwill(f, AC_ID, tonumber(v)) end
+    end
+end
+
+local function update_contacts()
+    local now = time_global()
+    if now < next_contacts then return end
+    next_contacts = now + 2000
+    db.OnlineStalkers = level.coop_online_stalkers()
+end
+
+local function install_pda()
+    if pda_installed then return end
+    pda_installed = true
+    db.OnlineStalkers = db.OnlineStalkers or {}
+    if ui_pda_encyclopedia_tab then
+        enc_original.article = ui_pda_encyclopedia_tab.unlock_article
+        enc_original.note = ui_pda_encyclopedia_tab.unlock_note
+        -- the interactions are detected here as in SP (the module's own listeners); the unlock is
+        -- the world's, its answer (article|sec, note|sec) plays the SP part
+        ui_pda_encyclopedia_tab.unlock_article = function(section)
+            if section and not ui_pda_encyclopedia_tab.is_unlocked_article(section) then item_verb('item|article|' .. section) end
+            return false
+        end
+        ui_pda_encyclopedia_tab.unlock_note = function(section)
+            if section and not ui_pda_encyclopedia_tab.is_unlocked_note(section) then item_verb('item|note|' .. section) end
+            return false
+        end
+        local ok, err = pcall(function()
+            ui_pda_encyclopedia_tab.on_game_start() -- interaction listeners, save/load (unused here)
+            ui_pda_encyclopedia_tab.parse_categories() -- SP: the on_game_load listener
+        end)
+        if not ok then printf('! [COOP_CLIENT] PDA encyclopedia: %s', tostring(err)) end
+    end
+    if ui_pda_radio_tab and ui_pda_radio_tab.on_game_start then
+        local ok, err = pcall(function()
+            ui_pda_radio_tab.on_game_start() -- keys, the player's update, options
+            ui_pda_radio_tab.update_settings() -- SP: the on_game_load listener
+        end)
+        if not ok then printf('! [COOP_CLIENT] PDA radio: %s', tostring(err)) end
+    end
+    if pda then
+        -- the ranking window's entries (CUIRankingsCoC::Update asks these by index every 3 s)
+        pda.coc_rankings_can_show = function(index) return rankings_mirror[index] ~= nil end
+        pda.coc_rankings_set_name = function(index) local e = rankings_mirror[index]; return e and e.name or '' end
+        pda.coc_rankings_set_description = function(index) local e = rankings_mirror[index]; return e and e.desc or '' end
+        pda.coc_rankings_set_hint = function(index) local e = rankings_mirror[index]; return e and e.hint or '' end
+        pda.coc_rankings_show_border = function(index) local e = rankings_mirror[index]; return e and e.actor or false end
+        pda.coc_rankings_set_icon = function(index)
+            local e = rankings_mirror[index]
+            if not e then return '' end
+            if e.actor and db.actor and ui_options.get('gameplay/general/outfit_portrait') == true then
+                local outfit = db.actor:item_in_slot(7)
+                local portrait = outfit and ini_sys:r_string_ex(outfit:section(), 'character_portrait')
+                if portrait and portrait ~= '' then return portrait end
+            end
+            return e.icon ~= '' and e.icon or 'ui\\ui_noise'
+        end
+    end
+    -- Achievements: the ranking window evaluates the game_achievements functors here (SP too);
+    -- an earned one is the world's - shown at once, confirmed or taken back by the next stats.
+    RegisterScriptCallback('actor_on_achievement_earned', function(name, message)
+        if not (name and game_statistics) then return end
+        local a = game_statistics.actor_achievements[name]
+        if a and a.unlocked then return end
+        game_statistics.actor_achievements[name] = a or {}
+        game_statistics.actor_achievements[name].unlocked = true
+        item_verb(string.format('item|achievement|%s|%s', name, tostring(message or '')))
+    end)
+    printf('[COOP_CLIENT] PDA installed')
+end
+
+-- ---- Companions (axr_companions) ---------------------------------------------------------------
+-- The squads, their logic and orders live on the server (coop_server_actor); this side keeps the
+-- list the server sends for this player (companions|id:cmsdl:leader,...), shows the SP HUD list
+-- and wheel from it (replicas instead of ALife objects) and sends the wheel's orders back.
+local companions = {} -- npc id -> { modes = 'cmsdl', leader = bool }
+local companion_list = {} -- ids in the server's order
+local companions_installed = false
+
+local function companion_mode(npc, index)
+    local entry = npc and companions[npc:id()]
+    if not entry then return 1 end
+    return tonumber(string.sub(entry.modes, index, index)) or 1
+end
+
+local function companion_order(cmd, state, npc)
+    level.coop_send_lua(0, string.format('companion|%s|%d|%d', cmd, tonumber(state) or 0, npc and npc:id() or 0))
+end
+
+local function install_companions()
+    if companions_installed or not axr_companions then return end
+    companions_installed = true
+    axr_companions.list_actor_squad_by_id = function() return companion_list end
+    axr_companions.get_companion_count = function() return #companion_list end
+    axr_companions.get_companion_combat_mode = function(npc) return companion_mode(npc, 1) end
+    axr_companions.get_companion_move_mode = function(npc) return companion_mode(npc, 2) end
+    axr_companions.get_companion_stealth_mode = function(npc) return companion_mode(npc, 3) end
+    axr_companions.get_companion_distance_mode = function(npc) return companion_mode(npc, 4) end
+    axr_companions.get_companion_loot_mode = function(npc) return companion_mode(npc, 5) end
+    axr_companions.set_companion_squad_combat_mode = function(mode, npc) companion_order('combat', mode, npc) end
+    axr_companions.set_companion_squad_move_mode = function(mode, npc) companion_order('movement', mode, npc) end
+    axr_companions.set_companion_squad_stealth_mode = function(mode, npc) companion_order('stealth', mode, npc) end
+    axr_companions.set_companion_squad_distance_mode = function(mode, npc) companion_order('distance', mode, npc) end
+    axr_companions.set_companion_squad_loot_mode = function(mode, npc) companion_order('loot', mode, npc) end
+    local cycle_msgs = {
+        combat = { 'st_set_companion_to_attack_state', 'st_set_companion_to_ignore_combat_state' },
+        movement = { 'st_set_companion_to_wait_state', 'st_set_companion_to_follow_state' },
+        stealth = { 'st_set_companion_to_stealth_substate', 'st_set_companion_to_default_substate' },
+        distance = { 'st_set_companion_to_stay_close', 'st_set_companion_to_stay_far' },
+        loot = { 'st_set_companion_to_loot_items_and_corpses', 'st_set_companion_to_loot_nothing' },
+    }
+    local function cycle(cmd)
+        return function(force_mode, no_msg)
+            if next(companions) == nil then actor_menu.set_msg(1, game.translate_string('st_no_companions'), 5); return end
+            companion_order(cmd, force_mode or 0, nil)
+            if not no_msg and force_mode and cycle_msgs[cmd][force_mode] then
+                actor_menu.set_msg(1, game.translate_string(cycle_msgs[cmd][force_mode]), 8)
+            end
+        end
+    end
+    axr_companions.cycle_companions_combat_mode = cycle('combat')
+    axr_companions.cycle_companions_move_mode = cycle('movement')
+    axr_companions.cycle_companions_stealth_mode = cycle('stealth')
+    axr_companions.cycle_companions_distance_mode = cycle('distance')
+    axr_companions.cycle_companions_loot_mode = cycle('loot')
+    axr_companions.start_trade = function(npc)
+        actor_menu.set_msg(1, 'Companion inventory is not available in coop yet', 5)
+    end
+    axr_companions.get_nearby_companion = function()
+        local obj = level.get_target_obj()
+        if obj and companions[obj:id()] and distance_between(db.actor, obj) <= 8 then return obj end
+        if next(companions) ~= nil then return true end
+        return false
+    end
+    -- The HUD list from the replicas this client sees (the SP one reads ALife objects).
+    local UICompanionList = axr_companions.UICompanionList
+    if UICompanionList then
+        UICompanionList.Update = function(self, force)
+            CUIScriptWnd.Update(self)
+            local tg = time_global()
+            if force then self._tmr = tg - 1 end
+            if self._tmr >= tg then return end
+            self._tmr = tg + self.update_rate
+            local to_show = main_hud_shown()
+            for i = 1, 8 do
+                local id = companion_list[i]
+                local npc = id and level.object_by_id(id)
+                local ele = self.companion_info[i]
+                if to_show and npc and npc:alive() and db.actor then
+                    local icon_name = npc:character_icon()
+                    icon_name = icon_name and icon_name ~= '' and icon_name or 'ui\\ui_noise'
+                    ele.icon:InitTexture(icon_name)
+                    ele.distance:SetText(string.format('%.2f M', npc:position():distance_to(db.actor:position())))
+                    local leader = companions[id] and companions[id].leader
+                    ele.team_role:InitTexture(leader and 'ui_minimap_squad_leader' or 'ui_minimap_point')
+                    ele.team_role_shadow:InitTexture(leader and 'ui_minimap_squad_leader' or 'ui_minimap_point')
+                    local community = npc:character_community()
+                    ele.team_role:SetTextureColor(community and self.clr_list[community] or self.clr_list['def'])
+                    ele.prog_health:SetProgressPos(clamp(round_idp(npc.health, 1), 0, 1))
+                    ele.danger_indicator:Show(false)
+                    ele.base:Show(true)
+                else
+                    ele.base:Show(false)
+                end
+            end
+        end
+    end
+    printf('[COOP_CLIENT] COMPANIONS installed')
+end
+
+local function apply_companions(text)
+    local ids, entries = {}, {}
+    if text and text ~= '' then
+        for item in string.gmatch(text, '[^,]+') do
+            local id, modes, leader = string.match(item, '^(%d+):(%d+):?(%d*)$')
+            id = tonumber(id)
+            if id then
+                table.insert(ids, id)
+                entries[id] = { modes = modes or '11111', leader = leader == '1' }
+            end
+        end
+    end
+    companions, companion_list = entries, ids
+    if axr_companions and axr_companions.HUD and axr_companions.HUD.Update then axr_companions.HUD:Update(true) end
+end
+
+-- Each frame while an emission runs: the SP managers' timeline (their update, minus the world).
+local function update_emissions()
+    if not emissions_installed then return end
+    local sm = surge_manager.SurgeManager
+    if sm and sm.started then sm:update() end
+    local pm = psi_storm_manager.PsiStormManager
+    if pm and pm.started then pm:update() end
+end
+
+-- Called by the engine (game_cl_Coop::OnLuaMessage) with a text from the server's coop Lua.
+function on_server_lua(text)
+    if type(text) ~= "string" or text == "" then return end
+    local parts = str_explode(text, '|')
+    local kind = parts[1]
+    if kind == 'mutant_loot' or kind == 'mutant_loot_done' then
+        local list = parts[3] and parts[3] ~= '' and str_explode(parts[3], ',') or {}
+        mutant_loot_show(tonumber(parts[2]), list, kind == 'mutant_loot_done')
+    elseif kind == 'actor_msg' then
+        actor_menu.set_msg(tonumber(parts[2]) or 1, game.translate_string(parts[3] or ''), tonumber(parts[4]) or 5)
+    elseif kind == 'weather' then
+        apply_weather(parts[2], parts[3], parts[4])
+    elseif kind == 'surge' or kind == 'psi' then
+        if emissions_installed then apply_emission(parts) end
+    elseif kind == 'saved' then
+        -- The server saved the world (a player's or the server's "save"): the SP confirmation.
+        local hud = get_hud()
+        local static = hud and hud:AddCustomStatic('game_saved', true)
+        if static then static:wnd():TextControl():SetText(game.translate_string('st_game_saved') .. ': ' .. tostring(parts[2] or '')) end
+        printf('[COOP_CLIENT] SAVED name=%s', tostring(parts[2]))
+    elseif kind == 'reload' then
+        -- The server console loads a save: the world restarts, this client is dropped and returns by itself.
+        actor_menu.set_msg(1, 'Server loads "' .. tostring(parts[2] or '') .. '": reconnecting in a minute', 30)
+        printf('[COOP_CLIENT] SERVER_RELOAD name=%s', tostring(parts[2]))
+    elseif kind == 'sleep' then
+        apply_sleep(tonumber(parts[2]) or 0, tonumber(parts[3]))
+    elseif kind == 'tutorial' then
+        apply_tutorial(parts[2], parts[3])
+    elseif kind == 'srteleport' and parts[2] == 'ask' then
+        apply_sr_teleport(parts[3], parts[4])
+    elseif kind == 'down' then
+        apply_down(tonumber(parts[2]), tonumber(parts[3]), parts[4], parts[5])
+    elseif kind == 'downed' then
+        apply_downed_tick(tonumber(parts[2]), tonumber(parts[3]), tonumber(parts[4]), tonumber(parts[5]))
+    elseif kind == 'revive' then
+        apply_revive(tonumber(parts[2]), tonumber(parts[3]), tonumber(parts[4]), parts[5])
+    elseif kind == 'revived' then
+        apply_revived(tonumber(parts[2]), tonumber(parts[3]))
+    elseif kind == 'died' then
+        apply_died(tonumber(parts[2]), parts[3], parts[4])
+    elseif kind == 'respawn' then
+        apply_respawn(tonumber(parts[2]), tonumber(parts[3]), parts[4])
+    elseif kind == 'companions' then
+        apply_companions(parts[2])
+    elseif kind == 'infos' then
+        apply_world_infos(parts[2])
+    elseif kind == 'upgrade' then
+        apply_upgrade_window(tonumber(parts[2]))
+    elseif kind == 'workshop' then
+        apply_workshop(parts[2], parts[3])
+    elseif kind == 'parts' then
+        apply_parts(parts[2], parts[3])
+    elseif kind == 'notes' or kind == 'articles' then
+        apply_enc_list(kind, parts[2])
+    elseif kind == 'note' or kind == 'article' then
+        apply_enc_unlock(kind, parts[2])
+    elseif kind == 'stats' then
+        apply_stats(parts)
+    elseif kind == 'ranking' then
+        apply_ranking(parts)
+    elseif kind == 'rankings' then
+        apply_rankings_done(tonumber(parts[2]) or 0)
+    elseif kind == 'relations' then
+        apply_relations(parts)
+    elseif kind == 'goodwill' then
+        apply_goodwill(parts[2])
+    elseif kind == 'levelchange' then
+        -- Everyone travels: the server restarts its world on the new level, this client returns by itself.
+        actor_menu.set_msg(1, 'Travelling to ' .. game.translate_string(parts[2] or '') .. '...', 30)
+        printf('[COOP_CLIENT] LEVEL_CHANGE level=%s', tostring(parts[2]))
+    else
+        printf('! [COOP_CLIENT] unknown server lua message: %s', tostring(text))
+    end
+end
+
+local function install_presentation_layer()
+    if layer_installed then return end
+    layer_installed = true
+    install_client_globals()
+    install_mutant_loot()
+    -- Script sound themes (xr_sound: looting, emission rumble and sirens); SP loads them in the binder.
+    if sound_theme and sound_theme.load_sound and next(sound_theme.theme or {}) == nil then sound_theme.load_sound() end
+    -- Safe covers are ALife server objects; the client keeps no list — the server tells the state (surge|cover).
+    actor_status.prepare_safe_zone = function() end
+    install_emissions()
+    install_sleep()
+    install_sr_teleport()
+    install_companions()
+    install_items()
+    install_pda()
+    actor_menu.on_game_start()          -- HUD message ticker (item-use refusals, notices)
+    actor_status.on_game_start()        -- state and booster indicators
+    actor_effects.on_game_start()       -- item-use / weapon-switch animations, screen effects
+    actor_status_thirst.create()        -- thirst: simulated here, state kept on the server between joins
+    actor_status_sleep.create()         -- sleep deprivation: same
+    -- Forced sleep opens the SP sleep dialog (time skip); in coop only the warning is shown.
+    local function sleep_warning()
+        actor_menu.set_msg(1, game.translate_string("st_sleep_deprived"), 5)
+    end
+    actor_status_thirst.force_sleep = sleep_warning
+    actor_status_sleep.force_sleep = sleep_warning
+    RegisterScriptCallback("actor_on_item_before_use", itms_manager.actor_on_item_before_use)
+    if pending_store then
+        store_apply(pending_store)
+        pending_store = nil
+    end
+    printf('[COOP_CLIENT] LUA_LAYER_READY')
+end
+
+-- Engine callbacks of the SP binder that mean something on the client. Not set: inventory_info,
+-- task_state, trade_sell_buy_item, take_item_from_box, hit, actor_before_death, vehicles (server/story).
+local function client_callbacks()
+    local ext = bind_stalker_ext
+    return {
+        ["on_item_take"]          = ext.actor_on_item_take,
+        ["on_item_drop"]          = ext.actor_on_item_drop,
+        ["use_object"]            = ext.actor_on_item_use,
+        ["hud_animation_end"]     = ext.actor_on_hud_animation_end,
+        ["key_press"]             = ext.on_key_press,
+        ["key_release"]           = ext.on_key_release,
+        ["key_hold"]              = ext.on_key_hold,
+        ["weapon_fired"]          = ext.actor_on_weapon_fired,
+        ["weapon_jammed"]         = ext.actor_on_weapon_jammed,
+        ["weapon_zoom_in"]        = ext.actor_on_weapon_zoom_in,
+        ["weapon_zoom_out"]       = ext.actor_on_weapon_zoom_out,
+        ["weapon_magazine_empty"] = ext.actor_on_weapon_magazine_empty,
+        ["weapon_lowered"]        = ext.actor_on_weapon_lowered,
+        ["weapon_raised"]         = ext.actor_on_weapon_raised,
+        ["weapon_no_ammo"]        = ext.actor_on_weapon_reload,
+        ["item_to_belt"]          = ext.actor_item_to_belt,
+        ["item_to_slot"]          = ext.actor_item_to_slot,
+        ["item_to_ruck"]          = ext.actor_item_to_ruck,
+        ["on_foot_step"]          = ext.actor_on_foot_step,
+    }
+end
+
+function actor_init(obj)
+    obj:bind_object(client_actor(obj))
+end
+
+class "client_actor" (object_binder)
+
+function client_actor:__init(obj) super(obj)
+    self.first_update_pending = true
+end
+
+function client_actor:reinit()
+    object_binder.reinit(self)
+    db.storage[self.object:id()] = db.storage[self.object:id()] or {}
+    self.st = db.storage[self.object:id()]
+    install_presentation_layer()
+    for cb, func in pairs(client_callbacks()) do
+        if callback[cb] and func then
+            self.object:set_callback(callback[cb], func, self)
+        end
+    end
+    bind_stalker_ext.actor_on_reinit(self) -- HUD message ticker, time-event queue
+end
+
+-- The player's previous body (dead, its corpse stays in the world) lets go of the actor role
+-- before the new one takes it (net_spawn of the respawned body).
+function client_actor:release_actor()
+    if self.released then return end
+    self.released = true
+    for cb, func in pairs(client_callbacks()) do
+        if callback[cb] then self.object:set_callback(callback[cb]) end
+    end
+    if db.actor and db.actor:id() == self.object:id() then db.actor = nil end
+    if _G.AC_ID == self.object:id() then _G.AC_ID = 0 end
+    if db.actor_binder == self then db.actor_binder = nil end
+    printf('[COOP_CLIENT] LUA_ACTOR_RELEASED id=%s (a new body takes over)', tostring(self.object:id()))
+end
+
+function client_actor:net_spawn(se)
+    if not object_binder.net_spawn(self, se) then return false end
+    if db.actor and db.actor:id() ~= self.object:id() and db.actor_binder and db.actor_binder.release_actor then
+        db.actor_binder:release_actor()
+    end
+    assert(not db.actor, 'COOP_CLIENT duplicate local actor binder')
+    db.actor = self.object
+    db.actor_binder = self
+    db.storage[self.object:id()].object = self.object
+    -- The Anomaly constant "actor id" (0 in _g.script) is this player's body here: the presentation
+    -- modules address their sounds and item checks by it (xr_sound looped sounds: db.storage[AC_ID]).
+    _G.AC_ID = self.object:id()
+    self.first_update_pending = true
+    -- The server returns the kept state shortly after PLAYER_READY; the first upload waits for it.
+    store_next = time_global() + 2 * store_interval
+    printf('[COOP_CLIENT] LUA_ACTOR_READY id=%s', tostring(self.object:id()))
+    return true
+end
+
+function client_actor:update(delta)
+    object_binder.update(self, delta)
+    if self.released or not db.actor or db.actor:id() ~= self.object:id() or not db.actor:alive() then return end
+    if self.first_update_pending then
+        self.first_update_pending = false
+        bind_stalker_ext.actor_on_first_update(self, delta) -- actor_status HUD, actor_effects settings
+        db.actor.afterFirstUpdate = true -- SP binder flag: the achievement functors (game_achievements.can_unlock) wait for it
+        printf('[COOP_CLIENT] LUA_FIRST_UPDATE id=%s', tostring(self.object:id()))
+    end
+    bind_stalker_ext.actor_on_update(self, delta)
+    xr_sound.update(self.object:id()) -- one-shot script sounds of this player (their end callbacks)
+    update_emissions()
+    update_contacts()
+    local now = time_global()
+    if now >= store_next then
+        store_next = now + store_interval
+        store_send()
+    end
+end
+
+function client_actor:net_destroy()
+    if self.released then
+        -- The corpse of a previous life: the actor role went to the new body already.
+        db.storage[self.object:id()] = nil
+        printf('[COOP_CLIENT] LUA_CORPSE_RELEASE id=%s', tostring(self.object:id()))
+        object_binder.net_destroy(self)
+        return
+    end
+    store_send() -- best effort; the periodic copy is at most store_interval old
+    bind_stalker_ext.actor_on_net_destroy(self) -- actor_status removes its HUD
+    for cb, func in pairs(client_callbacks()) do
+        if callback[cb] then self.object:set_callback(callback[cb]) end
+    end
+    if db.actor and db.actor:id() == self.object:id() then db.actor = nil end
+    if _G.AC_ID == self.object:id() then _G.AC_ID = 0 end
+    if db.actor_binder == self then db.actor_binder = nil end
+    db.storage[self.object:id()] = nil
+    printf('[COOP_CLIENT] LUA_ACTOR_RELEASE id=%s', tostring(self.object:id()))
+    object_binder.net_destroy(self)
+end

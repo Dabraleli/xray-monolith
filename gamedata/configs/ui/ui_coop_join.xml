@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="windows-1251" standalone="yes" ?>
+<!-- Coop join screen (coop_menu.script), in the look of the game's own dialogs (message_box.xml
+     direct-ip box, ui_mm_load_dlg): the menu background, the message-box frame, its edit boxes and
+     buttons. Coordinates in the 1024x768 UI space. -->
+<w>
+	<background x="0" y="0" width="1024" height="768">
+		<auto_static x="0" y="0" width="1024" height="768" stretch="1">
+			<texture x="0" y="0" width="1280" height="768">ui\ui_actor_main_menu_one</texture>
+		</auto_static>
+	</background>
+
+	<main_dialog>
+		<frame x="173" y="256" width="677" height="255" stretch="1">
+			<texture>ui_inGame2_message_box</texture>
+		</frame>
+
+		<cap_title x="0" y="6" width="677" height="24">
+			<text r="170" g="170" b="170" font="graffiti22" align="c" vert_align="c" />
+		</cap_title>
+
+		<cap_address x="110" y="42" width="140" height="25">
+			<text font="letterica16" vert_align="c" />
+		</cap_address>
+		<input_address x="250" y="42" width="300" height="25" max_symb_count="48">
+			<text x="3" font="letterica16" vert_align="c" />
+			<texture>ui_inGame2_edit_box_1</texture>
+		</input_address>
+
+		<cap_name x="110" y="76" width="140" height="25">
+			<text font="letterica16" vert_align="c" />
+		</cap_name>
+		<input_name x="250" y="76" width="300" height="25" max_symb_count="32">
+			<text x="3" font="letterica16" vert_align="c" />
+			<texture>ui_inGame2_edit_box_1</texture>
+		</input_name>
+
+		<cap_character x="110" y="110" width="140" height="25">
+			<text font="letterica16" vert_align="c" />
+		</cap_character>
+		<text_character x="250" y="112" width="330" height="60">
+			<text complex_mode="1" font="letterica16" r="170" g="170" b="170" />
+		</text_character>
+
+		<text_status x="60" y="178" width="557" height="20">
+			<text complex_mode="1" font="letterica16" r="230" g="150" b="80" align="c" />
+		</text_status>
+
+		<btn_character x="120" y="212" width="127" height="28" stretch="1">
+			<text font="letterica18" />
+			<texture>ui_button_ordinary</texture>
+		</btn_character>
+		<btn_connect x="275" y="212" width="127" height="28" stretch="1">
+			<text font="letterica18" />
+			<texture>ui_button_ordinary</texture>
+		</btn_connect>
+		<btn_back x="430" y="212" width="127" height="28" stretch="1">
+			<text font="letterica18" />
+			<texture>ui_button_ordinary</texture>
+		</btn_back>
+	</main_dialog>
+</w>
