@@ -5,6 +5,7 @@
 #include "xrEngine/IGame_Persistent.h"
 #include "ParticlesObject.h"
 #include "Level.h"
+#include "coop_alife_mirror.h"
 #include "HUDManager.h"
 #include "xrServer.h"
 #include "NET_Queue.h"
@@ -508,6 +509,7 @@ void CLevel::cl_Process_Event(u16 dest, u16 type, NET_Packet& P)
     {
         if (type == GE_DESTROY)
         {
+            CCoopAlifeMirror::on_destroy(GO->ID());
             Game().OnDestroy(GO);
         }
         GO->OnEvent(P, type);

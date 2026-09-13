@@ -1,5 +1,6 @@
 #include "pch_script.h"
 #include "Level.h"
+#include "coop_alife_mirror.h"
 #include "Level_Bullet_Manager.h"
 #include "xrserver.h"
 #include "xrmessages.h"
@@ -121,6 +122,7 @@ extern CUISequencer* g_tutorial2;
 void CLevel::net_Stop()
 {
 	Msg("- Disconnect");
+	CCoopAlifeMirror::clear_instance();
 
 	if (CurrentGameUI())
 	{

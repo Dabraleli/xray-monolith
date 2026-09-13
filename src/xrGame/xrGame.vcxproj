@@ -1177,6 +1177,7 @@
     <ClInclude Include="game_sv_single.h" />
     <ClInclude Include="game_sv_coop.h" />
     <ClInclude Include="coop_spatial_scope.h" />
+    <ClInclude Include="coop_alife_mirror.h" />
     <ClInclude Include="game_cl_coop.h" />
     <ClInclude Include="game_sv_teamdeathmatch.h" />
     <ClInclude Include="GlobalFeelTouch.hpp" />
@@ -2911,6 +2912,7 @@
     <ClCompile Include="game_sv_mp.cpp" />
     <ClCompile Include="game_sv_single.cpp" />
     <ClCompile Include="game_sv_coop.cpp" />
+    <ClCompile Include="coop_alife_mirror.cpp" />
     <ClCompile Include="game_cl_coop.cpp" />
     <ClCompile Include="game_sv_teamdeathmatch.cpp" />
     <ClCompile Include="game_sv_teamdeathmatch_process_event.cpp" />

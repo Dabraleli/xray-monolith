@@ -19,6 +19,7 @@
 #include "ui/UIListBox.h"
 #include "ai/crow/ai_crow.h"
 #include "map_manager.h"
+#include "coop_alife_mirror.h"
 #include "ui/UIActorMenu.h"
 #include "ui/UIMainIngameWnd.h"
 #include "ui/UIPdaWnd.h"
@@ -55,6 +56,7 @@ void export_classes	(lua_State *L)
 	CALifeMonsterPatrolPathManager::script_register(L);
 	//CALifeOnlineOfflineGroupBrain::script_register(L);
 	CALifeSimulator::script_register(L);
+	CCoopAlifeMirror::script_register(L);
 	CALifeSmartTerrainTask::script_register(L);
 	CClientSpawnManager::script_register(L);
 	console_registrator::script_register(L);

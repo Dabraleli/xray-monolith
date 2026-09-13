@@ -76,7 +76,11 @@ end
 -- Anomaly helpers that index alife(). On the coop client alife() is nil: they read the mirrors, send
 -- the verbs or do nothing. Installed only when alife() is nil, so nothing changes where ALife exists.
 local function install_client_globals()
-    if alife() ~= nil then return end
+    if level.coop_alife == nil or level.coop_alife() == nil then return end
+    -- The ALife the SP scripts expect: the client mirror of the server entities seen here
+    -- (CCoopAlifeMirror - alife():object/actor/story_object/level_name/has_info read from it,
+    -- create/release turn into the item verbs below, the rest of the simulator is the server's).
+    _G.alife = function() return level.coop_alife() end
     -- SP sets this in warfare.on_game_start (server only); an unset global auto-loads the script
     -- of that name as the module - a truthy WARFARE, and the contacts tab took the warfare page.
     _G.WARFARE = false
@@ -84,7 +88,7 @@ local function install_client_globals()
         if world_infos[info_id] then return true end
         return db.actor ~= nil and db.actor:has_info(info_id) or false
     end
-    _G.alife_object = function(id) return nil end
+    -- alife_object(id) of _g.script reads the mirror through alife() now
     -- get_object_by_id (modded exes, _g_patches) looks in the registry of callbacks_gameobject first; that
     -- module is not loaded here (no NPC binders), the fallback level.object_by_id is what the client has
     _G.gameobjects_registry = _G.gameobjects_registry or {}
@@ -1348,6 +1352,11 @@ local function install_presentation_layer()
     RegisterScriptCallback("actor_on_item_before_use", itms_manager.actor_on_item_before_use)
     install_client_callbacks()
     start_script_modules()
+    local mirror = level.coop_alife and level.coop_alife()
+    if mirror then
+        local me = mirror:actor()
+        printf('[COOP_ALIFE] mirror objects=%s actor=%s', tostring(mirror:object_count()), tostring(me and me.id))
+    end
     if pending_store then
         store_apply(pending_store)
         pending_store = nil

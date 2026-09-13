@@ -9,6 +9,7 @@
 #include "client_spawn_manager.h"
 #include "../xrEngine/xr_object.h"
 #include "../xrEngine/IGame_Persistent.h"
+#include "coop_alife_mirror.h"
 
 void CLevel::cl_Process_Spawn(NET_Packet& P)
 {
@@ -47,7 +48,8 @@ void CLevel::cl_Process_Spawn(NET_Packet& P)
 	/*/
 	g_sv_Spawn(E);
 
-	F_entity_Destroy(E);
+	if (!CCoopAlifeMirror::keep_spawned(E)) // coop client: the entity stays as the read-only ALife
+		F_entity_Destroy(E);
 	//*/
 };
 
