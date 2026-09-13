@@ -132,6 +132,7 @@ bool CSE_ALifeDynamicObject::synchronize_location()
 
 void CSE_ALifeDynamicObject::try_switch_online()
 {
+	CoopSpatialScope scope(this); // coop: can_switch_online/offline ask about the player nearest to this object
 	CSE_ALifeSchedulable* schedulable = smart_cast<CSE_ALifeSchedulable*>(this);
 	// checking if the abstract monster has just died
 	if (schedulable)
@@ -168,6 +169,7 @@ void CSE_ALifeDynamicObject::try_switch_online()
 
 void CSE_ALifeDynamicObject::try_switch_offline()
 {
+	CoopSpatialScope scope(this);
 	if (!can_switch_offline())
 		return;
 

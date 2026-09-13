@@ -96,6 +96,14 @@ public:
     // get_story_object("actor")) hand out this body instead of the world actor.
     static CGameObject* s_context_body;
     static CGameObject* ContextActor(u16 requested_id);
+    // "Where is the actor?" for the world actor's Lua-visible position (se_actor.position,
+    // db.actor:position()) on the coop server: the body Lua runs for; else the living body nearest
+    // to the ALife object being updated or switched (CoopSpatialScope, set around the scheduled
+    // update and the switch checks); else the body nearest to the world actor's own position.
+    // False (the real position) on clients, in other modes and with no living body.
+    static const CSE_Abstract* s_spatial_context;
+    static bool WorldActorAnchor(const CSE_Abstract* entity, Fvector& position);
+    static bool WorldActorAnchor(const CObject* object, Fvector& position);
     // The living player body nearest to a point (NULL on clients, in other modes, or with no bodies):
     // what an NPC treats as "the actor" for looks, schemes and the player-on-the-path logic.
     static CActor* NearestBody(const Fvector& position);

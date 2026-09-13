@@ -102,6 +102,24 @@ void CPureServerObject::script_register(lua_State* L)
 	];
 }
 
+#ifdef XRGAME_EXPORTS
+bool coop_world_actor_anchor(const CSE_Abstract* entity, Fvector& position); // game_sv_coop.cpp
+#endif
+
+Fvector CSE_Abstract::script_position() const
+{
+#ifdef XRGAME_EXPORTS
+	Fvector anchor;
+	if (coop_world_actor_anchor(this, anchor)) return anchor; // coop: the player nearest to the asking object
+#endif
+	return o_Position;
+}
+
+void CSE_Abstract::script_set_position(const Fvector& position)
+{
+	o_Position = position;
+}
+
 void CSE_Abstract::script_register(lua_State* L)
 {
 	typedef CWrapperBase<CSE_Abstract> WrapType;
@@ -111,7 +129,7 @@ void CSE_Abstract::script_register(lua_State* L)
 		.def_readonly("id", &BaseType::ID)
 		.def_readonly("parent_id", &BaseType::ID_Parent)
 		.def_readonly("script_version", &BaseType::m_script_version)
-		.def_readwrite("position", &BaseType::o_Position)
+		.property("position", &BaseType::script_position, &BaseType::script_set_position)
 		.def_readwrite("angle", &BaseType::o_Angle)
 		.def("section_name", &get_section_name)
 		.def("name", &get_name)

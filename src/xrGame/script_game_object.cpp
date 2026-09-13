@@ -107,7 +107,12 @@ Fbox CScriptGameObject::bounding_box(bool bHud)
 	return object().BoundingBox();
 }
 
-BIND_FUNCTION10(&object(), CScriptGameObject::Position, CGameObject, Position, Fvector, Fvector());
+Fvector CScriptGameObject::Position() const
+{
+	Fvector anchor;
+	if (game_sv_Coop::WorldActorAnchor(&object(), anchor)) return anchor; // coop: the player nearest to the asking object
+	return object().Position();
+}
 BIND_FUNCTION10(&object(), CScriptGameObject::Direction, CGameObject, Direction, Fvector, Fvector());
 BIND_FUNCTION10(&object(), CScriptGameObject::Mass, CPhysicsShellHolder, GetMass, float, float(-1));
 BIND_FUNCTION10(&object(), CScriptGameObject::ID, CGameObject, ID, u16, u16(-1));

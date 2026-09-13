@@ -200,6 +200,7 @@ bool CSE_ALifeOnlineOfflineGroup::synchronize_location()
 
 void CSE_ALifeOnlineOfflineGroup::try_switch_online()
 {
+	CoopSpatialScope scope(this); // coop: see CSE_ALifeDynamicObject::try_switch_online
 	if (m_members.empty())
 		return;
 
@@ -235,6 +236,7 @@ void CSE_ALifeOnlineOfflineGroup::try_switch_online()
 
 void CSE_ALifeOnlineOfflineGroup::try_switch_offline()
 {
+	CoopSpatialScope scope(this);
 	if (m_members.empty())
 		return;
 

@@ -148,6 +148,9 @@ public:
 	//
 
 	IC const Fvector& Position() const { return o_Position; };
+	// Lua "position": the coop server answers for the world actor with the player anchor (game_sv_Coop)
+	Fvector script_position() const;
+	void script_set_position(const Fvector& position);
 	// we need this to prevent virtual inheritance :-(
 	virtual CSE_Abstract* base();
 	virtual const CSE_Abstract* base() const;

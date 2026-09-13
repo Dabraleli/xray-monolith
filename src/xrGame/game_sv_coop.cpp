@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "game_sv_coop.h"
+#include "coop_spatial_scope.h"
 #include "xrServer.h"
 #include "xrMessages.h"
 #include "alife_simulator.h"
@@ -447,6 +448,65 @@ CGameObject* game_sv_Coop::ContextActor(u16 requested_id)
     CSE_ALifeCreatureActor* world = ai().alife().graph().actor();
     if (!world || requested_id != world->ID) return NULL;
     return s_context_body->getDestroy() ? NULL : s_context_body;
+}
+
+const CSE_Abstract* game_sv_Coop::s_spatial_context = NULL;
+
+CoopSpatialScope::CoopSpatialScope(const CSE_Abstract* entity) : saved(game_sv_Coop::s_spatial_context)
+{
+    game_sv_Coop::s_spatial_context = entity;
+}
+
+CoopSpatialScope::~CoopSpatialScope()
+{
+    game_sv_Coop::s_spatial_context = saved;
+}
+
+// -coop_no_actor_anchor: off; -coop_actor_anchor_ctx: only in a body or ALife-object context (no world fallback)
+static int coop_actor_anchor_mode()
+{
+    static int mode = -1;
+    if (mode < 0) mode = strstr(Core.Params, "-coop_no_actor_anchor") ? 0 : strstr(Core.Params, "-coop_actor_anchor_ctx") ? 1 : 2;
+    return mode;
+}
+
+static bool coop_actor_anchor(const Fvector& real, Fvector& position)
+{
+    const int mode = coop_actor_anchor_mode();
+    if (mode == 0) return false;
+    CGameObject* body = game_sv_Coop::s_context_body;
+    if (body && !body->getDestroy())
+    {
+        position = body->Position();
+        return true;
+    }
+    const CSE_Abstract* context = game_sv_Coop::s_spatial_context;
+    if (mode == 1 && !context) return false;
+    CActor* nearest = game_sv_Coop::NearestBody(context ? context->o_Position : real);
+    if (!nearest) return false;
+    position = nearest->Position();
+    return true;
+}
+
+bool game_sv_Coop::WorldActorAnchor(const CSE_Abstract* entity, Fvector& position)
+{
+    if (!entity || !IsGameTypeCoop() || !OnServer() || !ai().get_alife()) return false;
+    if (entity != ai().alife().graph().actor()) return false;
+    return coop_actor_anchor(entity->o_Position, position);
+}
+
+bool game_sv_Coop::WorldActorAnchor(const CObject* object, Fvector& position)
+{
+    if (!object || !IsGameTypeCoop() || !OnServer() || !ai().get_alife()) return false;
+    CSE_ALifeCreatureActor* world = ai().alife().graph().actor();
+    if (!world || object->ID() != world->ID) return false;
+    return coop_actor_anchor(object->Position(), position);
+}
+
+// xrServerEntities (cse_abstract.position) cannot see game_sv_Coop
+bool coop_world_actor_anchor(const CSE_Abstract* entity, Fvector& position)
+{
+    return game_sv_Coop::WorldActorAnchor(entity, position);
 }
 
 CActor* game_sv_Coop::BodyOf(const CObject* object)

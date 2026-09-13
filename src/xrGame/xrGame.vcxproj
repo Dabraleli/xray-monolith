@@ -1176,6 +1176,7 @@
     <ClInclude Include="game_sv_mp_vote_flags.h" />
     <ClInclude Include="game_sv_single.h" />
     <ClInclude Include="game_sv_coop.h" />
+    <ClInclude Include="coop_spatial_scope.h" />
     <ClInclude Include="game_cl_coop.h" />
     <ClInclude Include="game_sv_teamdeathmatch.h" />
     <ClInclude Include="GlobalFeelTouch.hpp" />

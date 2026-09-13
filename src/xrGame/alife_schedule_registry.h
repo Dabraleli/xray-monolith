@@ -12,6 +12,7 @@
 #include "xrServer_Objects_ALife.h"
 #include "ai_debug.h"
 #include "profiler.h"
+#include "coop_spatial_scope.h"
 
 class CALifeScheduleRegistry : public CSafeMapIterator<
 		ALife::_OBJECT_ID, CSE_ALifeSchedulable, std::less<ALife::_OBJECT_ID>, false>
@@ -45,6 +46,7 @@ private:
 		IC void operator()(_iterator& i, u64 cycle_count) const
 		{
 			START_PROFILE("ALife/scheduled/update")
+				CoopSpatialScope scope((*i).second->base()); // coop: "the actor" = the player nearest to this object
 				(*i).second->update();
 			STOP_PROFILE
 		}
