@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "base_monster.h"
+#include "../../../game_sv_coop.h"
 #include "../../../../xrphysics/PhysicsShell.h"
 #include "../../../hit.h"
 #include "../../../PHDestroyable.h"
@@ -143,6 +144,9 @@ CBaseMonster::~CBaseMonster()
 
 void CBaseMonster::update_pos_by_grouping_behaviour()
 {
+    // A replica follows server positions; client flock steering must not
+    // displace it according to a different local neighbourhood.
+    if (IsGameTypeCoop() && Remote()) return;
 	if (!m_grouping_behaviour)
 	{
 		return;
@@ -356,10 +360,24 @@ void CBaseMonster::UpdateCL()
 	control().update_frame();
 
 	m_pPhysics_support->in_UpdateCL();
+    if (IsGameTypeCoop() && Remote() && g_Alive() && NET_Last.coop_layers.ready && strstr(Core.Params,"-coop_npc_motion_probe"))
+    {
+        static xr_map<u16,u32> reports; u32& last=reports[ID()];
+        if (Device.dwTimeGlobal-last>=250)
+        {
+            last=Device.dwTimeGlobal;
+            Fquaternion q; q.set(XFORM()); q.normalize();
+            const float* r=NET_Last.coop_layers.rotation[0];
+            float dot=_abs(q.x*r[0]+q.y*r[1]+q.z*r[2]+q.w*r[3])/_sqrt(r[0]*r[0]+r[1]*r[1]+r[2]*r[2]+r[3]*r[3]); clamp(dot,0.f,1.f);
+            Msg("[COOP_MONSTER_FINAL_POSE] id=%u time=%u root_error=%f",ID(),Level().timeServer(),2.f*acosf(dot));
+        }
+    }
 }
 
 void CBaseMonster::shedule_Update(u32 dt)
 {
+	// Coop server: this monster's Lua (binder, schemes) sees the nearest player body as db.actor.
+	CoopLuaActor coop_actor(game_sv_Coop::NearestBody(Position()), false);
 #ifdef DEBUG
 	if ( is_paused () )
 	{
@@ -540,6 +558,15 @@ float CBaseMonster::evaluate(const CItemManager* manager, const CGameObject* obj
 
 //////////////////////////////////////////////////////////////////////////
 
+void CBaseMonster::import_network_team(int team, int squad, int group)
+{
+    if (team==g_Team() && squad==g_Squad() && group==g_Group()) return;
+    monster_squad().remove_member((u8)g_Team(),(u8)g_Squad(),(u8)g_Group(),this);
+    inherited::import_network_team(team,squad,group);
+    monster_squad().register_member((u8)g_Team(),(u8)g_Squad(),(u8)g_Group(),this);
+    if (m_grouping_behaviour) m_grouping_behaviour->set_squad(monster_squad().get_squad(this));
+}
+
 void CBaseMonster::ChangeTeam(int team, int squad, int group)
 {
 	if ((team == g_Team()) && (squad == g_Squad()) && (group == g_Group())) return;
@@ -594,9 +621,12 @@ void CBaseMonster::set_state_sound(u32 type, bool once)
 			switch (type)
 			{
 			case MonsterSound::eMonsterSoundIdle:
-				// check distance to actor
+			{
+				// check distance to actor (coop server: to the nearest player body)
 
-				if (Actor()->Position().distance_to(Position()) > db().m_fDistantIdleSndRange)
+				CActor* listener = game_sv_Coop::NearestBody(Position());
+				if (!listener) listener = Actor();
+				if (!listener || listener->Position().distance_to(Position()) > db().m_fDistantIdleSndRange)
 				{
 					delay = u32(float(db().m_dwDistantIdleSndDelay) * _sqrt(float(objects_count)));
 					type = MonsterSound::eMonsterSoundIdleDistant;
@@ -607,6 +637,7 @@ void CBaseMonster::set_state_sound(u32 type, bool once)
 				}
 
 				break;
+			}
 			case MonsterSound::eMonsterSoundEat:
 				delay = u32(float(db().m_dwEatSndDelay) * _sqrt(float(objects_count)));
 				break;

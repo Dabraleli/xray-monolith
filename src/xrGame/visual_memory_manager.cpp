@@ -22,6 +22,8 @@
 #include "actor.h"
 #include "../xrEngine/camerabase.h"
 #include "gamepersistent.h"
+#include "level.h"
+#include "../xrEngine/Environment.h"
 #include "actor_memory.h"
 #include "client_spawn_manager.h"
 #include "client_spawn_manager.h"
@@ -318,11 +320,39 @@ float CVisualMemoryManager::object_visible_distance(const CGameObject* game_obje
 	return (distance * m_view_distance_factor);
 }
 
+// The coop server renders nothing, so IRender_ObjectSpecific never samples lighting for
+// any object and every target stays "dark" for AI vision. Estimate the renderer's average
+// lighting from the current weather: ambient, half of the sky hemisphere (the renderer's own
+// initial value) and the sun when a ray toward it is clear. Dynamic light sources are not included.
+static float coop_server_luminocity(const CGameObject* game_object)
+{
+    struct SSample { u32 time; float value; };
+    static xr_map<u16,SSample> samples;
+    SSample& sample = samples[game_object->ID()];
+    if (sample.time && Device.dwTimeGlobal - sample.time < 250) return sample.value;
+    const CEnvDescriptor& env = *GamePersistent().Environment().CurrentEnv;
+    Fvector accum; accum.set(env.ambient.x, env.ambient.y, env.ambient.z);
+    accum.mad(Fvector().set(env.hemi_color.x, env.hemi_color.y, env.hemi_color.z), .5f);
+    Fvector position; game_object->Center(position);
+    Fvector direction; direction.set(env.sun_dir); direction.invert();
+    if (direction.y > EPS)
+    {
+        direction.normalize();
+        if (!Level().ObjectSpace.RayTest(position, direction, 500.f, collide::rqtBoth, NULL, const_cast<CGameObject*>(game_object)))
+            accum.add(Fvector().set(env.sun_color.x, env.sun_color.y, env.sun_color.z));
+    }
+    float value = _max(accum.x, _max(accum.y, accum.z));
+    clamp(value, 0.f, 1.f);
+    sample.time = Device.dwTimeGlobal; sample.value = value;
+    return value;
+}
+
 float CVisualMemoryManager::object_luminocity(const CGameObject* game_object) const
 {
 	if (!smart_cast<CEntityAlive const*>(game_object)) //Alundaio
 		return (1.f);
-	float luminocity = const_cast<CGameObject*>(game_object)->ROS()->get_luminocity();
+    const bool server_estimate = IsGameTypeCoop() && OnServer() && !strstr(Core.Params,"-coop_server_native_luminocity");
+	float luminocity = server_estimate ? coop_server_luminocity(game_object) : const_cast<CGameObject*>(game_object)->ROS()->get_luminocity();
 	float power = log(luminocity > .001f ? luminocity : .001f) * current_state().m_luminocity_factor;
 	return (exp(power));
 }

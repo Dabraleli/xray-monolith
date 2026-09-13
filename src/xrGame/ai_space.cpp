@@ -31,6 +31,7 @@ CAI_Space::CAI_Space()
 {
 	m_ef_storage = 0;
 	m_game_graph = 0;
+    m_coop_spawn_reader = m_coop_graph_reader = 0;
 	m_graph_engine = 0;
 	m_cover_manager = 0;
 	m_level_graph = 0;
@@ -95,6 +96,23 @@ CAI_Space::~CAI_Space()
 	VERIFY(!m_game_graph);
 }
 
+void CAI_Space::load_coop_replica(LPCSTR level_name)
+{
+    R_ASSERT(!m_alife_simulator && !m_game_graph && !m_coop_spawn_reader && !m_coop_graph_reader);
+    // Chunk 4 is exactly the graph used by CALifeSpawnRegistry. Keep both
+    // readers alive: CGameGraph references their mapped bytes directly.
+    // No spawn registry, server entities, or simulation is constructed here.
+    m_coop_spawn_reader = FS.r_open("$game_spawn$", "all.spawn");
+    R_ASSERT2(m_coop_spawn_reader, "Coop client needs matching all.spawn");
+    m_coop_graph_reader = m_coop_spawn_reader->open_chunk(4);
+    R_ASSERT2(m_coop_graph_reader, "Coop all.spawn has no game graph chunk");
+    m_game_graph = xr_new<CGameGraph>(*m_coop_graph_reader);
+    load(level_name); // Also validates graph/cross-table/level GUIDs.
+    R_ASSERT(!m_alife_simulator);
+    Msg("[COOP_CLIENT] REPLICA_GRAPH_READY level=%s alife=0", level_name);
+    FlushLog();
+}
+
 void CAI_Space::load(LPCSTR level_name)
 {
 	VERIFY(m_game_graph);
@@ -153,6 +171,14 @@ void CAI_Space::unload(bool reload)
 	xr_delete(m_graph_engine);
 	xr_delete(m_level_graph);
 
+    if (!reload && m_coop_graph_reader)
+    {
+        R_ASSERT(!m_alife_simulator);
+        xr_delete(m_game_graph);
+        FS.r_close(m_coop_graph_reader);
+        FS.r_close(m_coop_spawn_reader);
+        Msg("[COOP_CLIENT] REPLICA_GRAPH_RELEASE");
+    }
 	if (!reload && m_game_graph)
 		m_graph_engine = xr_new<CGraphEngine>(game_graph().header().vertex_count());
 }

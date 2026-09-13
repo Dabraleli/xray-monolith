@@ -424,6 +424,12 @@ extern CUIXml* g_uiSpotXml;
 
 void CHUDManager::Load()
 {
+    if ((strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_game_ui")))
+    {
+        R_ASSERT(!pUIGame);
+        Msg("[COOP_SERVER] GAME_UI_SKIPPED game_windows=0 pda=0 inventory_window=0");
+        return;
+    }
 	if (!pUIGame)
 	{
 		pUIGame = Game().createGameUI();
@@ -436,6 +442,7 @@ void CHUDManager::Load()
 
 void CHUDManager::OnScreenResolutionChanged()
 {
+    if ((strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_game_ui"))) return;
 	pUIGame->HideShownDialogs();
 
 	xr_delete(pWpnScopeXml);

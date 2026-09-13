@@ -124,6 +124,8 @@ public:
 	};
 
 	bool m_bZoomed;
+	// Coop client: the server's idle arrived while the local showing animation still plays.
+	bool m_coop_idle_pending;
 	eDeferredEnableState m_eDeferredEnable;
 	bool m_bPowerSaving;
 	float m_psy_factor;

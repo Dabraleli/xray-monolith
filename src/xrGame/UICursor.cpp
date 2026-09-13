@@ -1,4 +1,6 @@
 #include "stdafx.h"
+
+static bool coop_no_ui_resources() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_game_ui") && strstr(Core.Params, "-coop_server_no_ui_resources")); }
 #include "uicursor.h"
 
 #include "ui/UIStatic.h"
@@ -34,6 +36,7 @@ void CUICursor::OnScreenResolutionChanged()
 
 void CUICursor::InitInternal()
 {
+    if (coop_no_ui_resources()) { return; }
 	m_static = xr_new<CUIStatic>();
 	m_static->InitTextureEx("ui\\ui_ani_cursor", "hud\\cursor");
 	Frect rect;
@@ -56,6 +59,7 @@ u32 last_render_frame = 0;
 
 void CUICursor::OnRender()
 {
+    if (coop_no_ui_resources()) { return; }
 	g_btnHint->OnRender();
 	g_statHint->OnRender();
 
@@ -127,6 +131,7 @@ void CUICursor::UpdateCursorPosition(int _dx, int _dy)
 void CUICursor::SetUICursorPosition(Fvector2 pos)
 {
 	vPos = pos;
+    if (coop_no_ui_resources()) return; // Service cursor belongs to Windows.
 	POINT p;
 	p.x = iFloor(vPos.x / (UI_BASE_WIDTH / (float)Device.clientWidth));
 	p.y = iFloor(vPos.y / (UI_BASE_HEIGHT / (float)Device.clientHeight));

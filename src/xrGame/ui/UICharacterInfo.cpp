@@ -32,8 +32,16 @@ CSE_ALifeTraderAbstract* ch_info_get_from_id(u16 id)
 	}
 	else
 	{
+		// A pure client (coop) has no server entities at all.
+		if (!Level().Server || !Level().Server->game) return NULL;
 		return smart_cast<CSE_ALifeTraderAbstract*>(Level().Server->game->get_entity_from_eid(id));
 	}
+}
+
+// Coop client: the profile and the generated name that came with the spawn packet live in the game object.
+static CInventoryOwner* ch_info_owner_from_object(u16 id)
+{
+	return smart_cast<CInventoryOwner*>(Level().Objects.net_Find(id));
 }
 
 CUICharacterInfo::CUICharacterInfo()
@@ -154,10 +162,30 @@ void CUICharacterInfo::InitCharacter(u16 id)
 
 	CSE_ALifeTraderAbstract* T = ch_info_get_from_id(m_ownerID);
 
-	CCharacterInfo chInfo;
-	chInfo.Init(T);
+	CCharacterInfo serverInfo;
+	const CCharacterInfo* info = NULL;
+	shared_str character_name;
+	if (T)
+	{
+		serverInfo.Init(T);
+		info = &serverInfo;
+		character_name = T->m_character_name.c_str();
+	}
+	else
+	{
+		// Coop client: no server entity here, read the replica's own profile and game name.
+		CInventoryOwner* owner = ch_info_owner_from_object(m_ownerID);
+		if (!owner)
+		{
+			ClearInfo();
+			return;
+		}
+		info = &owner->CharacterInfo();
+		character_name = owner->Name();
+	}
+	const CCharacterInfo& chInfo = *info;
 
-	if (m_icons[eName]) { m_icons[eName]->TextItemControl()->SetTextST(T->m_character_name.c_str()); }
+	if (m_icons[eName]) { m_icons[eName]->TextItemControl()->SetTextST(character_name.c_str()); }
 	if (m_icons[eRank]) { m_icons[eRank]->TextItemControl()->SetTextST(GetRankAsText(chInfo.Rank().value())); }
 	if (m_icons[eCommunity]) { m_icons[eCommunity]->TextItemControl()->SetTextST(chInfo.Community().id().c_str()); }
 	if (m_icons[eReputation])
@@ -297,6 +325,13 @@ void CUICharacterInfo::UpdateRelation()
 		CSE_ALifeTraderAbstract* T = ch_info_get_from_id(m_ownerID);
 		CSE_ALifeTraderAbstract* TA = ch_info_get_from_id(Actor()->ID());
 
+		if (!T || !TA)
+		{
+			// Coop client: relations are server state; nothing to show yet.
+			m_icons[eRelationCaption]->Show(false);
+			m_icons[eRelation]->Show(false);
+			return;
+		}
 		SetRelation(RELATION_REGISTRY().GetRelationType(T, TA), RELATION_REGISTRY().GetAttitude(T, TA));
 	}
 }
@@ -318,7 +353,9 @@ void CUICharacterInfo::Update()
 		CSE_ALifeTraderAbstract* T = detail::object_exists_in_alife_registry(m_ownerID)
 			                             ? ch_info_get_from_id(m_ownerID)
 			                             : NULL;
-		if (NULL == T)
+		// Coop client: keep the panel while the replica exists; there is no server entity to ask.
+		CEntityAlive* replica = (!T && IsGameTypeCoop() && OnClient()) ? smart_cast<CEntityAlive*>(Level().Objects.net_Find(m_ownerID)) : NULL;
+		if (NULL == T && NULL == replica)
 		{
 			m_ownerID = u16(-1);
 			return;
@@ -331,7 +368,7 @@ void CUICharacterInfo::Update()
 		if (m_icons[eIcon])
 		{
 			CSE_ALifeCreatureAbstract* pCreature = smart_cast<CSE_ALifeCreatureAbstract*>(T);
-			if (pCreature && !pCreature->g_Alive())
+			if ((pCreature && !pCreature->g_Alive()) || (replica && !replica->g_Alive()))
 			{
 				m_icons[eIcon]->SetTextureColor(color_argb(255, 255, 160, 160));
 			}

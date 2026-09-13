@@ -40,6 +40,7 @@
 #include "MainMenu.h"
 #include "xrEngine/XR_IOConsole.h"
 #include "actor.h"
+#include "inventory_upgrade_manager.h"
 #include "player_hud.h"
 #include "UI/UIGameTutorial.h"
 #include "file_transfer.h"
@@ -81,6 +82,12 @@ u32 lvInterpSteps = 0;
 BOOL spawn_antifreeze = TRUE;
 BOOL spawn_antifreeze_debug = FALSE;
 static HANDLE prefetch_thread_signal;
+// Set by the prefetch thread as it leaves: the level's destructor waits for it before the spawn
+// queues and the render's level resources go — the thread was still loading models for queued
+// spawns (a coop client receives its level's spawns after the load, and a second level change
+// came while they were prefetching), reading freed queues and creating shaders under level_Unload
+// (heap corruption 121, shader crashes 120/123).
+static HANDLE prefetch_thread_exited;
 
 static void unpausePrefetchThreadSignal()
 {
@@ -104,6 +111,25 @@ static void createPrefetchThreadSignal()
 {
 	if (spawn_antifreeze_debug) Msg("prefetch_thread_signal CreateEvent");
 	prefetch_thread_signal = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+	prefetch_thread_exited = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+}
+
+// The level's destructor: the thread finishes the batch it is on, sees the close signal and leaves.
+static void joinPrefetchThread()
+{
+	const u32 started = GetTickCount();
+	while (WaitForSingleObject(prefetch_thread_exited, 100) == WAIT_TIMEOUT)
+	{
+		if (GetTickCount() - started > 60000)
+		{
+			Msg("! CLevel: the spawn prefetch thread did not exit in 60 s");
+			break;
+		}
+		SetEvent(prefetch_thread_signal); // again: the thread resets it after taking a batch
+	}
+	closePrefetchThreadSignal();
+	CloseHandle(prefetch_thread_exited);
+	prefetch_thread_exited = nullptr;
 }
 
 struct spawn_and_prefetch_events
@@ -268,6 +294,13 @@ CLevel::CLevel() :
     g_player_hud->load_default();
 
 #ifdef SPAWN_ANTIFREEZE
+    // Coop client: its level's objects arrive after the load, hundreds of spawns at once, and the
+    // prefetch thread then loads their models — creating shaders while the main thread releases
+    // others. The resource manager shares vertex shaders and passes by name with a refcount that is
+    // not taken under its creation guard: a shader found by the thread as the main thread freed it
+    // left a level pass with a dead vertex shader, crashing the next level unload (120–124). The
+    // spawns go the vanilla way here, synchronous; SP keeps its antifreeze.
+    if (strstr(Core.Params, "-coop_client")) spawn_antifreeze = FALSE;
     spawn_events = xr_new<NET_Queue_Event>();
     spawn_events_data = xr_new<spawn_events_data_map>();
     prefetch_events = xr_new<prefetch_event_queue>();
@@ -287,7 +320,9 @@ extern CAI_Space* g_ai_space;
 CLevel::~CLevel()
 {
 	//crash_saving::save_impl = nullptr; // CLevel not available, disable crash save
+	coop_heap_check("~CLevel: begin");
 	xr_delete(g_player_hud);
+	coop_heap_check("~CLevel: player hud deleted");
 	delete_data(m_script_attachments);
 	delete_data(hud_zones_list);
 	hud_zones_list = nullptr;
@@ -327,14 +362,16 @@ CLevel::~CLevel()
         ai().script_engine().remove_script_process(ScriptEngine::eScriptProcessorLevel);
     xr_delete(game);
     xr_delete(game_events);
+    inventory::upgrade::coop_manager_destroy(); // a coop client's own upgrade manager (objects are gone)
 
 #ifdef SPAWN_ANTIFREEZE
+    closeSignal = true; // signal ProcessPrefetchEvents thread to exit
+    unpausePrefetchThreadSignal();
+    joinPrefetchThread(); // the queues and the render's level resources outlive the thread
     xr_delete(spawn_events);
     xr_delete(spawn_events_data);
     xr_delete(prefetch_events);
     xr_delete(prefetched_models);
-    closeSignal = true; // signal ProcessPrefetchEvents thread to exit
-    unpausePrefetchThreadSignal();
 #endif
 
     xr_delete(m_pBulletManager);
@@ -344,12 +381,15 @@ CLevel::~CLevel()
     xr_delete(m_ph_commander_scripts);
     pObjects4CrPr.clear();
     pActors4CrPr.clear();
+    coop_heap_check("~CLevel: before ai unload");
     ai().unload();
+    coop_heap_check("~CLevel: after ai unload");
 #ifdef DEBUG
     xr_delete(m_level_debug);
 #endif
     xr_delete(m_map_manager);
     delete_data(m_game_task_manager);
+    coop_heap_check("~CLevel: managers deleted");
     // here we clean default trade params
     // because they should be new for each saved/loaded game
     // and I didn't find better place to put this code in
@@ -434,6 +474,21 @@ void CLevel::cl_Process_Event(u16 dest, u16 type, NET_Packet& P)
 {
     // Msg("--- event[%d] for [%d]",type,dest);
     CObject* O = Objects.net_Find(dest);
+    // Coop client: the story book. On the server every player body reads and writes the world
+    // actor's info portions (one shared book); an info given to the world actor (id 0, never
+    // spawned here) or to any body is mirrored for has_alife_info of the item scripts and UI.
+    if (IsGameTypeCoop() && OnClient() && type == GE_INFO_TRANSFER && (dest == 0 || smart_cast<CActor*>(O)))
+    {
+        const u32 position = P.r_tell();
+        P.r_u16();
+        shared_str info_id;
+        P.r_stringZ(info_id);
+        const bool add = !!P.r_u8();
+        P.r_seek(position);
+        ::luabind::functor<void> functor;
+        if (ai().script_engine().functor("coop_client_actor.on_world_info", functor))
+            functor(info_id.c_str(), add);
+    }
     if (0 == O)
     {
 #ifdef DEBUG
@@ -571,8 +626,8 @@ void CLevel::ProcessPrefetchEvents(void* args)
         if (*closeSignal == true)
         {
             if (spawn_antifreeze_debug) Msg("[ProcessPrefetchEvents] closeSignal received, destroying thread");
-            closePrefetchThreadSignal();
             delete events;
+            SetEvent(prefetch_thread_exited); // the level's destructor waits for this and closes the signals
             return;
         }
 
@@ -680,7 +735,7 @@ void CLevel::ProcessSpawnEvents()
         {
             if (spawn_data_it->second.hasAlifeObject)
             {
-                auto obj = ai().alife().objects().object(obj_id);
+                auto obj = ai().get_alife() ? ai().alife().objects().object(obj_id) : nullptr;
                 if (!obj || !obj->m_bOnline)
                 {
                     if (spawn_antifreeze_debug) Msg("![ProcessSpawnEvents] object absent or offline, do not spawn, section %s, obj_id %d, parent_id %d, event_id %d", section.c_str(), obj_id, parent_id, dest);
@@ -690,7 +745,9 @@ void CLevel::ProcessSpawnEvents()
         }        
 
 		// If there is a parent of this object, check if its still in alife
-		if (parent_id != 0xffff)
+		// Without an A-Life simulator there is nothing to check the parent
+		// against, and the spawn has to go through regardless.
+		if (parent_id != 0xffff && ai().get_alife())
 		{
 			auto parent_obj = ai().alife().objects().object(parent_id);
 			if (!parent_obj || !parent_obj->m_bOnline)
@@ -711,6 +768,12 @@ void CLevel::ProcessSpawnEvents()
 void CLevel::ProcessGameEvents()
 {
 	PROF_EVENT("ProcessGameEvents");
+
+#ifdef XR_USE_ENET
+	// ENet is polled; DirectPlay pushed from its own threads. Draining the
+	// socket here means this frame's packets are already in the queue below.
+	Poll();
+#endif
 
 	xr_vector<NET_Event> events_to_process;
 	xr_vector<prefetch_event> events_to_prefetch;
@@ -815,7 +878,10 @@ void CLevel::ProcessGameEvents()
 							safe_insert(models, pSettings->r_string(section, "Predator_Visual"));
 						}*/
 
-						auto obj = ai().alife().objects().object(obj_id);
+						// Multiplayer runs without an A-Life simulator, so there is no
+						// server object to read a visual from -- the section's own visual,
+						// collected above, is everything there is.
+						auto obj = ai().get_alife() ? ai().alife().objects().object(obj_id) : nullptr;
 
 						// Actual visual from alife object
 						if (obj && obj->visual())
@@ -983,9 +1049,18 @@ void CLevel::OnFrame()
 #ifdef DEBUG
     DBG_RenderUpdate();
 #endif
+	{
+		// Coop diagnostics: a heap check every few seconds of play brackets a corruption in time.
+		static u32 next_heap_check = 0;
+		if (Device.dwTimeGlobal >= next_heap_check)
+		{
+			next_heap_check = Device.dwTimeGlobal + 4000;
+			coop_heap_check("frame");
+		}
+	}
 	Fvector temp_vector;
 	m_feel_deny.feel_touch_update(temp_vector, 0.f);
-	if (GameID() != eGameIDSingle)
+	if (GameID() != eGameIDSingle && !IsGameTypeCoop()) // coop as SP: crows fly
 		psDeviceFlags.set(rsDisableObjectsAsCrows, true);
 	else
 		psDeviceFlags.set(rsDisableObjectsAsCrows, false);
@@ -1037,7 +1112,9 @@ void CLevel::OnFrame()
 			Device.seqParallel.push_back(fastdelegate::FastDelegate0<>(m_map_manager, &CMapManager::Update));
 		else
 			MapManager().Update();
-		if (IsGameTypeSingle() && Device.dwPrecacheFrame == 0)
+		// Coop: the server evaluates task conditions (its tasks are the shared truth), the client's
+		// copies only keep the active task and its map pointer (they carry no infos or functors).
+		if ((IsGameTypeSingle() || IsGameTypeCoop()) && Device.dwPrecacheFrame == 0)
 		{
 			// XXX nitrocaster: was enabled in x-ray 1.5; to be restored or removed
 			//if (g_mt_config.test(mtMap))

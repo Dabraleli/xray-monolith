@@ -1,4 +1,6 @@
 #include "stdafx.h"
+
+static bool coop_no_ui_resources() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_game_ui") && strstr(Core.Params, "-coop_server_no_ui_resources")); }
 #include "HUDTarget.h"
 
 #include "player_hud.h"
@@ -234,6 +236,12 @@ void TargetCrosshair::Render(const SPickParam& pp)
 	crosshair.OnRender(Is(CROSSHAIR_USE_SHADER));
 }
 
+CrosshairPair::CrosshairPair(CrosshairSettings& settings_near, CrosshairSettings& settings_far)
+    : crosshair_near(settings_near), crosshair_far(settings_far)
+{
+    if (!coop_no_ui_resources()) shaderWire->create("hud\\crosshair");
+}
+
 void CrosshairPair::Load()
 {
 	crosshair_near.Load();
@@ -357,6 +365,7 @@ CHUDTarget::~CHUDTarget()
 
 void CHUDTarget::Load()
 {
+    if (coop_no_ui_resources()) { Msg("[COOP_SERVER] CROSSHAIR_SKIPPED"); return; }
 	m_camera.Load();
 	m_weapon.Load();
 	m_device.Load();
@@ -369,6 +378,7 @@ void CHUDTarget::ShowCrosshair(bool b)
 
 void CHUDTarget::Render()
 {
+    if (coop_no_ui_resources()) { return; }
 	CActor* pActor = Actor();
 
 	if (!pActor)

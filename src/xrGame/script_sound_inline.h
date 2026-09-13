@@ -82,23 +82,7 @@ IC void CScriptSound::AttachTail(LPCSTR caSoundName)
 	m_sound.attach_tail(caSoundName);
 }
 
-IC void CScriptSound::Stop()
-{
-	VERIFY(m_sound._handle());
-	m_sound.stop();
-}
-
-IC void CScriptSound::StopDeffered()
-{
-	VERIFY(m_sound._handle());
-	m_sound.stop_deffered();
-}
-
-IC void CScriptSound::SetPosition(const Fvector& position)
-{
-	VERIFY(m_sound._handle());
-	m_sound.set_position(position);
-}
+// Stop, StopDeffered and SetPosition: script_sound.cpp (the coop server relays them to the clients).
 
 IC void CScriptSound::SetFrequency(float frequency)
 {

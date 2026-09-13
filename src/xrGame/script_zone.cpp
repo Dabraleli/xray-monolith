@@ -13,6 +13,8 @@
 #include "../xrEngine/xr_collide_form.h"
 #include "script_callback_ex.h"
 #include "game_object_space.h"
+#include "game_sv_coop.h"
+#include "Actor.h"
 
 #ifdef DEBUG
 #	include "level.h"
@@ -57,12 +59,27 @@ void CScriptZone::shedule_Update(u32 dt)
 	feel_touch_update(P, s.R);
 }
 
+// Coop server: another player body still inside this zone (the leaving one is already out of
+// feel_touch). Lua keeps one "actor inside" flag per zone (db.actor_inside_zones), so the exit of
+// one player must not clear it while another player stays.
+bool CScriptZone::coop_other_body_inside(const CObject* leaving) const
+{
+	xr_vector<CObject*>::const_iterator I = feel_touch.begin();
+	xr_vector<CObject*>::const_iterator E = feel_touch.end();
+	for (; I != E; ++I)
+		if (*I != leaving && !(*I)->getDestroy() && game_sv_Coop::BodyOf(*I))
+			return (true);
+	return (false);
+}
+
 void CScriptZone::feel_touch_new(CObject* tpObject)
 {
 	CGameObject* l_tpGameObject = smart_cast<CGameObject*>(tpObject);
 	if (!l_tpGameObject)
 		return;
 
+	// Coop: a player body enters as "the actor" (bind_restrictor compares obj:id() with AC_ID).
+	CoopLuaActor coop_actor(game_sv_Coop::BodyOf(tpObject), false);
 	callback(GameObject::eZoneEnter)(lua_game_object(), l_tpGameObject->lua_game_object());
 }
 
@@ -73,6 +90,10 @@ void CScriptZone::feel_touch_delete(CObject* tpObject)
 	if (!l_tpGameObject || l_tpGameObject->getDestroy())
 		return;
 
+	CActor* body = game_sv_Coop::BodyOf(tpObject);
+	if (body && coop_other_body_inside(tpObject))
+		return; // the zone still holds a player
+	CoopLuaActor coop_actor(body, false);
 	callback(GameObject::eZoneExit)(lua_game_object(), l_tpGameObject->lua_game_object());
 }
 
@@ -85,6 +106,10 @@ void CScriptZone::net_Relcase(CObject* O)
 	xr_vector<CObject*>::iterator I = std::find(feel_touch.begin(), feel_touch.end(), O);
 	if (I != feel_touch.end())
 	{
+		CActor* body = game_sv_Coop::BodyOf(O);
+		if (body && coop_other_body_inside(O))
+			return;
+		CoopLuaActor coop_actor(body, false);
 		callback(GameObject::eZoneExit)(lua_game_object(), l_tpGameObject->lua_game_object());
 	}
 }

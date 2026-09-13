@@ -92,7 +92,8 @@ void CUIPdaWnd::Init()
 	CUIXmlInit::InitProgressBar(uiXml, "battery_bar", 0, m_battery_bar);
 	m_battery_bar->Show(true);
 
-	if (IsGameTypeSingle())
+	// Coop: the PDA is the single-player one (tasks mirrored from the server, map, ranking, logs).
+	if (IsGameTypeSingle() || IsGameTypeCoop())
 	{
 		pUITaskWnd = xr_new<CUITaskWnd>();
 		pUITaskWnd->hint_wnd = m_hint_wnd;

@@ -155,6 +155,7 @@ MotionID CStalkerAnimationManager::legs_move_animation()
 
 	if (eMentalStateDanger != movement.mental_state())
 	{
+        if (IsGameTypeCoop()) m_previous_speed_direction = eMovementDirectionForward;
 		m_target_speed = movement.speed(eMovementDirectionForward);
 		m_last_non_zero_speed = m_target_speed;
 
@@ -171,7 +172,7 @@ MotionID CStalkerAnimationManager::legs_move_animation()
 	object().sight().GetDirectionAngles(yaw, pitch);
 
 	yaw = angle_normalize_signed(-yaw);;
-	legs_process_direction(yaw);
+	if (!(IsGameTypeCoop() && object().Remote())) legs_process_direction(yaw);
 
 	float body_current = movement.body_orientation().current.yaw;
 	bool left = left_angle(yaw, body_current);
@@ -202,6 +203,8 @@ MotionID CStalkerAnimationManager::legs_move_animation()
 		}
 	}
 
+    if (IsGameTypeCoop() && object().Remote())
+        speed_direction = EMovementDirection(object().network_gait_direction());
 	if (m_previous_speed_direction != speed_direction)
 	{
 		if (m_change_direction_time < Device.dwTimeGlobal)

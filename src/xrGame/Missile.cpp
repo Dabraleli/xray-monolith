@@ -33,8 +33,16 @@ CUIProgressShape* g_MissileForceShape = NULL;
 #ifdef SPAWN_ANTIFREEZE
 xrCriticalSection force_progress_cs;
 #endif
+static bool coop_no_missile_ui()
+{
+    return IsGameTypeCoop() && strstr(Core.Params, "-coop_server_probe") &&
+        strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_no_ui_resources");
+}
+
 void create_force_progress()
 {
+    // NPC throws use this same path; a headless server needs no throw meter.
+    if (coop_no_missile_ui()) return;
 #ifdef SPAWN_ANTIFREEZE
 	xrCriticalSectionGuard g(force_progress_cs);
 #endif
@@ -803,12 +811,14 @@ u32 CMissile::ef_weapon_type() const
 
 bool CMissile::render_item_ui_query()
 {
+    if (coop_no_missile_ui()) return false;
 	bool b_is_active_item = m_pInventory->ActiveItem() == this;
 	return b_is_active_item && (GetState() == eReady) && !m_throw && smart_cast<CActor*>(H_Parent());
 }
 
 void CMissile::render_item_ui()
 {
+    if (coop_no_missile_ui()) return;
 	CActor* actor = smart_cast<CActor*>(H_Parent());
 	R_ASSERT(actor);
 

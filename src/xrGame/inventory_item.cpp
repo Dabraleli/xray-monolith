@@ -25,6 +25,9 @@
 #include "ai_object_location.h"
 #include "object_broker.h"
 #include "../xrEngine/igame_persistent.h"
+#include "eatable_item.h"
+#include "Weapon.h"
+#include "inventory_upgrade_manager.h"
 
 
 #ifdef DEBUG
@@ -285,10 +288,59 @@ void CInventoryItem::OnEvent(NET_Packet& P, u16 type)
 			pSyncObj->set_State(state);
 		}
 		break;
+	case GE_INSTALL_UPGRADE:
+		{
+			// Coop client: an upgrade installed on the server's object (another player's mechanic
+			// window, or the server Lua) reaches the replica as at spawn - no effects, no event back.
+			shared_str upgrade_id;
+			P.r_stringZ(upgrade_id);
+			if (IsGameTypeCoop() && OnClient() && !has_upgrade(upgrade_id) && inventory::upgrade::manager_available())
+				inventory::upgrade::manager().upgrade_install(*this, upgrade_id, true);
+		}
+		break;
+	case GE_COOP_ITEM_STATE:
+		{
+			// Coop client: the server's condition / remaining uses / loaded ammo of an item this
+			// player holds (game_sv_Coop::UpdateItemStates); carried items get no regular updates.
+			const float condition = P.r_float();
+			const u8 uses = P.r_u8();
+			const u16 ammo = P.r_u16();
+			SInvItemPlace place;
+			place.value = P.r_u16();
+			if (!IsGameTypeCoop() || !OnClient()) break;
+			if (_valid(condition)) m_fCondition = condition;
+			clamp(m_fCondition, 0.f, 1.f);
+			if (uses != 0xff)
+				if (CEatableItem* eatable = cast_eatable_item()) eatable->SetRemainingUses(uses);
+			if (ammo != 0xffff)
+				if (CWeapon* weapon = smart_cast<CWeapon*>(this)) weapon->SetAmmoElapsed(ammo);
+			// The server's place of the item in this player's inventory. The spawn of a returning
+			// player's items carries no saved state to a client (CoopHideClientData), so the
+			// outfit, helmet, backpack and PDA landed in the ruck by their default (132); the
+			// client's own moves reach the server first (GEG_PLAYER_ITEM2SLOT/BELT/RUCK), so
+			// following the server never fights them.
+			CActor* actor = smart_cast<CActor*>(Level().CurrentControlEntity());
+			if (!actor || !m_pInventory || m_pInventory != &actor->inventory()) break;
+			const bool differs = place.type != m_ItemCurrPlace.type ||
+				(place.type == eItemPlaceSlot && place.slot_id != m_ItemCurrPlace.slot_id);
+			if (!differs) break;
+			if (place.type == eItemPlaceSlot && place.slot_id != NO_ACTIVE_SLOT && place.slot_id <= LAST_SLOT)
+			{
+				// the slot's present holder (the client's default placement) goes to the ruck; its own state moves it on
+				PIItem holder = m_pInventory->ItemFromSlot(place.slot_id);
+				if (holder && holder != this) m_pInventory->Ruck(holder, true);
+				m_pInventory->Slot(place.slot_id, this, true, true);
+			}
+			else if (place.type == eItemPlaceBelt)
+				m_pInventory->Belt(this, true);
+			else if (place.type == eItemPlaceRuck)
+				m_pInventory->Ruck(this, true);
+		}
+		break;
 	}
 }
 
-//процесс отсоединения вещи заключается в спауне новой вещи 
+//процесс отсоединения вещи заключается в спауне новой вещи
 //в инвентаре и установке соответствующих флагов в родительском
 //объекте, поэтому функция должна быть переопределена
 bool CInventoryItem::Detach(const char* item_section_name, bool b_spawn_item)
@@ -360,7 +412,9 @@ BOOL CInventoryItem::net_Spawn(CSE_Abstract* DC)
 	//!!!
 	m_fCondition = pSE_InventoryItem->m_fCondition;
 
-	if (IsGameTypeSingle())
+	// Coop as SP: the saved upgrades go onto the server's object and the clients' replicas (the
+	// client has its own upgrade manager) - MP never installs any, and a loaded world lost them (132).
+	if (IsGameTypeSingle() || IsGameTypeCoop())
 	{
 		net_Spawn_install_upgrades(pSE_InventoryItem->m_upgrades);
 	}
@@ -1423,7 +1477,7 @@ void CInventoryItem::modify_holder_params(float& range, float& fov) const
 
 bool CInventoryItem::NeedToDestroyObject() const
 {
-	if (GameID() == eGameIDSingle)
+	if (GameID() == eGameIDSingle || IsGameTypeCoop()) // coop as SP: dropped items stay (MP removed them after 30 s); ALife cleans up as in SP
 		return false;
 
 	if (GameID() == eGameIDCaptureTheArtefact)

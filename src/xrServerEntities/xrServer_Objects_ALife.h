@@ -30,6 +30,10 @@ class CSE_ALifeObject;
 #ifdef XRGAME_EXPORTS
 class CALifeSmartTerrainTask;
 #endif //#ifdef XRGAME_EXPORTS
+
+// True on the coop server and coop clients only: server entities may carry extra update fields
+// (physic shell elements, trader animations) without touching single-player packets and saves.
+bool coop_net_runtime();
 class CALifeMonsterAbstract;
 
 
@@ -451,6 +455,11 @@ public:
 	bool prev_freezed;
 	bool freezed;
 	SPHNetState State;
+	// Coop: the states of the other shell elements (a door leaf on its hinge) follow the update
+	// as an opaque tail written by CPhysicObject::net_Export and passed on to the clients.
+	xr_vector<u8> coop_elements;
+	static const u32 coop_element_record;
+	static bool coop_physic_runtime();
 
 	virtual BOOL Net_Relevant();
 

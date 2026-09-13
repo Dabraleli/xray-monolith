@@ -16,6 +16,7 @@
 #include "file_transfer.h"
 #include "message_filter.h"
 #include "../xrphysics/iphworld.h"
+#include "game_cl_coop.h"
 
 extern LPCSTR map_ver_string;
 
@@ -60,6 +61,14 @@ void CLevel::ClientReceive()
 {
 	m_dwRPC = 0;
 	m_dwRPS = 0;
+
+#ifdef XR_USE_ENET
+	// This function only drains the message queue; DirectPlay filled that queue
+	// from its own threads. ENet is pull based, so the socket has to be serviced
+	// right here -- every blocking wait in the engine goes through ClientReceive,
+	// and without this they wait for packets nobody ever collects.
+	Poll();
+#endif
 
 	if (IsDemoPlayStarted())
 	{
@@ -314,11 +323,25 @@ void CLevel::ClientReceive()
                 Device.LuaGC.clear();
                 Device.LuaGCDebug.clear();
 
+				// Coop: the server's "load" or a level change restarts the whole world on the server
+				// (game_sv_Coop::Create must run again: bodies, store), never the in-place QuickLoad;
+				// a player's client has no world of its own: it drops to the menu and comes back on
+				// its own once the server is up again (game_cl_Coop::ScheduleReconnect).
+				if (IsGameTypeCoop() && OnClient())
+				{
+					Msg("[COOP_CLIENT] SERVER_RESTART message=%u: disconnecting, reconnecting when the server is back", m_type);
+					coop_heap_check("change level message");
+					game_cl_Coop::ScheduleReconnect();
+					Engine.Event.Defer("KERNEL:disconnect");
+					break;
+				}
 				if (m_type == M_LOAD_GAME)
 				{
 					string256 saved_name;
 					P->r_stringZ_s(saved_name);
-					if (xr_strlen(saved_name) && ai().get_alife())
+					if (IsGameTypeCoop())
+						Msg("[COOP_SERVER] RELOAD save=%s: restarting the world", saved_name);
+					else if (xr_strlen(saved_name) && ai().get_alife())
 					{
 						CSavedGameWrapper wrapper(saved_name);
 						if (wrapper.level_id() == ai().level_graph().level_id())
@@ -351,6 +374,48 @@ void CLevel::ClientReceive()
 		case M_CLIENT_CONNECT_RESULT:
 			{
 				OnConnectResult(P);
+			}
+			break;
+		case M_COOP_PLAYER_STORE:
+			{
+				if (game && IsGameTypeCoop() && !OnServer())
+					static_cast<game_cl_Coop*>(game)->OnPlayerStore(*P);
+			}
+			break;
+		case M_COOP_TALK:
+			{
+				if (game && IsGameTypeCoop() && !OnServer())
+					static_cast<game_cl_Coop*>(game)->OnTalkMessage(*P);
+			}
+			break;
+		case M_COOP_PDA:
+			{
+				if (game && IsGameTypeCoop() && !OnServer())
+					static_cast<game_cl_Coop*>(game)->OnPdaMessage(*P);
+			}
+			break;
+		case M_COOP_LUA:
+			{
+				if (game && IsGameTypeCoop() && !OnServer())
+					static_cast<game_cl_Coop*>(game)->OnLuaMessage(*P);
+			}
+			break;
+		case M_COOP_TRADE:
+			{
+				if (game && IsGameTypeCoop() && !OnServer())
+					static_cast<game_cl_Coop*>(game)->OnTradeMessage(*P);
+			}
+			break;
+		case M_COOP_SOUND:
+			{
+				if (game && IsGameTypeCoop() && !OnServer())
+					static_cast<game_cl_Coop*>(game)->OnSoundMessage(*P);
+			}
+			break;
+		case M_COOP_SHOT:
+			{
+				if (game && IsGameTypeCoop() && !OnServer())
+					static_cast<game_cl_Coop*>(game)->OnShotMessage(*P);
 			}
 			break;
 		case M_CHAT_MESSAGE:

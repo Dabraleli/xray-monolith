@@ -146,6 +146,7 @@ CActor::pickup_result_t CActor::PickupModeUpdate()
 
 	feel_touch_update(Position(), m_fPickupInfoRadius);
 
+	if (!CurrentGameUI()) return {true, callback_handled}; // No pickup labels on the server.
 	if (!CurrentGameUI()->GetPdaMenu().IsShown())
 		DrawPickupItems();
 	else
@@ -174,7 +175,7 @@ void CActor::PickupModeUpdate_COD(pickup_result_t pickup_result)
 
 	if (!g_Alive() || eacFirstEye != cam_active || !psDeviceFlags2.test(rsCODPickup))
 	{
-		CurrentGameUI()->UIMainIngameWnd->SetPickUpItem(nullptr);
+		if (CurrentGameUI()) CurrentGameUI()->UIMainIngameWnd->SetPickUpItem(nullptr);
 		return;
 	};
 
@@ -237,7 +238,7 @@ void CActor::PickupModeUpdate_COD(pickup_result_t pickup_result)
 			pNearestItem = NULL;
 	}
 
-	CurrentGameUI()->UIMainIngameWnd->SetPickUpItem(pNearestItem);
+	if (CurrentGameUI()) CurrentGameUI()->UIMainIngameWnd->SetPickUpItem(pNearestItem);
 
 	{
 		::luabind::functor<void> func;
@@ -359,7 +360,7 @@ void CActor::feel_sound_new(CObject* who, int type, CSound_UserDataPtr user_data
 
 void CActor::Feel_Grenade_Update( float rad )
 {
-	if ( !IsGameTypeSingle() )
+	if ( !IsGameTypeSingle() && !(IsGameTypeCoop() && OnClient()) ) // coop as SP on a client: the grenade danger marks
 	{
 		return;
 	}

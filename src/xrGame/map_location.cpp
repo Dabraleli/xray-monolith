@@ -1,4 +1,6 @@
 #include "stdafx.h"
+
+static bool coop_no_residual_graphics() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_no_render_streams") && strstr(Core.Params, "-coop_server_no_residual_graphics")); }
 #include "map_location.h"
 #include "map_spot.h"
 #include "map_manager.h"
@@ -65,6 +67,19 @@ CMapLocation::CMapLocation(LPCSTR type, u16 object_id)
 	m_cached.m_graphID = GameGraph::_GRAPH_ID(-1);
 	if (!IsGameTypeSingle())
 		m_cached.m_LevelName = Level().name();
+	m_coop_external = false;
+	m_coop_position.set(0.f, 0.f, 0.f);
+}
+
+void CMapLocation::InitCoopExternal(LPCSTR level_name, const Fvector& position)
+{
+	if (!level_name || !*level_name) return;
+	m_coop_external = true;
+	m_coop_level = level_name;
+	m_coop_position = position;
+	m_cached.m_LevelName = m_coop_level;
+	m_position_global = position;
+	m_cached.m_Position.set(position.x, position.z);
 }
 
 CMapLocation::~CMapLocation()
@@ -130,6 +145,15 @@ void CMapLocation::LoadSpot(LPCSTR type, bool bReload)
 	{
 		m_flags.set(ePosToActor, TRUE);
 	}
+
+    if (coop_no_residual_graphics())
+    {
+        // Keep the registered location and its hint/TTL/serialization/position flags.
+        // Only PDA widgets and their textures are absent on this server.
+        Msg("[COOP_SERVER] MAP_LOCATION_CPU id=%u type=%s ttl=%d flags=%u widgets=0",
+            u32(m_objectID), type, m_ttl, u32(m_flags.flags));
+        return;
+    }
 
 	strconcat(sizeof(path), path, path_base, ":level_map");
 	node = g_uiSpotXml->NavigateToNode(path, 0);
@@ -260,6 +284,11 @@ void CMapLocation::CalcPosition()
 			m_position_global = m_owner_se_object->draw_level_position();
 			m_cached.m_Position.set(m_position_global.x, m_position_global.z);
 		}
+		else if (m_coop_external)
+		{
+			m_position_global = m_coop_position;
+			m_cached.m_Position.set(m_position_global.x, m_position_global.z);
+		}
 	}
 	else
 	{
@@ -312,6 +341,10 @@ void CMapLocation::CalcLevelName()
 			m_cached.m_graphID = m_owner_se_object->m_tGraphID;
 		}
 	}
+	else if (m_coop_external && !Level().Objects.net_Find(m_objectID))
+	{
+		m_cached.m_LevelName = m_coop_level; // coop client: the server told us where the object is
+	}
 	else
 	{
 		m_cached.m_LevelName = Level().name();
@@ -334,10 +367,12 @@ bool CMapLocation::Update() //returns actual
 
 	CObject* pObject = Level().Objects.net_Find(m_objectID);
 
-	if (m_owner_se_object || (!IsGameTypeSingle() && pObject))
+	// Coop client: an object that is not here (another level, offline) still has a spot when the
+	// server reported its level and position (InitCoopExternal).
+	if (m_owner_se_object || (!IsGameTypeSingle() && (pObject || m_coop_external)))
 	{
 		m_cached.m_Actuality = true;
-		if (IsGameTypeSingle())
+		if (IsGameTypeSingle() || IsGameTypeCoop())
 			CalcLevelName();
 
 		CalcPosition();
@@ -368,7 +403,7 @@ void CMapLocation::UpdateSpot(CUICustomMap* map, CMapSpot* sp)
 			return;
 		}
 
-		if (IsGameTypeSingle())
+		if (IsGameTypeSingle() || IsGameTypeCoop()) // coop client: task spots as in SP
 		{
 			CGameTask* ml_task = Level().GameTaskManager().HasGameTask(this, true);
 			if (ml_task)
@@ -413,7 +448,7 @@ void CMapLocation::UpdateSpot(CUICustomMap* map, CMapSpot* sp)
 			map->AttachChild(sp);
 		}
 
-		if (IsGameTypeSingle())
+		if (IsGameTypeSingle() || IsGameTypeCoop())
 		{
 			CMapSpot* s = GetSpotBorder(sp);
 			if (s)
@@ -547,7 +582,7 @@ void CMapLocation::UpdateSpotPointer(CUICustomMap* map, CMapSpotPointer* sp)
 		Fvector ttt;
 		ttt.set(tt.x, 0.0f, tt.y);
 
-		if (IsGameTypeSingle())
+		if ((IsGameTypeSingle() || IsGameTypeCoop()) && Level().CurrentEntity())
 		{
 			float dist_to_target = Level().CurrentEntity()->Position().distance_to(ttt);
 			CGameTask* task = Level().GameTaskManager().HasGameTask(this, true);

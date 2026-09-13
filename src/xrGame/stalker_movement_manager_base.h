@@ -79,7 +79,9 @@ public:
 	void set_nearest_accessible_position();
 	void set_nearest_accessible_position(Fvector desired_position, u32 level_vertex_id);
 	float speed(const EMovementDirection& movement_direction);
-	void setup_speed_from_animation(const float& speed);
+    void setup_speed_from_animation(const float& speed);
+    void apply_network_gait(u8 flags, float speed);
+    float speed(CPHMovementControl* control) const;
 
 public:
 	IC SBoneRotation const& head_orientation() const;

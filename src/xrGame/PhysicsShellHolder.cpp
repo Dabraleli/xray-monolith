@@ -262,7 +262,7 @@ void CPhysicsShellHolder::activate_physic_shell()
 	}
 	smart_cast<IKinematics*>(Visual())->CalculateBones_Invalidate();
 	smart_cast<IKinematics*>(Visual())->CalculateBones(TRUE);
-	if (!IsGameTypeSingle())
+	if (!IsGameTypeSingle() && !(IsGameTypeCoop() && OnServer())) // coop as SP on the server: crates, barrels and ragdolls collide with each other; the clients only mirror
 	{
 		if (!smart_cast<CCustomRocket*>(this) && !smart_cast<CGrenade*>(this)) PPhysicsShell()->SetIgnoreDynamic();
 	}

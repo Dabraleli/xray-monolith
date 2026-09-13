@@ -19,6 +19,7 @@
 #include "PHSimpleCalls.h"
 #include "../xrphysics/iphworld.h"
 #include "doors_manager.h"
+#include "game_sv_coop.h"
 
 void CScriptGameObject::SetTipText(LPCSTR tip_text)
 {
@@ -26,7 +27,11 @@ void CScriptGameObject::SetTipText(LPCSTR tip_text)
 	if (!l_tpUseableScriptObject)
 		ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError,
 		                                "SetTipText. Reason: the object is not usable");
-	else l_tpUseableScriptObject->set_tip_text(tip_text);
+	else
+	{
+		l_tpUseableScriptObject->set_tip_text(tip_text);
+		game_sv_Coop::BroadcastTipText(&object()); // coop server: clients show the same hint
+	}
 }
 
 void CScriptGameObject::SetTipTextDefault()
@@ -35,7 +40,11 @@ void CScriptGameObject::SetTipTextDefault()
 	if (!l_tpUseableScriptObject)
 		ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError,
 		                                "SetTipTextDefault . Reason: the object is not usable");
-	else l_tpUseableScriptObject->set_tip_text_default();
+	else
+	{
+		l_tpUseableScriptObject->set_tip_text_default();
+		game_sv_Coop::BroadcastTipText(&object());
+	}
 }
 
 void CScriptGameObject::SetNonscriptUsable(bool nonscript_usable)

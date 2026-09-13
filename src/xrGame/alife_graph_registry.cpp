@@ -9,6 +9,7 @@
 #include "stdafx.h"
 #include "alife_graph_registry.h"
 #include "../xrEngine/x_ray.h"
+#include "../xrEngine/IGame_Persistent.h"
 
 using namespace ALife;
 
@@ -57,8 +58,38 @@ void CALifeGraphRegistry::update(CSE_ALifeDynamicObject* object)
 		R_ASSERT2(m_actor, "Invalid flag M_SPAWN_OBJECT_ASPLAYER for non-actor object!");
 	}
 
-	if (m_actor && !m_level)
-		setup_current_level();
+    if (m_actor && !m_level)
+    {
+        // Coop: [server] start_level places the world actor for a new game only; a saved world
+        // (loaded, or continued after a level change) keeps the level the actor is on.
+        if (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_full_level") &&
+            !xr_strcmp(g_pGamePersistent->m_game_params.m_new_or_load, "new"))
+        {
+            string_path config_path;
+            FS.update_path(config_path, "$app_data_root$", "coop_server.ltx");
+            CInifile config(config_path);
+            LPCSTR name = config.r_string("server", "start_level");
+            const CGameGraph::SLevel& target = ai().game_graph().header().level(name);
+            bool found = false;
+            for (u32 index = 0; index < ai().game_graph().header().vertex_count(); ++index)
+            {
+                GameGraph::_GRAPH_ID id = GameGraph::_GRAPH_ID(index);
+                const CGameGraph::CVertex* vertex = ai().game_graph().vertex(id);
+                if (vertex->level_id() != target.id()) continue;
+                // Initial placement before graph/level registration; never a live teleport.
+                m_actor->m_tGraphID = id;
+                m_actor->m_tNodeID = vertex->level_vertex_id();
+                m_actor->o_Position = vertex->level_point();
+                Msg("[COOP_SERVER] FULL_LEVEL_START level=%s actor=%u game_vertex=%u level_vertex=%u position=(%.3f,%.3f,%.3f)",
+                    name, m_actor->ID, u32(id), m_actor->m_tNodeID,
+                    m_actor->o_Position.x, m_actor->o_Position.y, m_actor->o_Position.z);
+                found = true;
+                break;
+            }
+            R_ASSERT2(found, "COOP_SERVER start_level has no game graph vertex");
+        }
+        setup_current_level();
+    }
 
 	CSE_ALifeInventoryItem* item = smart_cast<CSE_ALifeInventoryItem*>(object);
 	if (!item || !item->attached())

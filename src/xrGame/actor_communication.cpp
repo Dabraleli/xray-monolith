@@ -13,6 +13,8 @@
 #include "script_game_object.h"
 #include "game_cl_base.h"
 #include "xrServer.h"
+#include "game_sv_coop.h"
+#include "xrMessages.h"
 #include "xrServer_Objects_ALife_Monsters.h"
 #include "alife_registry_wrappers.h"
 #include "map_manager.h"
@@ -41,6 +43,10 @@ void CActor::AddGameNews(GAME_NEWS_DATA& news_data)
 	{
 		CurrentGameUI()->UIMainIngameWnd->ReceiveNews(&news_data);
 	}
+	// Coop server (no UI): the news reach the player the Lua runs for, or everyone.
+	if (IsGameTypeCoop() && OnServer())
+		game_sv_Coop::OnGameNews(u8(news_data.m_type), news_data.news_caption.c_str(), news_data.news_text.c_str(),
+		                         news_data.texture_name.c_str(), news_data.show_time);
 }
 
 
@@ -122,6 +128,36 @@ void CActor::TryToTalk()
 
 void CActor::RunTalkDialog(CInventoryOwner* talk_partner, bool disable_break)
 {
+	// Coop server: scripted dialog starts (xr_meet "use = self" on db.actor). With db.actor swapped
+	// to a body they open the server-driven dialog for that body's player; for the world actor,
+	// which has no player and no UI, they are ignored.
+	if (IsGameTypeCoop() && OnServer())
+	{
+		CGameObject* partner = smart_cast<CGameObject*>(talk_partner);
+		xrClientData* controller = Level().Server ? Level().Server->CoopControllerOf(Level().Server->ID_to_entity(ID())) : NULL;
+		if (controller && partner && this != Level().CurrentControlEntity())
+		{
+			Msg("[COOP_SERVER] TALK_SCRIPT_START body=%u npc=%u", ID(), partner->ID());
+			static_cast<game_sv_Coop*>(Level().Server->game)->TalkStart(controller, partner->ID());
+			return;
+		}
+		Msg("[COOP_SERVER] TALK_SCRIPT_IGNORED actor=%u npc=%u", ID(), partner ? partner->ID() : u16(-1));
+		return;
+	}
+	// Coop client: the dialog runs on the server between the body and the NPC (game_sv_Coop::TalkStart);
+	// the talk window opens when the server confirms (M_COOP_TALK begin).
+	if (IsGameTypeCoop() && OnClient())
+	{
+		CGameObject* partner = smart_cast<CGameObject*>(talk_partner);
+		if (!partner || IsTalking()) return;
+		NET_Packet P;
+		P.w_begin(M_COOP_TALK);
+		P.w_u8(1);
+		P.w_u16(partner->ID());
+		Level().Send(P, net_flags(TRUE, TRUE));
+		Msg("[COOP_CLIENT] TALK_REQUEST npc=%u", partner->ID());
+		return;
+	}
 	//предложить поговорить с нами
 	if (talk_partner->OfferTalk(this))
 	{

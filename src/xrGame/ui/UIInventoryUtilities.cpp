@@ -65,6 +65,7 @@ CharInfoStrings* charInfoGoodwillStrings = NULL;
 
 void InventoryUtilities::CreateShaders()
 {
+    if ((strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_no_render_streams") && strstr(Core.Params, "-coop_server_no_residual_graphics"))) { Msg("[COOP_SERVER] TEMP_WALLMARK_SHADER_SKIPPED"); return; }
 	g_tmpWMShader = xr_new<ui_shader>();
 	(*g_tmpWMShader)->create("effects\\wallmark", "wm\\wm_grenade");
 	//g_tmpWMShader.create("effects\\wallmark",  "wm\\wm_grenade");
@@ -558,7 +559,7 @@ void InventoryUtilities::SendInfoToActor(LPCSTR info_id)
 
 void InventoryUtilities::SendInfoToLuaScripts(shared_str info)
 {
-	if (GameID() != eGameIDSingle) return;
+	if (GameID() != eGameIDSingle && !IsGameTypeCoop()) return; // coop as SP: the talk window's actor_menu_mode 10/11 to Lua
 	if (info == shared_str("ui_talk_show"))
 	{
 		int mode = 10; // now Menu is Talk Dialog (show)

@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "base_monster.h"
+#include "../control_animation.h"
 
 #include "../../../ai_object_location.h"
 #include "../../../game_graph.h"
@@ -25,10 +26,18 @@ void CBaseMonster::net_Export(NET_Packet& P)
 
 	// export last known packet
 	R_ASSERT(!NET.empty());
-	net_update& N = NET.back();
+    net_update snapshot = NET.back();
+    if (IsGameTypeCoop())
+    {
+        // AI scheduling is slower than visual/physics movement. Export the
+        // current authoritative position, not the last AI scheduler sample.
+        snapshot.dwTimeStamp = Level().timeServer();
+        snapshot.p_pos = Position();
+    }
+    net_update& N = snapshot;
 	P.w_float(GetfHealth());
 	P.w_u32(N.dwTimeStamp);
-	P.w_u8(0);
+	P.w_u8(IsGameTypeCoop() ? 0x80 : 0);
 	P.w_vec3(N.p_pos);
 	P.w_float /*w_angle8*/(N.o_model);
 	P.w_float /*w_angle8*/(N.o_torso.yaw);
@@ -56,6 +65,10 @@ void CBaseMonster::net_Export(NET_Packet& P)
 		P.w(&f1, sizeof(f1));
 		P.w(&f1, sizeof(f1));
 	}
+    if (IsGameTypeCoop())
+    {
+        CoopStalkerLayers layers; control().animation().export_network_layers(layers); layers.write(P);
+    }
 }
 
 void CBaseMonster::net_Import(NET_Packet& P)
@@ -76,19 +89,14 @@ void CBaseMonster::net_Import(NET_Packet& P)
 	P.r_float /*r_angle8*/(N.o_torso.yaw);
 	P.r_float /*r_angle8*/(N.o_torso.pitch);
 	P.r_float /*r_angle8*/(N.o_torso.roll);
-	id_Team = P.r_u8();
-	id_Squad = P.r_u8();
-	id_Group = P.r_u8();
+    const u8 team=P.r_u8(), squad=P.r_u8(), group=P.r_u8();
+    if (IsGameTypeCoop()) import_network_team(team,squad,group);
+    else { id_Team=team; id_Squad=squad; id_Group=group; }
 
 	GameGraph::_GRAPH_ID l_game_vertex_id = ai_location().game_vertex_id();
 	P.r(&l_game_vertex_id, sizeof(l_game_vertex_id));
 	P.r(&l_game_vertex_id, sizeof(l_game_vertex_id));
 
-	if (NET.empty() || (NET.back().dwTimeStamp < N.dwTimeStamp))
-	{
-		NET.push_back(N);
-		NET_WasInterpolating = TRUE;
-	}
 
 	//	P.r						(&m_fGoingSpeed,			sizeof(m_fGoingSpeed));
 	//	P.r						(&m_fGoingSpeed,			sizeof(m_fGoingSpeed));
@@ -107,6 +115,9 @@ void CBaseMonster::net_Import(NET_Packet& P)
 	}
 
 
+    if (IsGameTypeCoop()) N.coop_layers.read(P);
+    if (NET.empty() || NET.back().dwTimeStamp<N.dwTimeStamp)
+    { NET.push_back(N); NET_WasInterpolating=TRUE; }
 	setVisible(TRUE);
 	setEnabled(TRUE);
 }

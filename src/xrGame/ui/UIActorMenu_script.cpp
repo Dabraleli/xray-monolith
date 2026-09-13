@@ -17,6 +17,7 @@
 
 #include "../actor.h"
 #include "../inventory_item.h"
+#include "../game_cl_coop.h"
 #include "UICellItem.h"
 #include "../ai_space.h"
 #include "../../xrServerEntities/script_engine.h"
@@ -151,8 +152,9 @@ void CUIActorMenu::RepairEffect_CurItem()
 
 	::luabind::functor<void> funct;
 	R_ASSERT(ai().script_engine().functor( "inventory_upgrades.effect_repair_item", funct ));
-	funct(item_name, item->GetCondition());
+	funct(item_name, item->GetCondition()); // the price: give_money reaches the server on a coop client
 
+	game_cl_Coop::ItemVerb("item|repair|%u", item->object_id()); // coop client: the server's item too
 	item->SetCondition(1.0f);
 	UpdateConditionProgressBars();
 	SeparateUpgradeItem();

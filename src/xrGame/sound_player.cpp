@@ -17,6 +17,7 @@
 #include "../xrEngine/xr_object.h"
 #include "../xrEngine/bone.h"
 #include "../Include/xrRender/Kinematics.h"
+#include "game_sv_coop.h"
 #include "profiler.h"
 #include "sound_collection_storage.h"
 #include "object_broker.h"
@@ -240,6 +241,11 @@ void CSoundPlayer::play(u32 internal_type, u32 max_start_time, u32 min_start_tim
 	sound_single.m_stop_time = sound_single.m_start_time + iFloor(sound_single.m_sound->get_length_sec() * 1000.0f) +
 		random_time;
 	m_playing_sounds.push_back(sound_single);
+	// Coop server: the clients in range play the same phrase on their replica (the collection
+	// travels with it, a Lua-added one is unknown there).
+	game_sv_Coop::RelayNpcSound(m_object, internal_type, random_id, max_start_time, min_start_time, max_stop_time, min_stop_time,
+	                            sound.m_sound_prefix.c_str(), sound.m_max_count, u32(sound.m_type), sound.m_priority, sound.m_synchro_mask,
+	                            sound.m_bone_name.c_str());
 	string256 name;
 	xr_sprintf(name, "%s%s%i", *sound.m_sound_player_prefix, *sound.m_sound_prefix, (random_id + 1));
 	//Msg("Sound name \"%s\"", name);

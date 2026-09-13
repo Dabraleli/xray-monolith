@@ -8,6 +8,7 @@
 #include "wound.h"
 #include "xrmessages.h"
 #include "level.h"
+#include "game_sv_coop.h"
 #include "../Include/xrRender/Kinematics.h"
 #include "relation_registry.h"
 #include "monster_community.h"
@@ -283,6 +284,8 @@ void CEntityAlive::Hit(SHit* pHDS)
 	                         pHDS->aim_bullet);
 
 	//èçìåíèòü ñîñòîÿíèå, ïåðåä òåì êàê ðîäèòåëüñêèé êëàññ îáðàáîòàåò õèò
+    if (strstr(Core.Params,"-coop_damage_probe"))
+        Msg("[COOP_HIT_INPUT] side=%s target=%u source=%u type=%u power=%f bone=%u scale=%f wound_scale=%f health=%f",OnServer()?"server":"client",ID(),HDS.whoID,u32(HDS.hit_type),HDS.power,HDS.boneID,conditions().hit_bone_scale(),conditions().wound_bone_scale(),GetfHealth());
 	CWound* pWound = conditions().ConditionHit(&HDS);
 	if (pWound && !pWound->GetDestroy())
 	{
@@ -302,7 +305,9 @@ void CEntityAlive::Hit(SHit* pHDS)
 	//-------------------------------------------
 	inherited::Hit(&HDS);
 
-	if (g_Alive() && IsGameTypeSingle())
+	// Coop: relations are world state and change only on the server; player bodies are
+	// CActor, so an attack by a player lowers the victim's goodwill exactly as in single player.
+	if (g_Alive() && (IsGameTypeSingle() || (IsGameTypeCoop() && OnServer())))
 	{
 		CEntityAlive* EA = smart_cast<CEntityAlive*>(HDS.who);
 		if (EA && EA->g_Alive() && EA->ID() != ID())
@@ -320,12 +325,16 @@ void CEntityAlive::OnEvent(NET_Packet& P, u16 type)
 
 void CEntityAlive::Die(CObject* who)
 {
-	if (IsGameTypeSingle())
+	if (IsGameTypeSingle() || (IsGameTypeCoop() && OnServer()))
 		RELATION_REGISTRY().Action(smart_cast<CEntityAlive*>(who), this, RELATION_REGISTRY::KILL);
 	inherited::Die(who);
 
 	const CGameObject* who_object = smart_cast<const CGameObject*>(who);
-	callback(GameObject::eDeath)(lua_game_object(), who_object ? who_object->lua_game_object() : 0);
+	{
+		// Coop server: a kill by a player body counts as the actor's kill for the Lua death handlers.
+		CoopLuaActor coop_actor(game_sv_Coop::BodyOf(who), false);
+		callback(GameObject::eDeath)(lua_game_object(), who_object ? who_object->lua_game_object() : 0);
+	}
 
 	if (!getDestroy() && (GameID() == eGameIDSingle))
 	{

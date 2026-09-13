@@ -47,7 +47,9 @@ void CUIActorMenu::SetActor(CInventoryOwner* io)
 	m_last_time = Device.dwTimeGlobal;
 	m_pActorInvOwner = io;
 
-	if (IsGameTypeSingle())
+	// Coop: the body's own character (name, community, icon from its replica profile), as in SP;
+	// the MP panel showed the deathmatch name, a stock icon and the round money.
+	if (IsGameTypeSingle() || IsGameTypeCoop())
 	{
 		if (io)
 			m_ActorCharacterInfo->InitCharacter(m_pActorInvOwner->object_id());

@@ -37,6 +37,7 @@ void CSightManager::SetPointLookAngles(const Fvector& tPosition, float& yaw, flo
 }
 
 #include "actor.h"
+#include "Level.h"
 void aim_target(shared_str const& aim_bone_id, Fvector& result, const CGameObject* object);
 
 bool CSightManager::aim_target(Fvector& my_position, Fvector& aim_target, const CGameObject* object) const
@@ -52,7 +53,9 @@ bool CSightManager::aim_target(Fvector& my_position, Fvector& aim_target, const 
 
 	extern CActor* g_actor;
 
-	if (g_actor == object)
+	// Coop server: a player's body is an actor too - g_actor is the hidden world actor there, and
+	// a body fell through to the centre-of-mass aim of any other object (SP aims at the head).
+	if (g_actor == object || (IsGameTypeCoop() && smart_cast<const CActor*>(object)))
 	{
 		::aim_target("bip01_head", aim_target, object);
 		return (true);

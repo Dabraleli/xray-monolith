@@ -1,4 +1,6 @@
 #include "pch_script.h"
+static bool coop_no_scope_ui() { return strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_no_game_ui") && strstr(Core.Params, "-coop_server_no_ui_resources"); }
+
 
 #include "WeaponMagazined.h"
 #include "actor.h"
@@ -299,7 +301,8 @@ bool CWeaponMagazined::TryReload()
 {
 	if (m_pInventory)
 	{
-		if (IsGameTypeSingle() && ParentIsActor())
+		// coop as SP on the owning client: the Lua weapon callbacks of the player's own weapon
+		if ((IsGameTypeSingle() || (IsGameTypeCoop() && OnClient() && H_Parent() == Level().CurrentControlEntity())) && ParentIsActor())
 		{
 			int AC = GetSuitableAmmoTotal();
 			Actor()->callback(GameObject::eWeaponNoAmmoAvailable)(lua_game_object(), AC);
@@ -360,7 +363,7 @@ bool CWeaponMagazined::IsAmmoAvailable()
 void CWeaponMagazined::OnMagazineEmpty()
 {
 #ifdef	EXTENDED_WEAPON_CALLBACKS
-	if (IsGameTypeSingle() && ParentIsActor())
+	if ((IsGameTypeSingle() || (IsGameTypeCoop() && OnClient() && H_Parent() == Level().CurrentControlEntity())) && ParentIsActor()) // coop as SP
 	{
 		int AC = GetSuitableAmmoTotal();
 		Actor()->callback(GameObject::eOnWeaponMagazineEmpty)(lua_game_object(), AC);
@@ -446,7 +449,7 @@ void CWeaponMagazined::UnloadMagazine(bool spawn_ammo)
 	VERIFY((u32) iAmmoElapsed == m_magazine.size());
 
 #ifdef	EXTENDED_WEAPON_CALLBACKS
-	if (IsGameTypeSingle() && ParentIsActor())
+	if ((IsGameTypeSingle() || (IsGameTypeCoop() && OnClient() && H_Parent() == Level().CurrentControlEntity())) && ParentIsActor()) // coop as SP
 	{
 		int AC = GetSuitableAmmoTotal();
 		Actor()->callback(GameObject::eOnWeaponMagazineEmpty)(lua_game_object(), AC);
@@ -892,6 +895,9 @@ void CWeaponMagazined::PlaySoundShot()
 
 void CWeaponMagazined::OnShot()
 {
+	if (strstr(Core.Params, "-coop_damage_probe"))
+		Msg("[COOP_SHOT] side=%s weapon=%u owner=%u ammo=%d working=%u time=%u", OnServer() ? "server" : "client", ID(),
+		    H_Parent() ? H_Parent()->ID() : u16(-1), iAmmoElapsed, IsWorking() ? 1 : 0, Device.dwTimeGlobal);
 	// Shot Sound
 	PlaySoundShot();
 
@@ -1051,6 +1057,12 @@ void CWeaponMagazined::switch2_Fire()
 	m_bStopedAfterQueueFired = false;
 	m_bFireSingleShot = true;
 	m_iShotNum = 0;
+
+	// Coop: the local player's own weapon already follows the real trigger through
+	// FireStart/FireEnd from input. Forcing it to work here made a short click keep
+	// shooting until the server's idle state arrived (3-4 visual shots, ammo desync).
+	if (IsGameTypeCoop() && OnClient() && H_Parent() && H_Parent() == Level().CurrentControlEntity())
+		return;
 
 	if ((OnClient() || Level().IsDemoPlay()) && !IsWorking())
 		FireStart();
@@ -1530,7 +1542,7 @@ void CWeaponMagazined::InitAddons()
 				scope_2dtexactive = 0;//crookr
 			}
 
-			if (!g_dedicated_server && scope_tex_name != NULL)
+			if (!g_dedicated_server && !coop_no_scope_ui() && scope_tex_name != NULL)
 			{
 				m_UIScope = xr_new<CUIWindow>();
 				createWpnScopeXML();

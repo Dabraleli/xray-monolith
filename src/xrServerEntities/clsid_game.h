@@ -208,6 +208,8 @@
 #define CLSID_EQUIPMENT_BACKPACK	MK_CLSID('E','Q','_','B','A','K','P','K')
 
 // Game types
+#define CLSID_SV_GAME_COOP MK_CLSID('S','V','_','C','O','O','P',' ')
+#define CLSID_CL_GAME_COOP MK_CLSID('C','L','_','C','O','O','P',' ')
 #define CLSID_SV_GAME_SINGLE			MK_CLSID('S','V','_','S','I','N','G','L')
 #define CLSID_SV_GAME_DEATHMATCH		MK_CLSID('S','V','_','D','M',' ',' ',' ')
 #define CLSID_SV_GAME_TEAMDEATHMATCH	MK_CLSID('S','V','_','T','D','M',' ',' ')

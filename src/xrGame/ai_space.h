@@ -35,6 +35,8 @@ private:
 
 private:
 	CGameGraph* m_game_graph;
+    IReader* m_coop_spawn_reader;
+    IReader* m_coop_graph_reader;
 	CLevelGraph* m_level_graph;
 	CGraphEngine* m_graph_engine;
 	CEF_Storage* m_ef_storage;
@@ -47,6 +49,7 @@ private:
 
 private:
 	void load(LPCSTR level_name);
+    void load_coop_replica(LPCSTR level_name);
 	void unload(bool reload = false);
 	void patrol_path_storage_raw(IReader& stream);
 	void patrol_path_storage(IReader& stream);

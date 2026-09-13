@@ -14,6 +14,7 @@ enum EGameIDs
 	eGameIDCaptureTheArtefact = u32(1) << 4,
 	eGameIDDominationZone = u32(1) << 5,
 	eGameIDTeamDominationZone = u32(1) << 6,
+	eGameIDCoop = u32(1) << 7,
 };
 
 class PropValue;

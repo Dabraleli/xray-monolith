@@ -19,8 +19,29 @@
 
 #include "UIGameSP.h"
 #include "../xrengine/xr_collide_form.h"
+#include "game_sv_coop.h"
 
 xr_vector<CLevelChanger*> g_lchangers;
+
+// Coop server: the changer's dialog is the touching player's client's (GE_COOP_LEVEL_INVITE); a
+// silent changer asks the server for the change on the player's behalf, like the dialog's OK.
+static bool coop_level_changer_touch(CActor* body, bool silent, GameGraph::_GRAPH_ID game_vertex, u32 level_vertex,
+                                     const Fvector& position, const Fvector& angles, bool enabled, const shared_str& invite,
+                                     bool has_reject, const Fvector& reject_position, const Fvector& reject_angles)
+{
+	if (!IsGameTypeCoop() || !OnServer()) return false;
+	NET_Packet change; // the change as the dialog's OK sends it (M_CHANGE_LEVEL payload)
+	change.w_begin(M_CHANGE_LEVEL);
+	change.w(&game_vertex, sizeof(game_vertex));
+	change.w(&level_vertex, sizeof(level_vertex));
+	change.w_vec3(position);
+	change.w_vec3(angles);
+	if (silent)
+		game_sv_Coop::LevelChangeRequest(body, change);
+	else
+		game_sv_Coop::LevelChangeInvite(body, change, enabled, invite, has_reject, reject_position, reject_angles);
+	return true;
+}
 
 CLevelChanger::~CLevelChanger()
 {
@@ -125,6 +146,17 @@ void CLevelChanger::feel_touch_new(CObject* tpObject)
 	if (!l_tpActor->g_Alive())
 		return;
 
+	{
+		Fvector rp, rr;
+		const bool has_reject = get_reject_pos(rp, rr);
+		if (coop_level_changer_touch(l_tpActor, m_bSilentMode, m_game_vertex_id, m_level_vertex_id, m_position, m_angles,
+		                             m_b_enabled, m_invite_str, has_reject, rp, rr))
+		{
+			m_entrance_time = Device.fTimeGlobal;
+			return;
+		}
+	}
+
 	if (m_bSilentMode)
 	{
 		NET_Packet p;
@@ -144,6 +176,14 @@ void CLevelChanger::feel_touch_new(CObject* tpObject)
 		                     m_b_enabled);
 
 	m_entrance_time = Device.fTimeGlobal;
+}
+
+void CLevelChanger::coop_request(CActor* body)
+{
+	if (!body || !body->g_Alive()) return;
+	const Fvector zero = { 0.f, 0.f, 0.f };
+	coop_level_changer_touch(body, true, m_game_vertex_id, m_level_vertex_id, m_position, m_angles, m_b_enabled, m_invite_str,
+	                         false, zero, zero);
 }
 
 bool CLevelChanger::get_reject_pos(Fvector& p, Fvector& r)
@@ -182,7 +222,8 @@ bool CLevelChanger::feel_touch_contact(CObject* object)
 
 void CLevelChanger::update_actor_invitation()
 {
-	if (m_bSilentMode) return;
+	// Coop server: a silent changer keeps asking too — the change waits for the other players.
+	if (m_bSilentMode && !(IsGameTypeCoop() && OnServer())) return;
 	xr_vector<CObject*>::iterator it = feel_touch.begin();
 	xr_vector<CObject*>::iterator it_e = feel_touch.end();
 
@@ -196,9 +237,15 @@ void CLevelChanger::update_actor_invitation()
 
 		if (m_entrance_time + 5.0f < Device.fTimeGlobal)
 		{
-			CUIGameSP* pGameSP = smart_cast<CUIGameSP*>(CurrentGameUI());
 			Fvector p, r;
 			bool b = get_reject_pos(p, r);
+			if (coop_level_changer_touch(l_tpActor, m_bSilentMode, m_game_vertex_id, m_level_vertex_id, m_position, m_angles,
+			                             m_b_enabled, m_invite_str, b, p, r))
+			{
+				m_entrance_time = Device.fTimeGlobal;
+				continue;
+			}
+			CUIGameSP* pGameSP = smart_cast<CUIGameSP*>(CurrentGameUI());
 
 			if (pGameSP)
 				pGameSP->ChangeLevel(m_game_vertex_id, m_level_vertex_id, m_position, m_angles, p, r, b, m_invite_str,

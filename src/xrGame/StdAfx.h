@@ -11,7 +11,12 @@
 #pragma warning(push)
 #pragma warning(disable:4995)
 #include "../xrEngine/stdafx.h"
+#ifdef XR_USE_ENET
+// Takes the place dplay8.h held: game headers use the DPNSEND_* flag names.
+#include "../xrNetServer/NET_ENet.h"
+#else
 #include "DPlay/dplay8.h"
+#endif
 #pragma warning(pop)
 //#pragma warning(default:4995)
 #pragma warning( 4 : 4018 )

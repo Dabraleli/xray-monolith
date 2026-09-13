@@ -1332,6 +1332,10 @@ public:
 	virtual void Status(TStatus& S)
 	{
 		S[0] = 0;
+		// dump_cvars walks every registered command during startup, long before
+		// the persistent game object exists -- and IsGameTypeSingle() below
+		// dereferences it unconditionally.
+		if (!g_pGamePersistent) return;
 		if (IsGameTypeSingle()) return;
 		if (!(&Level())) return;
 		if (!(&Game())) return;

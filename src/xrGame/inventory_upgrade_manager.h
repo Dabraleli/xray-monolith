@@ -96,6 +96,13 @@ namespace inventory
 		public:
 			Properties_type m_properties;
 		}; // class Manager
+
+		// The upgrade manager of this process: the ALife simulator's where there is one, or (a coop
+		// client, which has no ALife) one of its own built from the same configs, so replicas
+		// install their upgrades like the server's objects and the mechanic window can run there.
+		bool manager_available();
+		Manager& manager();
+		void coop_manager_destroy(); // the client's own, at level destruction
 	} // namespace upgrade
 } // namespace inventory
 

@@ -146,6 +146,8 @@ public:
 	//есть ли информация у персонажа
 	virtual bool HasInfo(shared_str info_id) const;
 	//	virtual bool				GetInfo		(shared_str info_id, INFO_DATA&) const;
+	// Coop server: the whole book (the world actor's, shared by the bodies) for a joining client's mirror.
+	void coop_known_infos(xr_vector<shared_str>& out) const;
 
 #ifdef DEBUG
 	void CInventoryOwner::DumpInfo() const;
@@ -204,9 +206,12 @@ public:
 	//для работы с relation system
 	u16 object_id() const;
 	CHARACTER_COMMUNITY_INDEX Community() const { return CharacterInfo().Community().index(); };
-	CHARACTER_RANK_VALUE Rank() const { return CharacterInfo().Rank().value(); };
-	CHARACTER_REPUTATION_VALUE Reputation() const { return CharacterInfo().Reputation().value(); };
+	CHARACTER_RANK_VALUE Rank() const;
+	CHARACTER_REPUTATION_VALUE Reputation() const;
 	float Sympathy() const { return CharacterInfo().Sympathy(); }
+	// Coop server: player bodies share one standing (rank, reputation) with the world actor, the
+	// same way they share its info book; NULL everywhere else (own values).
+	CInventoryOwner* coop_shared_standing() const;
 
 protected:
 	CCharacterInfo* m_pCharacterInfo;

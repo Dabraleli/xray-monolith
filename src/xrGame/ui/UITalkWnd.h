@@ -69,7 +69,16 @@ public:
 	void AddQuestion(const shared_str& text, const shared_str& id, int number, bool b_finalizer);
 	void AddAnswer(const shared_str& text, LPCSTR SpeakerName);
 	bool b_disable_break;
+
+	// Coop client: the dialog itself runs on the server (game_sv_Coop talk); this window only shows
+	// what arrives in M_COOP_TALK and sends the clicked question back. No local phrase logic.
+	void SetRemote(bool remote) { m_remote = remote; }
+	bool IsRemote() const { return m_remote; }
+	void RemoteAnswer(bool ours, LPCSTR text);
+	void RemoteClearQuestions();
 protected:
+	bool m_remote;
+	void RemoteSend(u8 op, LPCSTR id);
 	CUITalkDialogWnd* UITalkDialogWnd;
 
 	CActor* m_pActor;

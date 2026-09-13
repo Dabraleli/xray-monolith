@@ -221,6 +221,7 @@ void CStalkerAnimationManager::update_impl()
 {
 	if (!object().g_Alive())
 		return;
+    if (IsGameTypeCoop() && object().Remote()) return;
 
 	update_tracks();
 	play_delayed_callbacks();

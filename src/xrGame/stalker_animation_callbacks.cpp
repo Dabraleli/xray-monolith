@@ -31,14 +31,14 @@ static void _BCL callback_rotation(CBoneInstance* bone)
 	}
 
 	CAI_Stalker const* object = parameter->m_object;
-	if (!object->sight().enabled())
+	if (!(IsGameTypeCoop() && object->Remote()) && !object->sight().enabled())
 		return;
 
 	Fvector position = bone->mTransform.c;
 	R_ASSERT(_valid( *parameter->m_rotation ));
 	bone->mTransform.mulA_43(*parameter->m_rotation);
 	CWeaponShotEffector& effector = object->weapon_shot_effector();
-	if (!effector.IsActive())
+	if ((IsGameTypeCoop() && object->Remote()) || !effector.IsActive())
 	{
 		bone->mTransform.c = position;
 		R_ASSERT(_valid( bone->mTransform ));

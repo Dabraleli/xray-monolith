@@ -125,6 +125,11 @@ private:
 
 public:
 	bool standing() const;
+    EMovementDirection network_direction() const { return m_previous_speed_direction; }
+    void export_network_layers(CoopStalkerLayers& state);
+    void apply_network_layers(const CoopStalkerLayers& state);
+    Fmatrix m_network_rotations[3];
+    void clear_network_root();
 
 private:
 	IC void fill_object_info();

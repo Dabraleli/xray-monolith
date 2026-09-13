@@ -37,8 +37,25 @@
 #include "holder_custom.h"
 #include "Weapon.h"
 #include "CustomOutfit.h"
+#include "game_cl_coop.h"
 
 extern u32 hud_adj_mode;
+
+// Coop client, this body down: crawling and looking around only — no weapons, items, jumping,
+// sprinting or "use" until a teammate revives it (game_cl_Coop::SelfDowned).
+static bool coop_downed_key_allowed(int cmd)
+{
+	switch (cmd)
+	{
+	case kFWD: case kBACK: case kL_STRAFE: case kR_STRAFE: case kLEFT: case kRIGHT: case kUP: case kDOWN:
+	case kCROUCH: case kCAM_1: case kCAM_2: case kCAM_3: case kCAM_ZOOM_IN: case kCAM_ZOOM_OUT:
+	case kFREELOOK: case kTORCH: case kNIGHT_VISION: case kACTIVE_JOBS: case kSCREENSHOT: case kCONSOLE: case kQUIT:
+	case kCHAT: case kCHAT_TEAM: case kSCORES: case kPAUSE:
+		return true;
+	default:
+		return false;
+	}
+}
 
 void CActor::IR_OnKeyboardPress(int cmd)
 {
@@ -48,16 +65,20 @@ void CActor::IR_OnKeyboardPress(int cmd)
 
 	if (IsTalking()) return;
 	if (m_input_external_handler && !m_input_external_handler->authorized(cmd)) return;
+	if (game_cl_Coop::SelfDowned() && !coop_downed_key_allowed(cmd)) return;
 
 	switch (cmd)
 	{
 	case kWPN_FIRE:
 		{
-			if ((mstate_wishful & mcLookout) && !IsGameTypeSingle()) return;
+			if ((mstate_wishful & mcLookout) && !IsGameTypeSingle() && !IsGameTypeCoop()) return; // coop as SP: firing while leaning
 
 			// Tronex: export to allow/prevent weapon fire if returned false
+			// Coop server: a body's key press was already vetted by its client's Lua (against its own
+			// weapon); the server's Lua only knows the world actor, so it is not asked again here.
+			const bool coop_body = IsGameTypeCoop() && OnServer() && this != Level().CurrentControlEntity();
 			::luabind::functor<bool> funct;
-			if (ai().script_engine().functor("_G.CActor_Fire", funct))
+			if (!coop_body && ai().script_engine().functor("_G.CActor_Fire", funct))
 			{
 				if (!funct())
 				{
@@ -355,6 +376,7 @@ void CActor::IR_OnKeyboardHold(int cmd)
 	if (Remote() || !g_Alive()) return;
 	if (m_input_external_handler && !m_input_external_handler->authorized(cmd)) return;
 	if (IsTalking()) return;
+	if (game_cl_Coop::SelfDowned() && !coop_downed_key_allowed(cmd)) return;
 
 	if (m_holder)
 	{
@@ -543,7 +565,19 @@ void CActor::ActorUse()
 
 	if (m_pUsableObject && NULL == m_pObjectWeLookingAt->cast_inventory_item())
 	{
-		m_pUsableObject->use(this);
+		if (IsGameTypeCoop() && OnClient())
+		{
+			// Coop client: the object's Lua (ph_door, levers) lives on the server; ask it to use
+			// the object on behalf of this body. Inventory boxes and corpses stay client-driven below.
+			NET_Packet P;
+			u_EventGen(P, GE_COOP_USE_OBJECT, ID());
+			P.w_u16(m_pObjectWeLookingAt->ID());
+			u_EventSend(P);
+			if (strstr(Core.Params, "-coop_damage_probe"))
+				Msg("[COOP_USE] side=client body=%u object=%u name=%s", ID(), m_pObjectWeLookingAt->ID(), m_pObjectWeLookingAt->cName().c_str());
+		}
+		else
+			m_pUsableObject->use(this);
 	}
 
 	if (m_pInvBoxWeLookingAt && m_pInvBoxWeLookingAt->nonscript_usable())
@@ -601,9 +635,21 @@ void CActor::ActorUse()
 
 			VERIFY(pEntityAliveWeLookingAt);
 
-			if (IsGameTypeSingle())
+			// Coop: corpses are searched like in single player; dialogs go through the server
+			// (CActor::RunTalkDialog sends the request, the server runs the dialog).
+			if (IsGameTypeSingle() || IsGameTypeCoop())
 			{
-				if (pEntityAliveWeLookingAt->g_Alive())
+				if (IsGameTypeCoop() && OnClient() && pEntityAliveWeLookingAt->g_Alive() &&
+					game_cl_Coop::IsDowned(pEntityAliveWeLookingAt->ID()))
+				{
+					// A downed teammate: the server starts the revive (game_sv_Coop::ReviveStart).
+					NET_Packet P;
+					u_EventGen(P, GE_COOP_USE_OBJECT, ID());
+					P.w_u16(pEntityAliveWeLookingAt->ID());
+					u_EventSend(P);
+					Msg("[COOP_CLIENT] REVIVE_USE body=%u", pEntityAliveWeLookingAt->ID());
+				}
+				else if (pEntityAliveWeLookingAt->g_Alive())
 				{
 					TryToTalk();
 				}

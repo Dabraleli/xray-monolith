@@ -47,7 +47,7 @@ void CUIMotionIcon::Init(Frect const& zonemap_rect)
 
 void CUIMotionIcon::SetNoise(float pos)
 {
-	if (!IsGameTypeSingle())
+	if (!IsGameTypeSingle() && !IsGameTypeCoop()) // coop as SP: the noise bar (the visibility eye still waits for the server's NPC memory)
 		return;
 
 	if (!IsShown())
@@ -67,7 +67,7 @@ void CUIMotionIcon::Draw()
 
 void CUIMotionIcon::Update()
 {
-	if (!IsGameTypeSingle())
+	if (!IsGameTypeSingle() && !IsGameTypeCoop()) // coop as SP
 	{
 		inherited::Update();
 		return;

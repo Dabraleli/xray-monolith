@@ -14,6 +14,7 @@
 #include "game_object_space.h"
 #include "trade_parameters.h"
 #include "eatable_item.h"
+#include "game_cl_coop.h"
 
 bool CTrade::CanTrade()
 {
@@ -152,6 +153,11 @@ u32 CTrade::GetItemPrice(PIItem pItem, bool b_buying, bool b_free)
 {
 	if (b_free)
 		return 0;
+
+	// Coop client: the NPC's trade profile, discounts and goodwill live on the server; it sends the
+	// prices of every item on both sides when the trade starts and after each deal.
+	if (IsGameTypeCoop() && OnClient())
+		return game_cl_Coop::TradePrice(pItem->object().ID());
 
 	CArtefact* pArtefact = smart_cast<CArtefact*>(pItem);
 

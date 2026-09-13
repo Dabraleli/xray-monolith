@@ -77,7 +77,10 @@ public:
 	priority_group& GetPriorityGroup(u8 const priority_value, u16 slot);
 	void InitPriorityGroupsForQSwitch();
 
-	PIItem ActiveItem() const { return (m_iActiveSlot == NO_ACTIVE_SLOT) ? NULL : ItemFromSlot(m_iActiveSlot); }
+    bool m_network_active = false;
+    u16 m_network_active_id = u16(-1);
+    void SetNetworkActiveItem(u16 id) { m_network_active=true; m_network_active_id=id; }
+    PIItem ActiveItem() const;
 	PIItem ItemFromSlot(u16 slot) const;
 
 	bool Action(u16 cmd, u32 flags);
@@ -184,7 +187,10 @@ protected:
 
 	bool m_change_after_deactivate;
 
+public:
+	// Also used by the coop client's PDA: the key is forwarded to the server as an action.
 	void SendActionEvent(u16 cmd, u32 flags);
+protected:
 
 private:
 	priority_group* m_slot2_priorities[qs_priorities_count];

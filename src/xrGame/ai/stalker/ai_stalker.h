@@ -212,6 +212,7 @@ public:
 	virtual void shedule_Update(u32 dt);
 	virtual void Think();
 	virtual void SelectAnimation(const Fvector& _view, const Fvector& _move, float speed);
+    u8 network_gait_direction() const { return (NET_Last.coop_gait >> 5) & 3; }
 	virtual BOOL UsedAI_Locations();
 
 	virtual void g_WeaponBones(int& L, int& R1, int& R2);

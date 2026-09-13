@@ -362,7 +362,7 @@ void CUIMainIngameWnd::Update()
 	}
 
 	UpdateMainIndicators();
-	if (IsGameTypeSingle())
+	if (IsGameTypeSingle() || IsGameTypeCoop()) // coop as SP: no MP warning icons
 		return;
 
 	// ewiArtefact
@@ -678,7 +678,7 @@ void CUIMainIngameWnd::UpdateMainIndicators()
 		return;
 
 	UpdateQuickSlots();
-	if (IsGameTypeSingle())
+	if (IsGameTypeSingle() || IsGameTypeCoop()) // coop as SP: the achievement functors run with the PDA closed too
 		CurrentGameUI()->GetPdaMenu().UpdateRankingWnd();
 
 	u8 flags = 0;
@@ -817,7 +817,7 @@ void CUIMainIngameWnd::UpdateMainIndicators()
 	float cur_weight = pActor->inventory().TotalWeight();
 	float max_weight = pActor->MaxWalkWeight();
 	m_ind_overweight->Show(false);
-	if (cur_weight >= max_weight - 10.0f && IsGameTypeSingle())
+	if (cur_weight >= max_weight - 10.0f && (IsGameTypeSingle() || IsGameTypeCoop())) // coop as SP: the overweight indicator
 	{
 		m_ind_overweight->Show(true);
 		if (cur_weight > max_weight)

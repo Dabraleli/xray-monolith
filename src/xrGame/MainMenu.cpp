@@ -1,7 +1,11 @@
 #include "stdafx.h"
+
+static bool coop_no_ui_resources() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_game_ui") && strstr(Core.Params, "-coop_server_no_ui_resources")); }
 #include "MainMenu.h"
 #include "UI/UIDialogWnd.h"
 #include "ui/UIMessageBoxEx.h"
+#include "ai_space.h"
+#include "script_engine.h"
 #include "../xrEngine/xr_IOConsole.h"
 #include "../xrEngine/IGame_Level.h"
 #include "../xrEngine/CameraManager.h"
@@ -95,7 +99,7 @@ CMainMenu::CMainMenu()
 	GetCDKeyFromRegistry();
 	m_demo_info_loader = NULL;
 
-	if (!g_dedicated_server)
+	if (!g_dedicated_server && !coop_no_ui_resources())
 	{
 		g_btnHint = xr_new<CUIButtonHint>();
 		g_statHint = xr_new<CUIButtonHint>();
@@ -128,7 +132,8 @@ CMainMenu::CMainMenu()
 		//m_atlas_submit_queue	= xr_new<atlas_submit_queue>				(m_stats_submitter);
 	}
 
-	Device.seqFrame.Add(this,REG_PRIORITY_LOW - 1000);
+	if (!coop_no_ui_resources()) Device.seqFrame.Add(this,REG_PRIORITY_LOW - 1000);
+    else Msg("[COOP_SERVER] MAIN_MENU_SKIPPED dialogs=0 hints=0 frames=0");
 }
 
 CMainMenu::~CMainMenu()
@@ -175,6 +180,7 @@ extern bool IsGameTypeSingle();
 
 void CMainMenu::Activate(bool bActivate)
 {
+    if (coop_no_ui_resources()) { return; }
 	if (!!m_Flags.test(flActive) == bActivate) return;
 	if (m_Flags.test(flGameSaveScreenshot)) return;
 	if ((m_screenshotFrame == Device.dwFrame) ||
@@ -289,11 +295,21 @@ void CMainMenu::Activate(bool bActivate)
 
 bool CMainMenu::ReloadUI()
 {
+    if (coop_no_ui_resources()) return false;
 	if (m_startDialog)
 	{
 		if (m_startDialog->IsShown())
 			m_startDialog->HideDialog();
 		CleanInternals();
+	}
+	// Coop client with a menu (no -start): the coop-owned coop_menu.script turns "New game" into the
+	// join screen (server address, persistent character name, the SP character creation for the
+	// loadout) before the Lua menu is built and captures its callbacks.
+	if (strstr(Core.Params, "-coop_client") && !strstr(Core.Params, "-start "))
+	{
+		::luabind::functor<void> functor;
+		if (ai().script_engine().functor("coop_menu.install", functor)) functor();
+		else Msg("! [COOP_CLIENT] coop_menu.install is not loaded: the menu stays single-player");
 	}
 	DLL_Pure* dlg = NEW_INSTANCE(TEXT2CLSID("MAIN_MNU"));
 	if (!dlg)
@@ -423,6 +439,7 @@ extern void render_reshade_effects();
 
 void CMainMenu::OnRender()
 {
+    if (coop_no_ui_resources()) { return; }
 	if (m_Flags.test(flGameSaveScreenshot))
 		return;
 
@@ -444,6 +461,7 @@ void CMainMenu::OnRender()
 
 void CMainMenu::OnRenderPPUI_main()
 {
+    if (coop_no_ui_resources()) { return; }
 	if (!IsActive()) return;
 
 	if (m_Flags.test(flGameSaveScreenshot))
@@ -465,6 +483,7 @@ void CMainMenu::OnRenderPPUI_main()
 
 void CMainMenu::OnRenderPPUI_PP()
 {
+    if (coop_no_ui_resources()) { return; }
 	if (!IsActive()) return;
 
 	if (m_Flags.test(flGameSaveScreenshot)) return;
@@ -489,6 +508,7 @@ void CMainMenu::StartStopMenu(CUIDialogWnd* pDialog, bool bDoHideIndicators)
 //pureFrame
 void CMainMenu::OnFrame()
 {
+    if (coop_no_ui_resources()) { return; }
 	if (m_Flags.test(flNeedChangeCapture))
 	{
 		m_Flags.set(flNeedChangeCapture,FALSE);
@@ -536,6 +556,7 @@ extern u32 g_screenmode;
 
 void CMainMenu::OnDeviceCreate()
 {
+    if (coop_no_ui_resources()) { return; }
 	RECT winRect;
 	GetClientRect(Device.m_hWnd, &winRect);
 	MapWindowPoints(Device.m_hWnd, nullptr, reinterpret_cast<LPPOINT>(&winRect), 2);
@@ -545,6 +566,7 @@ void CMainMenu::OnDeviceCreate()
 
 void CMainMenu::Screenshot(IRender_interface::ScreenshotMode mode, LPCSTR name)
 {
+    if (coop_no_ui_resources()) { return; }
 	if (mode != IRender_interface::SM_FOR_GAMESAVE)
 	{
 		::Render->Screenshot(mode, name);
@@ -584,11 +606,13 @@ void CMainMenu::UnregisterPPDraw(CUIWindow* w)
 
 void CMainMenu::SetErrorDialog(EErrorDlg ErrDlg)
 {
+    if (coop_no_ui_resources()) { Msg("[COOP_SERVER] MENU_ERROR code=%d", int(ErrDlg)); return; }
 	m_NeedErrDialog = ErrDlg;
 };
 
 void CMainMenu::CheckForErrorDlg()
 {
+    if (coop_no_ui_resources()) { return; }
 	if (m_NeedErrDialog == ErrNoError) return;
 	m_pMB_ErrDlgs[m_NeedErrDialog]->ShowDialog(false);
 	m_NeedErrDialog = ErrNoError;
@@ -596,7 +620,11 @@ void CMainMenu::CheckForErrorDlg()
 
 void CMainMenu::SwitchToMultiplayerMenu()
 {
-	m_startDialog->Dispatch(2, 1);
+	// Anomaly's main menu is written in Lua and has no multiplayer page: its
+	// Dispatch() still forwards command 2 to OnButton_multiplayer_clicked, a
+	// method the script no longer defines, and the resulting Lua error is fatal.
+	// Callers only use this to preselect a tab after a failed session, so losing
+	// the jump costs nothing -- and keeps the real error visible.
 };
 
 void CMainMenu::DestroyInternal(bool bForce)
@@ -607,6 +635,7 @@ void CMainMenu::DestroyInternal(bool bForce)
 
 void CMainMenu::OnNewPatchFound(LPCSTR VersionName, LPCSTR URL)
 {
+    if (coop_no_ui_resources()) { Msg("[COOP_SERVER] MENU_UI_OMITTED OnNewPatchFound"); return; }
 	if (m_sPDProgress.IsInProgress) return;
 
 	if (m_pMB_ErrDlgs[NewPatchFound])
@@ -632,6 +661,7 @@ void CMainMenu::OnNewPatchFound(LPCSTR VersionName, LPCSTR URL)
 
 void CMainMenu::OnNoNewPatchFound()
 {
+    if (coop_no_ui_resources()) { Msg("[COOP_SERVER] MENU_UI_OMITTED OnNoNewPatchFound"); return; }
 	m_pMB_ErrDlgs[NoNewPatch]->ShowDialog(false);
 }
 
@@ -671,12 +701,14 @@ void CMainMenu::OnDownloadPatch(CUIWindow*, void*)
 
 void CMainMenu::OnDownloadPatchError()
 {
+    if (coop_no_ui_resources()) { Msg("[COOP_SERVER] MENU_UI_OMITTED OnDownloadPatchError"); return; }
 	m_sPDProgress.IsInProgress = false;
 	m_pMB_ErrDlgs[PatchDownloadError]->ShowDialog(false);
 };
 
 void CMainMenu::OnDownloadPatchSuccess()
 {
+    if (coop_no_ui_resources()) { Msg("[COOP_SERVER] MENU_UI_OMITTED OnDownloadPatchSuccess"); return; }
 	m_sPDProgress.IsInProgress = false;
 
 	m_pMB_ErrDlgs[PatchDownloadSuccess]->ShowDialog(false);
@@ -684,6 +716,7 @@ void CMainMenu::OnDownloadPatchSuccess()
 
 void CMainMenu::OnSessionTerminate(LPCSTR reason)
 {
+    if (coop_no_ui_resources()) { Msg("[COOP_SERVER] MENU_ERROR OnSessionTerminate %s", reason ? reason : "unknown"); return; }
 	if (m_NeedErrDialog == SessionTerminate && (Device.dwTimeGlobal - m_start_time) < 8000)
 		return;
 
@@ -707,6 +740,7 @@ void CMainMenu::OnSessionTerminate(LPCSTR reason)
 
 void CMainMenu::OnLoadError(LPCSTR module)
 {
+    if (coop_no_ui_resources()) { Msg("[COOP_SERVER] MENU_ERROR OnLoadError %s", module ? module : "unknown"); return; }
 	LPCSTR str = CStringTable().translate("ui_st_error_loading").c_str();
 	string1024 Text;
 	strconcat(sizeof(Text), Text, str, " ");
@@ -823,6 +857,7 @@ bool CMainMenu::ValidateCDKey()
 
 void CMainMenu::Show_CTMS_Dialog()
 {
+    if (coop_no_ui_resources()) { Msg("[COOP_SERVER] MENU_UI_OMITTED Show_CTMS_Dialog"); return; }
 	if (!m_pMB_ErrDlgs[ConnectToMasterServer]) return;
 	if (m_pMB_ErrDlgs[ConnectToMasterServer]->IsShown()) return;
 	m_pMB_ErrDlgs[ConnectToMasterServer]->ShowDialog(false);
@@ -830,6 +865,7 @@ void CMainMenu::Show_CTMS_Dialog()
 
 void CMainMenu::Hide_CTMS_Dialog()
 {
+    if (coop_no_ui_resources()) { Msg("[COOP_SERVER] MENU_UI_OMITTED Hide_CTMS_Dialog"); return; }
 	if (!m_pMB_ErrDlgs[ConnectToMasterServer]) return;
 	if (!m_pMB_ErrDlgs[ConnectToMasterServer]->IsShown()) return;
 	m_pMB_ErrDlgs[ConnectToMasterServer]->HideDialog();
@@ -883,6 +919,7 @@ LPCSTR CMainMenu::GetCDKeyFromRegistry()
 
 void CMainMenu::Show_DownloadMPMap(LPCSTR text, LPCSTR url)
 {
+    if (coop_no_ui_resources()) { Msg("[COOP_SERVER] MENU_UI_OMITTED Show_DownloadMPMap"); return; }
 	VERIFY(m_pMB_ErrDlgs[DownloadMPMap]);
 
 	m_downloaded_mp_map_url._set(url);

@@ -1051,6 +1051,9 @@ void WeaponUsageStatistic::OnUpdateRespond(NET_Packet* P, shared_str const& send
 
 void WeaponUsageStatistic::SetCollectData(bool Collect)
 {
+	// Coop derives from Single: MP team statistics require game_cl_mp.
+	if (IsGameTypeCoop())
+		Collect = false;
 	if (Collect && !m_bCollectStatistic)
 		Clear();
 	m_bCollectStatistic = Collect;

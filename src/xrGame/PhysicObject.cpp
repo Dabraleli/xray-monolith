@@ -635,6 +635,40 @@ void CPhysicObject::net_Export(NET_Packet& P)
 	{
 		P.w_u8(0); //freezed
 	}
+
+	if (IsGameTypeCoop())
+	{
+		// The other shell elements (a door leaf on its hinge, cabinet doors): the base format
+		// carries element 0 only, which for jointed objects is the static frame. Small shells
+		// only: the per-object update chunk is limited to 255 bytes.
+		const u16 items = PHGetSyncItemsNumber();
+		const u8 extra = (items > 1 && items <= 5) ? u8(items - 1) : 0;
+		P.w_u8(extra);
+		for (u8 i = 0; i < extra; ++i)
+		{
+			SPHNetState S;
+			PHGetSyncItem(u16(i + 1))->get_State(S);
+			P.w_vec3(S.position);
+			P.w_float(S.quaternion.x);
+			P.w_float(S.quaternion.y);
+			P.w_float(S.quaternion.z);
+			P.w_float(S.quaternion.w);
+			P.w_u8(S.enabled ? 1 : 0);
+		}
+		if (extra && strstr(Core.Params, "-coop_damage_probe") && PPhysicsShell()->isEnabled())
+		{
+			static xr_map<u16, u32> reports;
+			u32& last = reports[ID()];
+			if (Device.dwTimeGlobal - last >= 1000)
+			{
+				last = Device.dwTimeGlobal;
+				SPHNetState S;
+				PHGetSyncItem(1)->get_State(S);
+				Msg("[COOP_PHYS] side=server id=%u name=%s elements=%u enabled=%u e1=%f,%f,%f", ID(), cName().c_str(), items,
+				    S.enabled ? 1 : 0, S.position.x, S.position.y, S.position.z);
+			}
+		}
+	}
 };
 
 void CPhysicObject::net_Export_PH_Params(NET_Packet& P, SPHNetState& State, mask_num_items& num_items)
@@ -729,6 +763,42 @@ void CPhysicObject::net_Import(NET_Packet& P)
 	////////////////////////////////////////////
 	P.r_u8(); // freezed or not..
 
+	if (IsGameTypeCoop() && !P.r_eof())
+	{
+		// Coop: the other shell elements, applied directly (a door leaf follows the server at the
+		// update rate; element 0 keeps the interpolated path below).
+		const u8 extra = P.r_u8();
+		const bool apply = !Local() && m_pPhysicsShell;
+		for (u8 i = 0; i < extra; ++i)
+		{
+			SPHNetState S;
+			P.r_vec3(S.position);
+			P.r_float(S.quaternion.x);
+			P.r_float(S.quaternion.y);
+			P.r_float(S.quaternion.z);
+			P.r_float(S.quaternion.w);
+			S.enabled = P.r_u8() != 0;
+			CPHSynchronize* sync = apply && u16(i + 1) < PHGetSyncItemsNumber() ? PHGetSyncItem(u16(i + 1)) : NULL;
+			if (!sync) continue;
+			S.previous_position = S.position;
+			S.previous_quaternion = S.quaternion;
+			S.linear_vel.set(0.f, 0.f, 0.f);
+			S.angular_vel.set(0.f, 0.f, 0.f);
+			S.force.set(0.f, 0.f, 0.f);
+			S.torque.set(0.f, 0.f, 0.f);
+			sync->set_State(S);
+			if (i == 0 && S.enabled && strstr(Core.Params, "-coop_damage_probe"))
+			{
+				static xr_map<u16, u32> reports;
+				u32& last = reports[ID()];
+				if (Device.dwTimeGlobal - last >= 1000)
+				{
+					last = Device.dwTimeGlobal;
+					Msg("[COOP_PHYS] side=client id=%u name=%s extra=%u e1=%f,%f,%f", ID(), cName().c_str(), extra, S.position.x, S.position.y, S.position.z);
+				}
+			}
+		}
+	}
 
 	if (this->cast_game_object()->Local())
 	{

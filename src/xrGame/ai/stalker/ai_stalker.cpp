@@ -8,6 +8,7 @@
 
 #include "pch_script.h"
 #include "ai_stalker.h"
+#include "../../game_sv_coop.h"
 #include "../ai_monsters_misc.h"
 #include "../../weapon.h"
 #include "../../hit.h"
@@ -875,14 +876,30 @@ void CAI_Stalker::net_Export(NET_Packet& P)
 		Msg("![CAI_Stalker::net_Export] net_update deque is empty for %s, section %s, id %d, crash", cName().c_str(), cNameSect().c_str(), ID());
 		R_ASSERT(!NET.empty());
 	}
-	net_update& N = NET.back();
+    net_update snapshot = NET.back();
+    if (IsGameTypeCoop())
+    {
+        // AI scheduling is slower than visual/physics movement. Export the
+        // current authoritative position, not the last AI scheduler sample.
+        snapshot.dwTimeStamp = Level().timeServer();
+        snapshot.p_pos = Position();
+        snapshot.o_model = movement().m_body.current.yaw;
+        snapshot.o_torso = movement().m_head.current;
+    }
+    net_update& N = snapshot;
 	//	P.w_float						(inventory().TotalWeight());
 	//	P.w_u32							(m_dwMoney);
 
 	P.w_float(GetfHealth());
 
 	P.w_u32(N.dwTimeStamp);
-	P.w_u8(0);
+    // Existing creature flags byte is preserved by CSE UPDATE_Read/Write.
+    // Coop: valid[7], direction[6:5], locomotion[4:3], mental[2:1], body[0].
+    const u8 gait = IsGameTypeCoop() ? u8(0x80 | u8(movement().body_state()) |
+        (u8(movement().mental_state()) << 1) |
+        (u8(animation().standing() ? eMovementTypeStand : movement().movement_type()) << 3) |
+        (u8(animation().network_direction()) << 5)) : 0;
+    P.w_u8(gait);
 	P.w_vec3(N.p_pos);
 	P.w_float /*w_angle8*/(N.o_model);
 	P.w_float /*w_angle8*/(N.o_torso.yaw);
@@ -913,6 +930,12 @@ void CAI_Stalker::net_Export(NET_Packet& P)
 	}
 
 	P.w_stringZ(m_sStartDialog);
+    if (IsGameTypeCoop())
+    {
+        CoopStalkerLayers layers;
+        animation().export_network_layers(layers);
+        layers.write(P);
+    }
 }
 
 void CAI_Stalker::net_Import(NET_Packet& P)
@@ -922,24 +945,32 @@ void CAI_Stalker::net_Import(NET_Packet& P)
 
 	u8 flags;
 
-	P.r_float();
-	set_money(P.r_u32(), false);
+    // CSE_ALifeHumanStalker::UPDATE_Write starts at health. Legacy client
+    // reads below belong to an older format and have no writer in coop.
+    if (!IsGameTypeCoop())
+    {
+        P.r_float();
+        set_money(P.r_u32(), false);
+    }
 
 	float health;
 	P.r_float(health);
 	SetfHealth(health);
+    if (IsGameTypeCoop() && health<=0.f) animation().clear_network_root();
 	//	fEntityHealth = health;
 
 	P.r_u32(N.dwTimeStamp);
-	P.r_u8(flags);
+    P.r_u8(flags);
+    if (IsGameTypeCoop() && (flags & 0x80) && ((flags >> 1) & 3) <= 2 && ((flags >> 3) & 3) <= 2)
+        N.coop_gait = flags;
 	P.r_vec3(N.p_pos);
 	P.r_float /*r_angle8*/(N.o_model);
 	P.r_float /*r_angle8*/(N.o_torso.yaw);
 	P.r_float /*r_angle8*/(N.o_torso.pitch);
 	P.r_float /*r_angle8*/(N.o_torso.roll);
-	id_Team = P.r_u8();
-	id_Squad = P.r_u8();
-	id_Group = P.r_u8();
+    const u8 team=P.r_u8(), squad=P.r_u8(), group=P.r_u8();
+    if (IsGameTypeCoop()) import_network_team(team,squad,group);
+    else { id_Team=team; id_Squad=squad; id_Group=group; }
 
 
 	GameGraph::_GRAPH_ID graph_vertex_id = movement().game_dest_vertex_id();
@@ -947,16 +978,26 @@ void CAI_Stalker::net_Import(NET_Packet& P)
 	graph_vertex_id = ai_location().game_vertex_id();
 	P.r(&graph_vertex_id, sizeof(GameGraph::_GRAPH_ID));
 
+    P.r_float();
+    P.r_float();
+    P.r_stringZ(m_sStartDialog);
+    if (IsGameTypeCoop()) N.coop_layers.read(P);
+
 	if (NET.empty() || (NET.back().dwTimeStamp < N.dwTimeStamp))
 	{
-		NET.push_back(N);
-		NET_WasInterpolating = TRUE;
+        if (IsGameTypeCoop() && !NET.empty())
+        {
+            const u32 delta = N.dwTimeStamp - NET.back().dwTimeStamp;
+            if (delta && delta <= 1000)
+            {
+                N.coop_velocity.sub(N.p_pos, NET.back().p_pos).mul(1000.f / delta);
+                N.coop_velocity.y = 0.f;
+                if (N.coop_velocity.magnitude() > 20.f) N.coop_velocity.set(0.f, 0.f, 0.f);
+            }
+        }
+        NET.push_back(N);
+        NET_WasInterpolating = TRUE;
 	}
-
-	P.r_float();
-	P.r_float();
-
-	P.r_stringZ(m_sStartDialog);
 
 	setVisible(TRUE);
 	setEnabled(TRUE);
@@ -1022,6 +1063,20 @@ void CAI_Stalker::destroy_anim_mov_ctrl()
 
 void CAI_Stalker::UpdateCL()
 {
+    if (IsGameTypeCoop() && strstr(Core.Params, "-coop_npc_motion_probe"))
+    {
+        static xr_map<u16, u32> last_reports;
+        u32& last = last_reports[ID()];
+        if (Device.dwTimeGlobal - last >= 1000 &&
+            Position().distance_to_sqr(Fvector().set(-220.f, -20.f, -170.f)) < 14400.f)
+        {
+            last = Device.dwTimeGlobal;
+            Msg("[COOP_ANIMATION] side=%s id=%u server_time=%u alive=%d legs=%d torso=%d global=%d script=%d position=%f,%f,%f",
+                OnServer() ? "server" : "client", ID(), Level().timeServer(), g_Alive(),
+                animation().legs().blend() != NULL, animation().torso().blend() != NULL,
+                animation().global().blend() != NULL, animation().script().blend() != NULL, VPUSH(Position()));
+        }
+    }
 	START_PROFILE("stalker")
 		START_PROFILE("stalker/client_update")
 			VERIFY2(PPhysicsShell()||getEnabled(), *cName());
@@ -1084,7 +1139,7 @@ void CAI_Stalker::UpdateCL()
 					VERIFY(!m_pPhysicsShell);
 					try
 					{
-						sight().update();
+						if (!(IsGameTypeCoop() && Remote())) sight().update();
 					}
 					catch (...)
 					{
@@ -1092,7 +1147,7 @@ void CAI_Stalker::UpdateCL()
 						sight().update();
 					}
 
-					Exec_Look(client_update_fdelta());
+					if (!(IsGameTypeCoop() && Remote())) Exec_Look(client_update_fdelta());
 				STOP_PROFILE
 
 				START_PROFILE("stalker/client_update/step_manager")
@@ -1104,6 +1159,18 @@ void CAI_Stalker::UpdateCL()
 						weapon_shot_effector().Update();
 				STOP_PROFILE
 			}
+    if (IsGameTypeCoop() && Remote() && g_Alive() && NET_Last.coop_layers.ready && strstr(Core.Params,"-coop_npc_motion_probe"))
+    {
+        static xr_map<u16,u32> reports; u32& last=reports[ID()];
+        if (Device.dwTimeGlobal-last>=250)
+        {
+            last=Device.dwTimeGlobal;
+            Fquaternion q; q.set(XFORM()); q.normalize();
+            const float* r=NET_Last.coop_layers.rotation[0];
+            float dot=_abs(q.x*r[0]+q.y*r[1]+q.z*r[2]+q.w*r[3]) / _sqrt(r[0]*r[0]+r[1]*r[1]+r[2]*r[2]+r[3]*r[3]); clamp(dot,0.f,1.f);
+            Msg("[COOP_FINAL_POSE] id=%u time=%u root_error=%f",ID(),Level().timeServer(),2.f*acosf(dot));
+        }
+    }
 #ifdef DEBUG
 	debug_text	();
 #endif
@@ -1130,6 +1197,10 @@ void CAI_Stalker::shedule_Update(u32 DT)
 	// Optimization update
 //	if (Device.dwFrame % 2) return;
 
+	// Coop server: for this NPC's Lua (binder update, planner evaluators and actions, xr_meet
+	// distances and usability) "the actor" is the nearest living player body, not the world actor.
+	CoopLuaActor coop_actor(game_sv_Coop::NearestBody(Position()), false);
+
 	START_PROFILE("stalker")
 		START_PROFILE("stalker/schedule_update")
 			VERIFY2(getEnabled()||PPhysicsShell(), *cName());
@@ -1142,9 +1213,10 @@ void CAI_Stalker::shedule_Update(u32 DT)
 			}
 			//	if (Position().distance_to(Level().CurrentEntity()->Position()) <= 50.f)
 			//		Msg				("[%6d][SH][%s]",Device.dwTimeGlobal,*cName());
-			// Queue shrink
+			// Queue shrink (a coop replica keeps the snapshots its interpolation delay still needs)
 			VERIFY(_valid(Position()));
-			u32 dwTimeCL = Level().timeServer() - NET_Latency;
+			extern int g_coop_npc_interp;
+			u32 dwTimeCL = Level().timeServer() - ((IsGameTypeCoop() && Remote()) ? u32(g_coop_npc_interp) : NET_Latency);
 			VERIFY(!NET.empty());
 			while ((NET.size() > 2) && (NET[1].dwTimeStamp < dwTimeCL)) NET.pop_front();
 
@@ -1158,7 +1230,9 @@ void CAI_Stalker::shedule_Update(u32 DT)
 				animation().play_delayed_callbacks();
 
 				::luabind::functor<bool> funct;
-				float distance = Actor()->Position().distance_to(Position());
+				CActor* look_target = game_sv_Coop::NearestBody(Position());
+				if (!look_target) look_target = Actor();
+				float distance = look_target ? look_target->Position().distance_to(Position()) : flt_max;
 				auto luaObject = lua_game_object();
 				if (luaObject && distance < NPCsLookAtActorMinDistance && ai().script_engine().functor("_G.CNPCBeforeLookAtActor", funct))
 				{
@@ -1356,8 +1430,32 @@ void CAI_Stalker::Think()
 
 void CAI_Stalker::SelectAnimation(const Fvector& view, const Fvector& move, float speed)
 {
-	if (!Device.Paused())
-		animation().update();
+    if (IsGameTypeCoop() && Remote() && (NET_Last.coop_gait & 0x80))
+    {
+        movement().apply_network_gait(NET_Last.coop_gait, NET_Last.coop_velocity.magnitude());
+        movement().m_body.current.yaw = movement().m_body.target.yaw = NET_Last.o_model;
+        movement().m_head.current = movement().m_head.target = NET_Last.o_torso;
+    }
+    if (IsGameTypeCoop() && Remote())
+    {
+        if (!Device.Paused()) animation().apply_network_layers(NET_Last.coop_layers);
+    }
+    else if (!Device.Paused()) animation().update();
+    if (IsGameTypeCoop() && strstr(Core.Params, "-coop_npc_motion_probe"))
+    {
+        static xr_map<u16, u32> reports;
+        u32& last = reports[ID()];
+        if (Device.dwTimeGlobal - last >= 250)
+        {
+            last = Device.dwTimeGlobal;
+            CBlend* blend = animation().legs().blend();
+            Msg("[COOP_GAIT] side=%s id=%u time=%u move=%u mental=%u body=%u dir=%u yaw=%f speed=%f phase=%f",
+                OnServer() ? "server" : "client", ID(), Level().timeServer(),
+                u32(movement().movement_type()), u32(movement().mental_state()), u32(movement().body_state()),
+                u32(animation().network_direction()), movement().m_body.current.yaw,
+                movement().speed(character_physics_support()->movement()), blend ? blend->timeCurrent : -1.f);
+        }
+    }
 }
 
 const SRotation CAI_Stalker::Orientation() const
@@ -1669,7 +1767,10 @@ void CAI_Stalker::LookAtActorSoftReset(CBoneInstance* headBone)
 
 void CAI_Stalker::LookAtActor(CBoneInstance* headBone) {
 	if (!g_Alive()) return;
-	if (!Actor()) return;
+	// Coop server: the head follows the nearest player body; elsewhere the local actor as before.
+	CActor* actor = game_sv_Coop::NearestBody(Position());
+	if (!actor) actor = Actor();
+	if (!actor) return;
 	if (wounded()) return;
 	if (!_valid(headBone->mTransform)) return;
 
@@ -1678,12 +1779,12 @@ void CAI_Stalker::LookAtActor(CBoneInstance* headBone) {
 		return LookAtActorSoftReset(headBone);
 
 	// soft reset if far enough
-	float distance = Actor()->Position().distance_to(Position());
+	float distance = actor->Position().distance_to(Position());
 	if (distance > NPCsLookAtActorMinDistance)
 		return LookAtActorSoftReset(headBone);
 
 	// soft reset if can't see actor
-	if (!memory().visual().visible_right_now(Actor()))
+	if (!memory().visual().visible_right_now(actor))
 		return LookAtActorSoftReset(headBone);
 
 	// soft reset if lua callback returned false
@@ -1691,14 +1792,14 @@ void CAI_Stalker::LookAtActor(CBoneInstance* headBone) {
 		return LookAtActorSoftReset(headBone);
 
 	Fmatrix actorHead;
-	smart_cast<IKinematics*>(Actor()->Visual())->Bone_GetAnimPos(actorHead, u16(Actor()->m_head), u8(-1), false);
-	actorHead.mulA_43(Actor()->XFORM());
+	smart_cast<IKinematics*>(actor->Visual())->Bone_GetAnimPos(actorHead, u16(actor->m_head), u8(-1), false);
+	actorHead.mulA_43(actor->XFORM());
 
 	Fmatrix myHead = headBone->mTransform;
 	myHead.mulA_43(XFORM());
 	myHead.c.mad(myHead.i, .15f);
 
-	Fvector dir, cam_pos = Actor()->HUDview() ? Actor()->cam_FirstEye()->Position() : actorHead.c;
+	Fvector dir, cam_pos = actor->HUDview() ? actor->cam_FirstEye()->Position() : actorHead.c;
 	dir.sub(cam_pos, myHead.c).normalize();
 
 	Fmatrix target_matrix;

@@ -48,6 +48,7 @@ CEntityCondition::CEntityCondition(CEntityAlive* object)
 	m_use_limping_state = false;
 	m_iLastTimeCalled = 0;
 	m_bTimeValid = false;
+	m_fRemoteBleeding = -1.f;
 
 	m_fPowerMax = MAX_POWER;
 	m_fRadiationMax = MAX_RADIATION;
@@ -246,7 +247,9 @@ void CEntityCondition::UpdateWounds()
 
 void CEntityCondition::UpdateConditionTime()
 {
-	u64 _cur_time = (GameID() == eGameIDSingle) ? Level().GetGameTime() : Level().timeServer();
+	// Coop keeps the SP clock: condition rates (wounds, satiety, radiation, restores) are tuned per
+	// game second, so with the real-time MP clock every effect ran time_factor (5x) too slow.
+	u64 _cur_time = (GameID() == eGameIDSingle || IsGameTypeCoop()) ? Level().GetGameTime() : Level().timeServer();
 
 	if (m_bTimeValid)
 	{
@@ -624,6 +627,9 @@ CWound* CEntityCondition::ConditionHit(SHit* pHDS)
 
 float CEntityCondition::BleedingSpeed()
 {
+	if (m_fRemoteBleeding >= 0.f)
+		return m_fRemoteBleeding; // coop client: authoritative value from the server
+
 	float bleeding_speed = 0.f;
 
 	for (WOUND_VECTOR_IT it = m_WoundVector.begin(); m_WoundVector.end() != it; ++it)

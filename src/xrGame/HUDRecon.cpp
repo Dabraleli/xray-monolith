@@ -89,7 +89,7 @@ void CHUDRecon::Update(const SPickParam& pp)
 			CEntityAlive* pCurEnt = smart_cast<CEntityAlive*>(Level().CurrentEntity());
 			PIItem l_pI = smart_cast<PIItem>(O);
 
-			if (IsGameTypeSingle())
+			if (IsGameTypeSingle() || IsGameTypeCoop()) // coop: the aimed stalker's name, faction and attitude as in SP
 			{
 				CInventoryOwner* our_inv_owner = smart_cast<CInventoryOwner*>(pCurEnt);
 

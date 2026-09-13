@@ -4,11 +4,22 @@
 #include "xrserver_objects.h"
 #include "xrServer_Objects_Alife_Monsters.h"
 #include "Level.h"
+#include "game_sv_coop.h"
 
 
 void xrServer::Perform_connect_spawn(CSE_Abstract* E, xrClientData* CL, NET_Packet& P)
 {
 	P.B.count = 0;
+    if (game->Type() == eGameIDCoop && CL != GetServerClient())
+    {
+        // The internal actor and its inventory are server services, not replicas.
+        for (CSE_Abstract* ancestor = E; ancestor; ancestor = ID_to_entity(ancestor->ID_Parent))
+            if (ancestor->owner == GetServerClient() && ancestor->s_flags.is(M_SPAWN_OBJECT_ASPLAYER))
+            {
+                Msg("[COOP_SERVER] ANCHOR_NOT_STREAMED client=%u object=%u", CL->ID.value(), E->ID);
+                return;
+            }
+    }
 	xr_vector<u16>::iterator it = std::find(conn_spawned_ids.begin(), conn_spawned_ids.end(), E->ID);
 	if (it != conn_spawned_ids.end())
 	{
@@ -21,6 +32,8 @@ void xrServer::Perform_connect_spawn(CSE_Abstract* E, xrClientData* CL, NET_Pack
 	if (E->net_Processed) return;
 	if (E->s_flags.is(M_SPAWN_OBJECT_PHANTOM)) return;
 
+	if (game->Type() == eGameIDCoop && strstr(Core.Params, "-coop_damage_probe") && smart_cast<CSE_ALifeItemWeapon*>(E))
+		Msg("[COOP_CONNECT_SPAWN] client=%u item=%u section=%s parent=%u", CL->ID.value(), E->ID, E->s_name.c_str(), E->ID_Parent);
 	//.	Msg("Perform connect spawn [%d][%s]", E->ID, E->s_name.c_str());
 
 	// Connectivity order
@@ -53,8 +66,7 @@ void xrServer::Perform_connect_spawn(CSE_Abstract* E, xrClientData* CL, NET_Pack
 	}
 	else
 	{
-		E->Spawn_Write(P, FALSE);
-		E->UPDATE_Write(P);
+		WriteOwnedConnectSpawn(E, CL, P);
 		//		CSE_ALifeObject*	object = smart_cast<CSE_ALifeObject*>(E);
 		//		VERIFY				(object);
 		//		VERIFY				(object->client_data.empty());
@@ -63,6 +75,96 @@ void xrServer::Perform_connect_spawn(CSE_Abstract* E, xrClientData* CL, NET_Pack
 	E->s_flags = save;
 	SendTo(CL->ID, P, net_flags(TRUE,TRUE));
 	E->net_Processed = TRUE;
+}
+
+// Only connection serialization changes. CSE ownership and the ALife world
+// actor flag must never follow the recipient's control assignment.
+void xrServer::WriteOwnedConnectSpawn(CSE_Abstract* E, xrClientData* to, NET_Packet& P)
+{
+    const Flags16 saved = E->s_flags;
+    const bool controlled = game->Type() == eGameIDCoop &&
+        GetServerClient() && E->owner == GetServerClient() && to != GetServerClient() &&
+        to->owner == E && smart_cast<CSE_ALifeCreatureActor*>(E) &&
+        !E->s_flags.is(M_SPAWN_OBJECT_ASPLAYER);
+    // Spawn_Write is synchronous; restore even VERSION, which it sets itself.
+    // No ownership transfer, callback, queued work, or world registration here.
+    if (controlled) E->s_flags.set(M_SPAWN_OBJECT_ASPLAYER, TRUE);
+    {
+        CoopHideClientData hide(E);
+        E->Spawn_Write(P, controlled ? TRUE : FALSE);
+    }
+    E->UPDATE_Write(P);
+    E->s_flags = saved;
+}
+
+xrServer::CoopHideClientData::CoopHideClientData(CSE_Abstract* E) : object(E)
+{
+    if (object && !object->client_data.empty())
+        saved.swap(object->client_data);
+}
+
+xrServer::CoopHideClientData::~CoopHideClientData()
+{
+    if (object && !saved.empty())
+        object->client_data.swap(saved);
+}
+
+void xrServer::TestCoopSpawnRouting(CSE_Abstract* body, CSE_Abstract* world)
+{
+    R_ASSERT(game->Type() == eGameIDCoop && body && world && body != world);
+    R_ASSERT(body->owner == GetServerClient() && world->owner == GetServerClient());
+    xrClientData controller, observer;
+    controller.owner = body;
+    const auto check = [&](CSE_Abstract* object, xrClientData* recipient, bool controlled)
+    {
+        const Flags16 saved = object->s_flags;
+        xrClientData* owner = object->owner;
+        NET_Packet actual, legacy;
+        WriteOwnedConnectSpawn(object, recipient, actual);
+        R_ASSERT(object->s_flags.flags == saved.flags && object->owner == owner);
+        object->Spawn_Write(legacy, FALSE);
+        object->UPDATE_Write(legacy);
+        object->s_flags = saved;
+        // Decode the common spawn header independently of the writer.
+        u16 type;
+        actual.r_begin(type);
+        R_ASSERT(type == M_SPAWN);
+        shared_str section, name;
+        actual.r_stringZ(section); actual.r_stringZ(name);
+        actual.r_u8(); actual.r_u8();
+        Fvector position, angle;
+        actual.r_vec3(position); actual.r_vec3(angle);
+        actual.r_u16();
+        R_ASSERT(actual.r_u16() == object->ID);
+        actual.r_u16(); actual.r_u16();
+        const u32 offset = actual.r_tell();
+        const u16 flags = actual.r_u16();
+        const u16 control_flags = M_SPAWN_OBJECT_LOCAL | M_SPAWN_OBJECT_ASPLAYER;
+        R_ASSERT((flags & control_flags) == (controlled ? control_flags : 0));
+        R_ASSERT(actual.B.count == legacy.B.count);
+        // After masking just the two intended bits, every byte must match
+        // the native remote packet, including UPDATE and child/custom data.
+        const u16 masked = flags & ~control_flags;
+        actual.w_seek(offset, &masked, sizeof(masked));
+        R_ASSERT(memcmp(actual.B.data, legacy.B.data, actual.B.count) == 0);
+    };
+    check(body, &controller, true);
+    check(world, &controller, false);
+    check(body, &observer, false);
+    check(body, static_cast<xrClientData*>(GetServerClient()), false);
+    controller.owner = world;
+    check(world, &controller, false); // Never hand out the world protagonist.
+    controller.owner = body;
+    check(body, &controller, true); // No leak from the previous recipient.
+    R_ASSERT(!body->children.empty());
+    CSE_Abstract* child = ID_to_entity(body->children.front());
+    R_ASSERT(child && !smart_cast<CSE_ALifeCreatureActor*>(child));
+    controller.owner = child;
+    check(child, &controller, false); // An item cannot become a control actor.
+    R_ASSERT(!body->s_flags.is(M_SPAWN_OBJECT_ASPLAYER));
+    R_ASSERT(world->s_flags.is(M_SPAWN_OBJECT_ASPLAYER));
+    R_ASSERT(body->owner == GetServerClient() && world->owner == GetServerClient());
+    Msg("[COOP_SERVER] SPAWN_ROUTING_PASS body=%u world=%u cases=7 owner_unchanged=1 native_bytes=1", body->ID, world->ID);
 }
 
 void xrServer::SendConfigFinished(ClientID const& clientId)
@@ -99,6 +201,8 @@ void xrServer::SendConnectionData(IClient* _CL)
 void xrServer::OnCL_Connected(IClient* _CL)
 {
 	xrClientData* CL = (xrClientData*)_CL;
+	if (game->Type() == eGameIDCoop)
+		static_cast<game_sv_Coop*>(game)->PrepareClient(CL);
 	CL->net_Accepted = TRUE;
 	/*if (Level().IsDemoPlay())
 	{
@@ -212,6 +316,7 @@ void xrServer::OnBuildVersionRespond(IClient* CL, NET_Packet& P)
 	u16 Type;
 	P.r_begin(Type);
 	u64 _our = FS.auth_get();
+    if (game->Type()==eGameIDCoop) _our ^= 0x434F4F50414E4902ull;
 	u64 _him = P.r_u64();
 
 #ifdef USE_DEBUG_AUTH

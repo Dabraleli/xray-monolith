@@ -10,6 +10,7 @@
 #include "script_game_object.h"
 #include "script_game_object_impl.h"
 #include "script_entity_action.h"
+#include "game_cl_coop.h"
 #include "ai_space.h"
 #include "script_engine.h"
 #include "script_entity.h"
@@ -22,6 +23,7 @@
 #include "weaponmagazined.h"
 #include "xrmessages.h"
 #include "inventory.h"
+#include "level.h"
 #include "script_ini_file.h"
 #include "../Include/xrRender/Kinematics.h"
 #include "HangingLamp.h"
@@ -49,6 +51,7 @@
 #include "player_hud.h"
 #include "script_attachment_manager.h"
 #include "CustomDevice.h"
+#include "game_sv_coop.h"
 
 class CScriptBinderObject;
 
@@ -124,7 +127,27 @@ BIND_FUNCTION10(&object(), CScriptGameObject::GetRange, CEntityAlive, ffGetRange
 
 BIND_FUNCTION10(&object(), CScriptGameObject::GetHealth, CEntityAlive, conditions().GetHealth, float, -1);
 BIND_FUNCTION01(&object(), CScriptGameObject::SetHealth, CEntityAlive, conditions().SetHealth, float, float);
-BIND_FUNCTION01(&object(), CScriptGameObject::ChangeHealth, CEntityAlive, conditions().ChangeHealth, float, float);
+
+void CScriptGameObject::ChangeHealth(float value)
+{
+	CEntityAlive* entity = smart_cast<CEntityAlive*>(&object());
+	if (!entity)
+	{
+		ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError, "CEntityAlive : cannot access class member ChangeHealth!");
+		return;
+	}
+	// Coop client: health belongs to the server body. The client's presentation Lua (thirst and
+	// sleep penalties) asks the body to change it; anything else is applied locally as before.
+	if (IsGameTypeCoop() && OnClient() && &object() == Level().CurrentControlEntity())
+	{
+		NET_Packet P;
+		CGameObject::u_EventGen(P, GE_COOP_HEALTH_CHANGE, object().ID());
+		P.w_float(value);
+		CGameObject::u_EventSend(P);
+		return;
+	}
+	entity->conditions().ChangeHealth(value);
+}
 
 BIND_FUNCTION10(&object(), CScriptGameObject::GetPsyHealth, CEntityAlive, conditions().GetPsyHealth, float, -1);
 BIND_FUNCTION01(&object(), CScriptGameObject::SetPsyHealth, CEntityAlive, conditions().SetPsyHealth, float, float);
@@ -799,6 +822,7 @@ void CScriptGameObject::SetAmmoElapsed(int ammo_elapsed)
 	
 	CWeapon* weapon = smart_cast<CWeapon*>(&object());
 	if (!weapon) return;
+	game_cl_Coop::ItemVerb("item|ammo|%u|%d", object().ID(), ammo_elapsed); // coop client: the server's weapon too
 	weapon->SetAmmoElapsed(ammo_elapsed);
 }
 
@@ -974,6 +998,7 @@ void CScriptGameObject::SetCondition(float val)
 		                                "CSciptEntity : cannot access class member SetCondition!");
 		return;
 	}
+	game_cl_Coop::ItemVerb("item|cond|%u|%f", object().ID(), val); // coop client: the server's item too
 	val -= inventory_item->GetCondition();
 	inventory_item->ChangeCondition(val);
 }
@@ -1302,6 +1327,14 @@ void CScriptGameObject::StartTrade(CScriptGameObject* obj)
 	if (!pOtherOwner)
 		return;
 
+	// Coop server: the dialog line "I want to buy some equipment" runs here for a body; the deal is
+	// set up on the server and the body's client opens the trade window with the prices sent.
+	if (IsGameTypeCoop() && OnServer() && game_sv_Coop::BodyOf(actor))
+	{
+		game_sv_Coop::TradeStartFor(actor, object().ID());
+		return;
+	}
+
 	CUIGameSP* pGameSP = smart_cast<CUIGameSP*>(CurrentGameUI());
 	if (pGameSP)
 		pGameSP->StartTrade(pActorInv, pOtherOwner);
@@ -1320,7 +1353,15 @@ void CScriptGameObject::StartUpgrade(CScriptGameObject* obj)
 	CInventoryOwner* pOtherOwner = smart_cast<CInventoryOwner*>(&object());
 	if (!pOtherOwner)
 		return;
-	
+
+	// Coop server: the dialog line "I want to upgrade my gear" runs here for a body; its client
+	// opens the mechanic window on its replicas (game_sv_Coop::UpgradeStartFor).
+	if (IsGameTypeCoop() && OnServer() && game_sv_Coop::BodyOf(actor))
+	{
+		game_sv_Coop::UpgradeStartFor(actor, object().ID());
+		return;
+	}
+
 	CUIGameSP* pGameSP = smart_cast<CUIGameSP*>(CurrentGameUI());
 	if (pGameSP)
 		pGameSP->StartUpgrade(pActorInv, pOtherOwner);

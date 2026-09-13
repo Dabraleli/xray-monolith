@@ -88,6 +88,8 @@ void CSE_ALifeInventoryItem::STATE_Write(NET_Packet& tNetPacket)
 {
 	tNetPacket.w_float(m_fCondition);
 	save_data(m_upgrades, tNetPacket);
+	if (!m_upgrades.empty() && strstr(Core.Params, "-coop_server_probe"))
+		Msg("[COOP_UPGRADES] write id=%u section=%s count=%u", base()->ID, base()->s_name.c_str(), u32(m_upgrades.size()));
 	State.position = base()->o_Position;
 }
 
@@ -100,6 +102,8 @@ void CSE_ALifeInventoryItem::STATE_Read(NET_Packet& tNetPacket, u16 size)
 	if (m_wVersion > 123)
 	{
 		load_data(m_upgrades, tNetPacket);
+		if (!m_upgrades.empty() && (strstr(Core.Params, "-coop_server_probe") || strstr(Core.Params, "-coop_client")))
+			Msg("[COOP_UPGRADES] read id=%u section=%s count=%u version=%u", base()->ID, base()->s_name.c_str(), u32(m_upgrades.size()), u32(m_wVersion));
 	}
 
 	State.position = base()->o_Position;

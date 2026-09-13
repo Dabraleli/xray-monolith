@@ -244,6 +244,8 @@ CLASS_ID game_GameState::getCLASS_ID(LPCSTR game_type_name, bool isServer)
 	EGameIDs gameID = ParseStringToGameType(game_type_name);
 	switch (gameID)
 	{
+	case eGameIDCoop:
+		return (isServer) ? TEXT2CLSID("SV_COOP") : TEXT2CLSID("CL_COOP");
 	case eGameIDSingle:
 		return (isServer) ? TEXT2CLSID("SV_SINGL") : TEXT2CLSID("CL_SINGL");
 		break;

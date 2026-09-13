@@ -27,7 +27,7 @@ bool CInventoryItem::has_upgrade_group(const shared_str& upgrade_group_id)
 
 	for (; it != it_e; ++it)
 	{
-		inventory::upgrade::Upgrade* upgrade = ai().alife().inventory_upgrade_manager().get_upgrade(*it);
+		inventory::upgrade::Upgrade* upgrade = inventory::upgrade::manager().get_upgrade(*it);
 		if (upgrade->parent_group_id() == upgrade_group_id)
 			return true;
 	}
@@ -68,7 +68,7 @@ bool CInventoryItem::get_upgrades_str(string2048& res) const
 	inventory::upgrade::Upgrade* upgr;
 	for (; ib != ie; ++ib)
 	{
-		upgr = ai().alife().inventory_upgrade_manager().get_upgrade(*ib);
+		upgr = inventory::upgrade::manager().get_upgrade(*ib);
 		if (!upgr) { continue; }
 
 		LPCSTR upgr_section = upgr->section();
@@ -135,19 +135,22 @@ void CInventoryItem::net_Spawn_install_upgrades(Upgrades_type saved_upgrades) //
 {
 	m_upgrades.clear_not_free();
 
-	if (!ai().get_alife())
+	if (!inventory::upgrade::manager_available())
 	{
 		return;
 	}
 
-	ai().alife().inventory_upgrade_manager().init_install(*this); // from pSettings
+	inventory::upgrade::manager().init_install(*this); // from pSettings
 
 	Upgrades_type::iterator ib = saved_upgrades.begin();
 	Upgrades_type::iterator ie = saved_upgrades.end();
 	for (; ib != ie; ++ib)
 	{
-		ai().alife().inventory_upgrade_manager().upgrade_install(*this, (*ib), true);
+		inventory::upgrade::manager().upgrade_install(*this, (*ib), true);
 	}
+	if (IsGameTypeCoop() && !saved_upgrades.empty())
+		Msg("[COOP_UPGRADES] side=%s item=%u section=%s saved=%u installed=%u", OnServer() ? "server" : "client",
+		    object_id(), m_section_id.c_str(), u32(saved_upgrades.size()), u32(m_upgrades.size()));
 }
 
 bool CInventoryItem::install_upgrade(LPCSTR section)

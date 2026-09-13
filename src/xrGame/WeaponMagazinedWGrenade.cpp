@@ -74,7 +74,7 @@ BOOL CWeaponMagazinedWGrenade::net_Spawn(CSE_Abstract* DC)
 {
 	CSE_ALifeItemWeapon* const weapon = smart_cast<CSE_ALifeItemWeapon*>(DC);
 	R_ASSERT(weapon);
-	if (IsGameTypeSingle())
+	if (IsGameTypeSingle() || IsGameTypeCoop()) // coop as SP (see CInventoryItem::net_Spawn)
 	{
 		inherited::net_Spawn_install_upgrades(weapon->m_upgrades);
 	}

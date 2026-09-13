@@ -368,7 +368,20 @@ BOOL CSE_Abstract::Spawn_Read(NET_Packet& tNetPacket)
 	bool b1 = (m_tClassID == CLSID_SPECTATOR);
 	bool b2 = (size > sizeof(size)) || (tNetPacket.inistream != NULL);
 	R_ASSERT3((b1 || b2), "cannot read object, which is not successfully saved :(", name_replace());
+    const u32 state_end = tNetPacket.r_tell() + size - sizeof(size);
+    const bool coop_replica = !tNetPacket.inistream &&
+        (strstr(Core.Params, "-coop_server_probe") || strstr(Core.Params, "-coop_client"));
+    if (coop_replica) R_ASSERT2(state_end <= tNetPacket.B.count, "Coop spawn state exceeds packet");
 	STATE_Read(tNetPacket, size);
+    if (coop_replica)
+    {
+        // Anomaly se_actor skips its Lua state when db.actor already exists.
+        // UPDATE starts after the declared STATE frame, not the Lua read cursor.
+        R_ASSERT2(tNetPacket.r_tell() <= state_end, "Coop spawn reader exceeded state frame");
+        if (tNetPacket.r_tell() != state_end)
+            Msg("[COOP_TRACE] SPAWN_STATE_TAIL id=%u skipped=%u", ID, state_end - tNetPacket.r_tell());
+        tNetPacket.r_seek(state_end);
+    }
 	return TRUE;
 }
 

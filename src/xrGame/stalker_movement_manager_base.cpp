@@ -676,8 +676,23 @@ float stalker_movement_manager_base::speed(const EMovementDirection& movement_di
 	);
 }
 
+void stalker_movement_manager_base::apply_network_gait(u8 flags, float speed)
+{
+    m_current.m_body_state = m_target.m_body_state = EBodyState(flags & 1);
+    m_current.m_mental_state = m_target.m_mental_state = EMentalState((flags >> 1) & 3);
+    m_current.m_movement_type = m_target.m_movement_type = EMovementType((flags >> 3) & 3);
+    m_speed = m_current.m_movement_type == eMovementTypeStand ? 0.f : speed;
+}
+
+float stalker_movement_manager_base::speed(CPHMovementControl* control) const
+{
+    if (IsGameTypeCoop() && object().Remote()) return m_speed;
+    return inherited::speed(control);
+}
+
 void stalker_movement_manager_base::setup_speed_from_animation(const float& speed)
 {
+    if (IsGameTypeCoop() && object().Remote()) return;
 	set_desirable_speed(object().m_fCurSpeed = speed);
 }
 

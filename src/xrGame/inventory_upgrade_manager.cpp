@@ -13,6 +13,9 @@
 #include "inventory_upgrade_root.h"
 #include "inventory_upgrade_group.h"
 #include "inventory_upgrade_property.h"
+#include "ai_space.h"
+#include "alife_simulator.h"
+#include "Level.h"
 
 extern int g_upgrades_log = 0;
 
@@ -508,6 +511,28 @@ void Manager::test_all_upgrades( CInventoryItem& item )
 				root_p->reset_highlight();
 				return;
 			}
+		}
+
+		// ---- The manager of this process (see the header) --------------------------------------
+		static Manager* g_coop_manager = NULL;
+
+		bool manager_available()
+		{
+			if (ai().get_alife()) return true;
+			return IsGameTypeCoop() && g_pGameLevel && OnClient();
+		}
+
+		Manager& manager()
+		{
+			if (ai().get_alife()) return ai().alife().inventory_upgrade_manager();
+			VERIFY2(manager_available(), "inventory upgrade manager without ALife outside a coop client");
+			if (!g_coop_manager) g_coop_manager = xr_new<Manager>();
+			return *g_coop_manager;
+		}
+
+		void coop_manager_destroy()
+		{
+			xr_delete(g_coop_manager);
 		}
 	} // namespace upgrade
 } // namespace inventory

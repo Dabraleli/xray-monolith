@@ -8,6 +8,7 @@
 
 #include "pch_script.h"
 #include "stalker_property_evaluators.h"
+#include "game_sv_coop.h"
 #include "ai/stalker/ai_stalker.h"
 #include "stalker_decision_space.h"
 #include "script_game_object.h"
@@ -415,13 +416,19 @@ _value_type CStalkerPropertyEvaluatorPlayerOnThePath::evaluate()
 	if (!enemy)
 		return (false);
 
-	if (!object().is_relation_enemy(Actor()))
+	// Coop server: the player on the path is the nearest body, not the world actor.
+	CActor* actor = game_sv_Coop::NearestBody(object().Position());
+	if (!actor) actor = Actor();
+	if (!actor)
 		return (false);
 
-	if (!m_object->memory().visual().visible_now(Actor()))
+	if (!object().is_relation_enemy(actor))
 		return (false);
 
-	return (object().movement().is_object_on_the_way(Actor(), 2.f));
+	if (!m_object->memory().visual().visible_now(actor))
+		return (false);
+
+	return (object().movement().is_object_on_the_way(actor, 2.f));
 }
 
 //////////////////////////////////////////////////////////////////////////

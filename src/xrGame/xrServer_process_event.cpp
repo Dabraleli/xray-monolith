@@ -9,6 +9,9 @@
 #include "alife_object_registry.h"
 #include "xrServer_Objects_ALife_Items.h"
 #include "xrServer_Objects_ALife_Monsters.h"
+#include "Level.h"
+#include "inventory_item.h"
+#include "inventory_upgrade_manager.h"
 
 void xrServer::Process_event(NET_Packet& P, ClientID sender)
 {
@@ -55,6 +58,8 @@ void xrServer::Process_event(NET_Packet& P, ClientID sender)
 	case GEG_PLAYER_ITEM2BELT:
 	case GEG_PLAYER_ITEM2RUCK:
 	case GE_GRENADE_EXPLODE:
+	case GE_COOP_CONDITION:
+	case GE_COOP_TIP_TEXT:
 		{
 			SendBroadcast(BroadcastCID, P, MODE);
 		}
@@ -279,6 +284,23 @@ void xrServer::Process_event(NET_Packet& P, ClientID sender)
 			{
 				break;
 			}
+			if (game->Type() == eGameIDCoop)
+			{
+				// A client's mechanic window (CoopAdmitClientEvent) or the server's own object: the
+				// saved list once (add_upgrade is fatal on a duplicate); the server's game object
+				// follows a client's install without effects (the client's Lua took the money), and
+				// the other clients' replicas follow as at spawn (CInventoryItem::OnEvent).
+				if (!iitem->has_upgrade(upgrade_id)) iitem->add_upgrade(upgrade_id);
+				if (sender != SV_Client->ID)
+				{
+					CInventoryItem* item = smart_cast<CInventoryItem*>(Level().Objects.net_Find(destination));
+					if (item && !item->has_upgrade(upgrade_id) && inventory::upgrade::manager_available())
+						inventory::upgrade::manager().upgrade_install(*item, upgrade_id, true);
+					Msg("[COOP_SERVER] UPGRADE_INSTALLED item=%u upgrade=%s client=%u", destination, upgrade_id.c_str(), sender.value());
+				}
+				SendBroadcast(sender, P, MODE);
+				break;
+			}
 			iitem->add_upgrade(upgrade_id);
 		}
 		break;
@@ -318,6 +340,8 @@ void xrServer::Process_event(NET_Packet& P, ClientID sender)
 
 	case GEG_PLAYER_DISABLE_SPRINT:
 	case GEG_PLAYER_WEAPON_HIDE_STATE:
+	case GE_COOP_HEALTH_CHANGE: // to the server body only; admitted per client in CoopAdmitClientEvent
+	case GE_COOP_USE_OBJECT:
 		{
 			SendTo(SV_Client->ID, P, net_flags(TRUE, TRUE));
 
@@ -342,6 +366,11 @@ void xrServer::Process_event(NET_Packet& P, ClientID sender)
 				NET_Packet tmp_packet;
 				CGameObject::u_EventGen(tmp_packet, GEG_PLAYER_USE_BOOSTER, receiver->ID);
 				SendTo(receiver->owner->ID, P, net_flags(TRUE, TRUE));
+			}
+			else if (xrClientData* controller = CoopControllerOf(receiver))
+			{
+				// Coop: bodies belong to the internal client; the item's remaining uses go to the player.
+				SendTo(controller->ID, P, net_flags(TRUE, TRUE));
 			}
 		}
 		break;

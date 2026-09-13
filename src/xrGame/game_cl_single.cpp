@@ -2,6 +2,7 @@
 #include "game_cl_single.h"
 #include "UIGameSP.h"
 #include "actor.h"
+#include "Level.h"
 #include "clsid_game.h"
 
 using namespace luabind;
@@ -40,7 +41,12 @@ char* game_cl_Single::getTeamSection(int Team)
 
 void game_cl_Single::OnDifficultyChanged()
 {
-	Actor()->OnDifficultyChanged();
+	if (Actor()) Actor()->OnDifficultyChanged();
+	// Coop server: every player's body too (the world actor is Actor() there).
+	if (IsGameTypeCoop() && OnServer())
+		for (u32 i = 0; i < Level().Objects.o_count(); ++i)
+			if (CActor* body = smart_cast<CActor*>(Level().Objects.o_get_by_iterator(i)))
+				if (body != Actor()) body->OnDifficultyChanged();
 }
 
 #include "ai_space.h"

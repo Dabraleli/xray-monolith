@@ -1,4 +1,6 @@
 #include "stdafx.h"
+
+static bool coop_no_residual_graphics() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_no_render_streams") && strstr(Core.Params, "-coop_server_no_residual_graphics")); }
 #include "Tracer.h"
 #include "../xrEngine/render.h"
 
@@ -15,7 +17,8 @@ CTracer::CTracer()
 	m_circle_size_k = pSettings->r_float("bullet_manager", "fire_circle_k");
 	m_tracer_length_k = READ_IF_EXISTS(pSettings, r_float, "bullet_manager", "tracer_length_k", 1.0f);	// momopate: Allow for customizable tracer length
 
-	sh_Tracer->create(sh_name, tx_name);
+	if (!coop_no_residual_graphics()) sh_Tracer->create(sh_name, tx_name);
+    else Msg("[COOP_SERVER] TRACER_GRAPHICS_SKIPPED ballistics=retained");
 
 	m_aColors.clear();
 	string64 LineName;

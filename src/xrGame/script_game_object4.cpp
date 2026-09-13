@@ -230,8 +230,11 @@ bool CScriptGameObject::wounded() const
 	const CAI_Stalker* stalker = smart_cast<const CAI_Stalker *>(&object());
 	if (!stalker)
 	{
-		ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError,
-		                                "CAI_Stalker : cannot access class member wounded!");
+		// Coop: scripts that treat every human as a stalker meet player bodies (CActor) on the
+		// server; a player is never "wounded" in the stalker sense, so answer quietly.
+		if (!smart_cast<const CActor*>(&object()))
+			ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError,
+			                                "CAI_Stalker : cannot access class member wounded!");
 		return (false);
 	}
 
@@ -243,8 +246,9 @@ void CScriptGameObject::wounded(bool value)
 	CAI_Stalker* stalker = smart_cast<CAI_Stalker *>(&object());
 	if (!stalker)
 	{
-		ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError,
-		                                "CAI_Stalker : cannot access class member wounded!");
+		if (!smart_cast<CActor*>(&object()))
+			ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError,
+			                                "CAI_Stalker : cannot access class member wounded!");
 		return;
 	}
 

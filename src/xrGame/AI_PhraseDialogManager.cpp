@@ -32,6 +32,7 @@ void CAI_PhraseDialogManager::ReceivePhrase(DIALOG_SHARED_PTR& phrase_dialog)
 #include "uigamesp.h"
 #include "level.h"
 #include "ui/UItalkWnd.h"
+#include "game_sv_coop.h"
 
 void CAI_PhraseDialogManager::AnswerPhrase(DIALOG_SHARED_PTR& phrase_dialog)
 {
@@ -72,7 +73,10 @@ void CAI_PhraseDialogManager::AnswerPhrase(DIALOG_SHARED_PTR& phrase_dialog)
 		shared_str phrase_id = phrase_dialog->PhraseList()[phrase_num]->GetID();
 
 		CUIGameSP* pGameSP = smart_cast<CUIGameSP*>(CurrentGameUI());
-		pGameSP->TalkMenu->AddAnswer(phrase_dialog->GetPhraseText(phrase_id), pInvOwner->Name());
+		if (pGameSP)
+			pGameSP->TalkMenu->AddAnswer(phrase_dialog->GetPhraseText(phrase_id), pInvOwner->Name());
+		else if (IsGameTypeCoop() && OnServer())
+			game_sv_Coop::TalkNpcAnswer(pOthersGO, phrase_dialog->GetPhraseText(phrase_id)); // headless server: to the body's player
 
 		CPhraseDialogManager::SayPhrase(phrase_dialog, phrase_id);
 	}

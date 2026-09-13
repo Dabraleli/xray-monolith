@@ -3,6 +3,8 @@
 //////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+
+static bool coop_no_residual_graphics() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_no_render_streams") && strstr(Core.Params, "-coop_server_no_residual_graphics")); }
 #include "Level.h"
 #include "Level_Bullet_Manager.h"
 #include "game_cl_base.h"
@@ -186,7 +188,7 @@ CBulletManager::~CBulletManager()
 void CBulletManager::Load()
 {
 	char const* bullet_manager_sect = "bullet_manager";
-	if (!IsGameTypeSingle())
+	if (!IsGameTypeSingle() && !IsGameTypeCoop()) // coop as SP: the SP ballistics (mp_bullet_manager speeds bullets up)
 	{
 		bullet_manager_sect = "mp_bullet_manager";
 	}
@@ -303,7 +305,7 @@ void CBulletManager::AddBullet(const Fvector& position,
 		funct(table);
 	}
 
-	if (!IsGameTypeSingle())
+	if (!IsGameTypeSingle() && !IsGameTypeCoop())
 	{
 		if (SendHit)
 			Game().m_WeaponUsageStatistic->OnBullet_Fire(&bullet, cartridge);
@@ -824,7 +826,7 @@ BOOL CBulletManager::firetrace_callback(collide::rq_result& result, LPVOID param
 	Fvector& collide_position = data.collide_position;
 	collide_position = Fvector().mad(bullet.bullet_pos, bullet.dir, result.range);
 
-	float const air_resistance = (GameID() == eGameIDSingle)
+	float const air_resistance = (GameID() == eGameIDSingle || IsGameTypeCoop()) // coop as SP
 		                             ? Level().BulletManager().m_fAirResistanceK
 		                             : bullet.air_resistance;
 
@@ -1004,7 +1006,7 @@ bool CBulletManager::process_bullet(collide::rq_results& storage, SBullet& bulle
 	float const time_delta = float(delta_time) / 1000.f;
 	Fvector const gravity = Fvector().set(0.f, -m_fGravityConst, 0.f);
 
-	float const air_resistance = (GameID() == eGameIDSingle) ? m_fAirResistanceK : bullet.air_resistance;
+	float const air_resistance = (GameID() == eGameIDSingle || IsGameTypeCoop()) ? m_fAirResistanceK : bullet.air_resistance; // coop as SP
 	bullet.tracer_start_position = bullet.bullet_pos;
 
 #if 0//def DEBUG
@@ -1113,6 +1115,7 @@ float SqrDistancePointToSegment(const Fvector& pt, const Fvector& orig, const Fv
 BOOL g_render_short_tracers = 1;
 void CBulletManager::Render()
 {
+    if (coop_no_residual_graphics()) return;
 #ifdef DEBUG
 	if (g_bDrawBulletHit && !m_bullet_points.empty()) {
 		VERIFY							(!(m_bullet_points.size() % 2));
@@ -1345,7 +1348,7 @@ void CBulletManager::RegisterEvent(EventType Type, BOOL _dynamic, SBullet* bulle
 				//	bullet->targetID = R.O->ID();
 
 				E.Repeated = (R.O->ID() == E.bullet.targetID);
-				if (GameID() == eGameIDSingle)
+				if (GameID() == eGameIDSingle || IsGameTypeCoop()) // coop as SP
 				{
 					bullet->targetID = R.O->ID();
 				}

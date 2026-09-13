@@ -1,4 +1,6 @@
 #include "stdafx.h"
+static bool coop_no_scope_ui() { return strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_no_game_ui") && strstr(Core.Params, "-coop_server_no_ui_resources"); }
+
 #include "WeaponBinoculars.h"
 
 #include "xr_level_controller.h"
@@ -72,7 +74,7 @@ void CWeaponBinoculars::OnZoomIn()
 		m_sounds.StopSound("sndZoomOut");
 		bool b_hud_mode = (Level().CurrentEntity() == H_Parent());
 		m_sounds.PlaySound("sndZoomIn", H_Parent()->Position(), H_Parent(), b_hud_mode);
-		if (m_bVision && !m_binoc_vision)
+		if (m_bVision && !m_binoc_vision && !coop_no_scope_ui())
 		{
 			//.VERIFY			(!m_binoc_vision);
 			m_binoc_vision = xr_new<CBinocularsVision>(cNameSect());

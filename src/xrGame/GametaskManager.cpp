@@ -13,6 +13,7 @@
 #include "ui/UIMapWnd.h"
 #include "..\..\xrEngine\x_ray.h"
 #include "string_table.h"
+#include "game_sv_coop.h"
 
 #pragma warning(push)
 #pragma warning(disable:4995)
@@ -126,6 +127,7 @@ CGameTask* CGameTaskManager::GiveGameTaskToActor(CGameTask* t, u32 timeToComplet
 	if (CurrentGameUI())
 		CurrentGameUI()->UpdatePda();
 
+	game_sv_Coop::OnTaskChanged(t); // coop server: mirror to the clients' PDA (no-op elsewhere)
 	t->ChangeStateCallback();
 
 	return t;
@@ -145,6 +147,8 @@ void CGameTaskManager::SetTaskState(CGameTask* t, ETaskState state)
 
 	if (CurrentGameUI())
 		CurrentGameUI()->UpdatePda();
+
+	game_sv_Coop::OnTaskChanged(t);
 }
 
 void CGameTaskManager::SetTaskState(const shared_str& id, ETaskState state)

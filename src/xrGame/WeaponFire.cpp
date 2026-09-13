@@ -14,6 +14,7 @@
 #include "level_bullet_manager.h"
 
 #include "game_cl_mp.h"
+#include "game_sv_coop.h"
 #include "reward_event_generator.h"
 #include "../Layers/xrRender/xrRender_console.h"
 
@@ -66,6 +67,9 @@ void CWeapon::FireStart()
 void CWeapon::FireTrace(const Fvector& P, const Fvector& D)
 {
 	VERIFY(m_magazine.size());
+	// Coop server: an NPC's shot ray goes to the clients in range (their replica's tracer follows it).
+	if (IsGameTypeCoop() && OnServer() && H_Parent() && !smart_cast<CActor*>(H_Parent()))
+		game_sv_Coop::RelayNpcShot(H_Parent(), ID(), P, D);
 
 	CCartridge& l_cartridge = m_magazine.back();
 	//	Msg("ammo - %s", l_cartridge.m_ammoSect.c_str());
@@ -87,7 +91,7 @@ void CWeapon::FireTrace(const Fvector& P, const Fvector& D)
 
 	float fire_disp = 0.f;
 	CActor* tmp_actor = NULL;
-	if (!IsGameTypeSingle())
+	if (!IsGameTypeSingle() && !IsGameTypeCoop())
 	{
 		tmp_actor = smart_cast<CActor*>(Level().CurrentControlEntity());
 		if (tmp_actor)

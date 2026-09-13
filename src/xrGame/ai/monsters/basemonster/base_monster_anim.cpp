@@ -12,9 +12,11 @@
 #include "../../../sound_player.h"
 #include "../../../ai_monster_space.h"
 #include "../control_animation_base.h"
+#include "../control_animation.h"
 
 // Установка анимации
 void CBaseMonster::SelectAnimation(const Fvector&/**_view/**/, const Fvector&/**_move/**/, float /**speed/**/)
 {
-	control().animation().update_frame();
+    if (IsGameTypeCoop() && Remote()) control().animation().apply_network_layers(NET_Last.coop_layers);
+    else control().animation().update_frame();
 }

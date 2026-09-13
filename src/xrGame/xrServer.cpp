@@ -9,6 +9,7 @@
 #include "level.h"
 #include "game_cl_base.h"
 #include "game_sv_mp.h"
+#include "game_sv_coop.h"
 #include "game_cl_base_weapon_usage_statistic.h"
 #include "ai_space.h"
 #include "../xrEngine/IGame_Persistent.h"
@@ -17,6 +18,7 @@
 
 #include "../xrEngine/XR_IOConsole.h"
 #include "ui/UIInventoryUtilities.h"
+#include "xr_level_controller.h"
 #include "file_transfer.h"
 #include "screenshot_server.h"
 #include "xrServer_info.h"
@@ -42,6 +44,8 @@ void xrClientData::Clear()
 	net_Ready = FALSE;
 	net_Accepted = FALSE;
 	net_PassUpdates = TRUE;
+	net_LastMoveUpdateTime = 0;
+	coop_last_detached = u16(-1);
 	m_ping_warn.m_maxPingWarnings = 0;
 	m_ping_warn.m_dwLastMaxPingWarningTime = 0;
 	m_admin_rights.m_has_admin_rights = FALSE;
@@ -149,6 +153,14 @@ void xrServer::client_Destroy(IClient* C)
 	if (alife_client)
 	{
 		CSE_Abstract* pOwner = static_cast<xrClientData*>(alife_client)->owner;
+        if (strstr(Core.Params, "-coop_server_probe"))
+        {
+            // SLS_Clear may have destroyed this body before transport cleanup.
+            const auto live = std::find_if(entities.begin(), entities.end(),
+                [pOwner](const xrS_entities::value_type& entry) { return entry.second == pOwner; });
+            if (live == entities.end()) pOwner = NULL;
+            static_cast<xrClientData*>(alife_client)->owner = NULL;
+        }
 		CSE_Spectator* pS = smart_cast<CSE_Spectator*>(pOwner);
 		if (pS)
 		{
@@ -176,7 +188,7 @@ void xrServer::client_Destroy(IClient* C)
 		}
 		while (true);
 
-		if (pOwner)
+		if (pOwner && game)
 		{
 			game->CleanDelayedEventFor(pOwner->ID);
 		}
@@ -214,6 +226,12 @@ void xrServer::Update()
 {
 	if (Level().IsDemoPlayStarted() || Level().IsDemoPlayFinished())
 		return; //diabling server when demo is playing
+
+#ifdef XR_USE_ENET
+	// ENet is polled; DirectPlay pushed from its own threads. Do this first so
+	// everything below sees this frame's connects, disconnects and packets.
+	Poll();
+#endif
 
 	NET_Packet Packet;
 #ifdef DEBUG
@@ -304,7 +322,10 @@ void xrServer::MakeUpdatePackets()
 		if (0 == Test.owner) continue;
 		if (!Test.net_Ready) continue;
 		if (Test.s_flags.is(M_SPAWN_OBJECT_PHANTOM)) continue; // Surely: phantom
-		if (!Test.Net_Relevant()) continue;
+        // ALife creatures inherit Net_Relevant=false: sufficient for SP, but
+        // coop replicas need ongoing authoritative state after their spawn.
+        if (!Test.Net_Relevant() && !(IsGameTypeCoop() &&
+            smart_cast<CSE_ALifeCreatureAbstract*>(&Test))) continue;
 
 		tmpPacket.B.count = 0;
 		// write specific data
@@ -464,6 +485,175 @@ u32 xrServer::OnMessageSync(NET_Packet& P, ClientID sender)
 
 extern float g_fCatchObjectTime;
 
+// Coop: the commands a remote player may issue for the body assigned to its connection.
+// Everything here already exists in the MP event path; the server actor executes it.
+static bool coop_inventory_command_allowed(u16 cmd)
+{
+    switch (cmd)
+    {
+    case kWPN_1: case kWPN_2: case kWPN_3: case kWPN_4: case kWPN_5: case kWPN_6:
+    case kARTEFACT: case kWPN_NEXT: case kWPN_FIRE: case kWPN_ZOOM: case kWPN_RELOAD: case kWPN_FUNC:
+    case kWPN_FIREMODE_PREV: case kWPN_FIREMODE_NEXT: case kDROP: case kTORCH: case kNIGHT_VISION:
+    case kACTIVE_JOBS:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// Pickup / loot reach, measured between the live game objects on the server.
+static const float coop_item_reach = 3.5f;
+
+static bool coop_within_reach(CSE_Abstract* body, CSE_Abstract* other)
+{
+    if (!body || !other) return false;
+    if (body == other) return true;
+    CObject* a = Level().Objects.net_Find(body->ID);
+    CObject* b = Level().Objects.net_Find(other->ID);
+    if (!a || !b || b->getDestroy()) return false;
+    return a->Position().distance_to(b->Position()) <= coop_item_reach;
+}
+
+// A container the body may exchange items with: itself, a dead creature, or an inventory box.
+static bool coop_lootable_container(CSE_Abstract* body, CSE_Abstract* container)
+{
+    if (!container) return false;
+    if (container == body) return true;
+    if (!coop_within_reach(body, container)) return false;
+    if (smart_cast<CSE_ALifeInventoryBox*>(container)) return true;
+    CSE_ALifeCreatureAbstract* creature = smart_cast<CSE_ALifeCreatureAbstract*>(container);
+    return creature && !creature->g_Alive();
+}
+
+xrClientData* xrServer::CoopControllerOf(CSE_Abstract* body)
+{
+    if (!body || game->Type() != eGameIDCoop) return NULL;
+    xrClientData* found = NULL;
+    IClient* internal = GetServerClient();
+    auto visit = [&](IClient* connection)
+    {
+        if (found || connection == internal || !connection->flags.bConnected) return;
+        xrClientData* client = static_cast<xrClientData*>(connection);
+        if (client->owner == body && client->net_Accepted) found = client;
+    };
+    ForEachClientDo(visit);
+    return found;
+}
+
+// P is positioned right after the event header (timestamp, type, destination).
+bool xrServer::CoopAdmitClientEvent(xrClientData* CL, NET_Packet& P, u16 type, u16 destination)
+{
+    CSE_ALifeCreatureActor* body = smart_cast<CSE_ALifeCreatureActor*>(CL->owner);
+    if (!body || body->owner != GetServerClient() || body->s_flags.is(M_SPAWN_OBJECT_ASPLAYER) || !body->g_Alive())
+        return false;
+    // Item exchange addresses the container (own body, corpse or box), an upgrade addresses the
+    // item, a hit addresses the target; everything else addresses the body.
+    const bool exchange = type == GE_TRADE_SELL || type == GE_TRADE_BUY || type == GE_INSTALL_UPGRADE;
+    const bool hit = type == GE_HIT || type == GE_HIT_STATISTIC;
+    if (!exchange && !hit && destination != body->ID)
+        return false;
+    switch (type)
+    {
+    case GE_HIT:
+    case GE_HIT_STATISTIC:
+    {
+        // A hit of the body's own shot (CShootingObject::SendHitAllowed: a player's shots
+        // register on its client): the shooter is the body, the weapon one of its items (or the
+        // body itself), the target anything the world shows - never the hidden world actor.
+        if (P.B.count < P.r_tell() + 2 * sizeof(u16)) return false;
+        const u16 who = P.r_u16();
+        const u16 weapon = P.r_u16();
+        if (who != body->ID) return false;
+        CSE_Abstract* target = ID_to_entity(destination);
+        if (!target || target->s_flags.is(M_SPAWN_OBJECT_ASPLAYER)) return false;
+        CSE_Abstract* item = ID_to_entity(weapon);
+        return weapon == body->ID || (item && item->ID_Parent == body->ID);
+    }
+    case GE_INSTALL_UPGRADE:
+    {
+        // The client's mechanic window installed an upgrade on one of the body's items (the
+        // client's Lua took the money); the server installs the same on its object (Process_event).
+        CSE_Abstract* item = ID_to_entity(destination);
+        return item && item->ID_Parent == body->ID && smart_cast<CSE_ALifeInventoryItem*>(item) && P.B.count > P.r_tell();
+    }
+    case GE_INV_ACTION:
+    {
+        if (P.B.count < P.r_tell() + sizeof(u16) + sizeof(u32) + 2 * sizeof(s32)) return false;
+        const u16 cmd = P.r_u16();
+        if (cmd == kWPN_FIRE && strstr(Core.Params, "-coop_damage_probe"))
+            Msg("[COOP_FIRE_KEY] client=%u body=%u flags=%u time=%u", CL->ID.value(), body->ID, P.r_u32(), Device.dwTimeGlobal);
+        if (cmd == kACTIVE_JOBS && strstr(Core.Params, "-coop_damage_probe"))
+            Msg("[COOP_PDA_KEY] client=%u body=%u flags=%u", CL->ID.value(), body->ID, P.r_u32());
+        return coop_inventory_command_allowed(cmd);
+    }
+    case GEG_PLAYER_ITEM2SLOT:
+    case GEG_PLAYER_ITEM2BELT:
+    case GEG_PLAYER_ITEM2RUCK:
+    case GEG_PLAYER_ITEM_EAT:
+    case GE_OWNERSHIP_REJECT:
+    {
+        if (P.B.count < P.r_tell() + sizeof(u16)) return false;
+        // Only items the body already holds; taking from the world is GE_OWNERSHIP_TAKE.
+        CSE_Abstract* item = ID_to_entity(P.r_u16());
+        return item && item->ID_Parent == body->ID;
+    }
+    case GE_OWNERSHIP_TAKE:
+    {
+        if (P.B.count < P.r_tell() + sizeof(u16)) return false;
+        // A free item within reach. Process_event_ownership keeps the first taker: the
+        // second request finds ID_Parent set and is dropped there.
+        CSE_Abstract* item = ID_to_entity(P.r_u16());
+        return item && item->ID_Parent == 0xffff && smart_cast<CSE_ALifeInventoryItem*>(item) && coop_within_reach(body, item);
+    }
+    case GE_TRADE_SELL:
+    {
+        if (P.B.count < P.r_tell() + sizeof(u16)) return false;
+        // Detach from a container the body may loot: itself, a corpse or a box within reach.
+        CSE_Abstract* container = ID_to_entity(destination);
+        CSE_Abstract* item = ID_to_entity(P.r_u16());
+        if (!item || !container || item->ID_Parent != destination || !coop_lootable_container(body, container))
+            return false;
+        CL->coop_last_detached = item->ID;
+        return true;
+    }
+    case GE_TRADE_BUY:
+    {
+        if (P.B.count < P.r_tell() + sizeof(u16)) return false;
+        // Attach a free item to the body or to a box/corpse within reach. The UI pairs this with a
+        // GE_TRADE_SELL an instant earlier; that item is accepted wherever its stale position says it is.
+        CSE_Abstract* container = ID_to_entity(destination);
+        CSE_Abstract* item = ID_to_entity(P.r_u16());
+        return item && container && item->ID_Parent == 0xffff && smart_cast<CSE_ALifeInventoryItem*>(item) &&
+            coop_lootable_container(body, container) && (item->ID == CL->coop_last_detached || coop_within_reach(body, item));
+    }
+    case GEG_PLAYER_ACTIVATE_SLOT:
+        return P.B.count >= P.r_tell() + sizeof(u16);
+    case GEG_PLAYER_WEAPON_HIDE_STATE:
+        // hide_weapon/restore_weapon from the client's item-use animations (INV_STATE_BLOCK_ALL on/off).
+        return P.B.count >= P.r_tell() + sizeof(u16) + sizeof(u8);
+    case GE_COOP_HEALTH_CHANGE:
+    {
+        // Small health deltas from the client's own presentation Lua (thirst/sleep penalties).
+        if (P.B.count < P.r_tell() + sizeof(float)) return false;
+        const float delta = P.r_float();
+        return _valid(delta) && _abs(delta) <= 0.05f;
+    }
+    case GE_COOP_USE_OBJECT:
+    {
+        // "Use" on a script-usable world object (door, lever). The client already limits the look
+        // ray to 2 m; the object's pivot (a door hinge) may sit a little further than an item would.
+        if (P.B.count < P.r_tell() + sizeof(u16)) return false;
+        CSE_Abstract* target = ID_to_entity(P.r_u16());
+        if (!target || target->ID_Parent != 0xffff) return false;
+        CObject* a = Level().Objects.net_Find(body->ID);
+        CObject* b = Level().Objects.net_Find(target->ID);
+        return a && b && !b->getDestroy() && a->Position().distance_to(b->Position()) <= 6.f;
+    }
+    default:
+        return false;
+    }
+}
+
 u32 xrServer::OnMessage(NET_Packet& P, ClientID sender) // Non-Zero means broadcasting with "flags" as returned
 {
 	u16 type;
@@ -472,6 +662,111 @@ u32 xrServer::OnMessage(NET_Packet& P, ClientID sender) // Non-Zero means broadc
 	VERIFY(verify_entities());
 #endif
 	xrClientData* CL = ID_to_client(sender);
+
+    // Coop: remote commands may only update or act through the assigned actor.
+    // Weapon/inventory events pass CoopAdmitClientEvent; world interaction is not admitted yet.
+    if (game->Type() == eGameIDCoop && CL != GetServerClient())
+    {
+        if (!CL) return 0;
+        switch (type)
+        {
+        case M_CL_UPDATE:
+        {
+            if (!CL->net_Accepted || !CL->owner || P.B.count < P.r_tell() + 7) return 0;
+            const u32 cursor = P.r_tell();
+            const u16 object_id = P.r_u16();
+            P.r_seek(cursor);
+            CSE_Abstract* object = ID_to_entity(object_id);
+            if (!object || object != CL->owner || object->owner != GetServerClient() ||
+                !smart_cast<CSE_ALifeCreatureActor*>(object) || object->s_flags.is(M_SPAWN_OBJECT_ASPLAYER))
+            {
+                Msg("[COOP_SERVER] INPUT_REJECT client=%u object=%u", sender.value(), object_id);
+                return 0;
+            }
+            if (Device.dwTimeGlobal - CL->net_LastMoveUpdateTime >= 5000)
+            {
+                CL->net_LastMoveUpdateTime = Device.dwTimeGlobal;
+                Msg("[COOP_SERVER] PLAYER_UPDATE client=%u body=%u position=%f,%f,%f", sender.value(), object_id, VPUSH(object->o_Position));
+            }
+            break;
+        }
+        case M_SECURE_KEY_SYNC:
+            if (P.B.count != sizeof(u16) + sizeof(s32)) return 0;
+            break;
+        case M_SECURE_MESSAGE:
+            if (P.B.count < 2 * sizeof(u16) + sizeof(u32)) return 0;
+            break; // OnSecureMessage decrypts and re-enters this same command filter.
+        case M_EVENT_PACK:
+            break; // Each packed message re-enters this filter through OnMessage.
+        case M_EVENT:
+        {
+            if (!CL->net_Accepted || !CL->owner) return 0;
+            const u32 cursor = P.r_tell();
+            if (P.B.count < cursor + sizeof(u32) + 2 * sizeof(u16)) return 0;
+            P.r_u32(); // event timestamp
+            const u16 event_type = P.r_u16();
+            const u16 destination = P.r_u16();
+            const bool admitted = CoopAdmitClientEvent(CL, P, event_type, destination);
+            const u32 after_header = cursor + sizeof(u32) + 2 * sizeof(u16);
+            if (strstr(Core.Params, "-coop_damage_probe") && P.B.count >= after_header + sizeof(u16) &&
+                (event_type == GE_OWNERSHIP_TAKE || event_type == GE_OWNERSHIP_REJECT || event_type == GE_TRADE_SELL || event_type == GE_TRADE_BUY))
+            {
+                P.r_seek(after_header);
+                Msg("[COOP_ITEM_EVENT] client=%u body=%u type=%u item=%u destination=%u admitted=%u time=%u", sender.value(),
+                    CL->owner->ID, event_type, P.r_u16(), destination, admitted ? 1 : 0, Device.dwTimeGlobal);
+            }
+            P.r_seek(cursor);
+            if (!admitted)
+            {
+                Msg("[COOP_SERVER] EVENT_REJECT client=%u type=%u destination=%u", sender.value(), event_type, destination);
+                return 0;
+            }
+            break;
+        }
+        case M_CL_AUTH:
+        case M_CREATE_PLAYER_STATE:
+        case M_CLIENT_REQUEST_CONNECTION_DATA:
+        case M_SV_MAP_NAME:
+        case M_CLIENTREADY:
+            break;
+        case M_COOP_PLAYER_STORE:
+            if (!CL->net_Accepted || !CL->owner) return 0;
+            static_cast<game_sv_Coop*>(game)->OnPlayerStore(CL, P);
+            return 0;
+        case M_COOP_TALK:
+            if (!CL->net_Accepted || !CL->owner) return 0;
+            static_cast<game_sv_Coop*>(game)->OnTalkMessage(CL, P);
+            return 0;
+        case M_COOP_LUA:
+            if (!CL->net_Accepted || !CL->owner) return 0;
+            static_cast<game_sv_Coop*>(game)->OnLuaMessage(CL, P);
+            return 0;
+        case M_COOP_TRADE:
+            if (!CL->net_Accepted || !CL->owner) return 0;
+            static_cast<game_sv_Coop*>(game)->OnTradeMessage(CL, P);
+            return 0;
+        case M_SAVE_GAME: // the player's "save" console command: the server saves (game_sv_Coop::save_game)
+        case M_CHANGE_LEVEL: // the player's level-change dialog said yes (game_sv_Coop::change_level)
+            if (!CL->net_Accepted || !CL->owner) return 0;
+            break;
+        default:
+            return 0;
+        }
+    }
+
+	// Block before the legacy broadcast/restart paths, not just virtual save/load.
+	// Saving is the server's: M_SAVE_GAME (the "save" console command of any client or of the
+	// server itself) runs game_sv_Coop::save_game; the M_SAVE_PACKET states it collects come from
+	// the internal client only. Loading: a server start with the save (coop_server.ltx, -coop_load)
+	// or the server console's "load" (M_LOAD_GAME from the internal client: the world restarts).
+	const bool from_internal = GetServerClient() && sender == GetServerClient()->ID;
+	if (game->Type() == eGameIDCoop &&
+		(type == M_RELOAD_GAME || type == M_SWITCH_DISTANCE ||
+		 ((type == M_SAVE_PACKET || type == M_LOAD_GAME) && !from_internal)))
+	{
+		Msg("[COOP_BOOTSTRAP] save/load/level operation disabled: message=%u", type);
+		return 0;
+	}
 
 	switch (type)
 	{

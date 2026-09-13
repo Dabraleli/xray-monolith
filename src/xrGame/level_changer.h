@@ -44,6 +44,9 @@ public:
 	void EnableLevelChanger(bool b) { m_b_enabled = b; }
 	bool IsLevelChangerEnabled() const { return m_b_enabled; }
 	void SetLEvelChangerInvitationStr(LPCSTR str) { m_invite_str = str; }
+	// Coop server: the change requested for this body as a silent touch would (Anomaly's
+	// sr_teleport zones drop the player into the changer; here the server asks directly).
+	void coop_request(CActor* body);
 	//serialization
 	virtual BOOL net_SaveRelevant();
 	virtual void save(NET_Packet& output_packet);

@@ -61,7 +61,10 @@ void xrServer::Process_event_ownership(NET_Packet& P, ClientID sender, u32 time,
 	xrClientData* c_entity = e_entity->owner;
 	xrClientData* c_from = ID_to_client(sender);
 
-	if ((GetServerClient() != c_from) && (c_parent != c_from))
+	// Coop: every entity stays owned by the internal client; a remote player's take was
+	// already authorized against its body and reach in CoopAdmitClientEvent.
+	const bool coop_admitted = game->Type() == eGameIDCoop && c_from && c_from != GetServerClient();
+	if (!coop_admitted && (GetServerClient() != c_from) && (c_parent != c_from))
 	{
 		// trust only ServerClient or new_ownerClient
 		return;

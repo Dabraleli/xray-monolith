@@ -169,6 +169,8 @@ extern BOOL g_freelook_while_reloading;
 extern BOOL useSeparateUBGLKeybind;
 extern int g_nearwall;
 extern int g_nearwall_trace;
+extern int g_coop_npc_interp; // coop client: replica interpolation delay, ms (CustomMonster.cpp)
+extern int g_coop_npc_extrap; // coop client: how far a replica runs on past its newest snapshot, ms
 extern BOOL drawPickupItemNames;
 extern BOOL fun_allowed;
 extern BOOL progressiveStaminaCost;
@@ -441,7 +443,7 @@ public:
 		if (g_pGameLevel && Level().game)
 		{
 			//#ifndef	DEBUG
-			if (GameID() != eGameIDSingle)
+			if (GameID() != eGameIDSingle && !IsGameTypeCoop()) // coop as SP: the server's difficulty applies to every body (game_cl_Single::OnDifficultyChanged)
 			{
 				Msg("For this game type difficulty level is disabled.");
 				return;
@@ -1013,18 +1015,21 @@ public:
 			return;
 		}
 #endif
-		if (!IsGameTypeSingle())
+		// Coop: the command asks the server to save (M_SAVE_GAME, game_sv_Coop::save_game) from
+		// a client or from the server console; the server confirms to every client.
+		const bool coop = IsGameTypeCoop();
+		if (!IsGameTypeSingle() && !coop)
 		{
 			Msg("for single-mode only");
 			return;
 		}
-		if (!g_actor || !Actor()->g_Alive())
+		if (!coop && (!g_actor || !Actor()->g_Alive()))
 		{
 			Msg("cannot make saved game because actor is dead :(");
 			return;
 		}
 
-		Console->Execute("stat_memory");
+		if (!coop) Console->Execute("stat_memory");
 
 		string_path S, S1;
 		S[0] = 0;
@@ -1060,6 +1065,12 @@ public:
 #ifdef DEBUG
 		Msg("Game save overhead  : %f milliseconds", timer.GetElapsed_sec()*1000.f);
 #endif
+		if (coop)
+		{
+			// The file, the confirmation and the screenshot are the server's business.
+			Msg("[COOP] save requested: %s", S);
+			return;
+		}
 		StaticDrawableWrapper* _s = CurrentGameUI()->AddCustomStatic("game_saved", true);
 		LPSTR save_name;
 		STRCONCAT(save_name, CStringTable().translate("st_game_saved").c_str(), ": ", S);
@@ -1096,6 +1107,13 @@ public:
 	{
 		string_path saved_game;
 		strncpy_s(saved_game, sizeof(saved_game), args, _MAX_PATH - 1);
+
+		// Coop: loading is the server console's (the world restarts, see game_sv_Coop::load_game).
+		if (IsGameTypeCoop() && !OnServer())
+		{
+			Msg("! [COOP] load: the server console loads saves; players reconnect afterwards");
+			return;
+		}
 
 		if (!ai().get_alife())
 		{
@@ -1143,10 +1161,13 @@ public:
 		}
 		*/
 
-		if (MainMenu()->IsActive())
-			MainMenu()->Activate(false);
+		if (!IsGameTypeCoop()) // the headless coop server has no main menu
+		{
+			if (MainMenu()->IsActive())
+				MainMenu()->Activate(false);
 
-		Console->Execute("stat_memory");
+			Console->Execute("stat_memory");
+		}
 
 		if (Device.Paused())
 			Device.Pause(FALSE, TRUE, TRUE, "CCC_ALifeLoadFrom");
@@ -2823,6 +2844,8 @@ void CCC_RegisterCommands()
 	CMD3(CCC_Mask, "g_aimpos_zoom", &psActorFlags, AF_AIMPOS_ZOOM);
 	CMD4(CCC_Integer, "g_nearwall", &g_nearwall, 0, 2);
 	CMD4(CCC_Integer, "g_nearwall_trace", &g_nearwall_trace, 0, 1);
+	CMD4(CCC_Integer, "coop_npc_interp", &g_coop_npc_interp, 30, 400);
+	CMD4(CCC_Integer, "coop_npc_extrap", &g_coop_npc_extrap, 0, 500);
 
 	CMD4(CCC_Integer, "g_auto_reload", &g_auto_reload, 0, 1);
 	CMD3(CCC_Mask, "g_crosshair_show_always", &psCrosshair_Flags, CROSSHAIR_SHOW_ALWAYS);
@@ -3238,8 +3261,9 @@ void CCC_RegisterCommands()
 
 	if (strstr(Core.Params, "-dbgdev"))
 		CMD4(CCC_Float, "g_streff", &streff, -10.f, 10.f);
-	//No need for server commands in a singleplayer-only mod
-	//register_mp_console_commands();
+	// Re-enabled: the multiplayer path now runs on the ENet transport
+	// (xrNetServer/NET_*_enet.cpp) instead of the retired DirectPlay one.
+	register_mp_console_commands();
     
     zoomFlags.set(NEW_ZOOM, FALSE);
     zoomFlags.set(SDS_ZOOM, TRUE);

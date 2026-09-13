@@ -93,6 +93,7 @@
 #ifdef STATIONARYMGUN_NEW
 #include "WeaponStatMgun.h"
 #endif
+#include "game_cl_coop.h"
 
 const u32 patch_frames = 50;
 const float respawn_delay = 1.f;
@@ -360,7 +361,7 @@ void CActor::Load(LPCSTR section)
 	CInventoryOwner::Load(section);
 	m_location_manager->Load(section);
 
-	if (GameID() == eGameIDSingle)
+	if (GameID() == eGameIDSingle || IsGameTypeCoop()) // coop as SP: immunities, hit probability, two-hits death by difficulty
 		OnDifficultyChanged();
 	//////////////////////////////////////////////////////////////////////////
 	ISpatial* self = smart_cast<ISpatial*>(this);
@@ -556,6 +557,10 @@ void CActor::Hit(SHit* pHDS)
 	bool b_initiated = pHDS->aim_bullet; // physics strike by poltergeist
 
 	pHDS->aim_bullet = false;
+
+	// Coop server: the world actor is an identity, not a body. Anomaly's world Lua still hits "the
+	// actor" (emissions, psi-storms, script hits); the players' bodies get theirs separately.
+	if (IsGameTypeCoop() && OnServer() && this == Level().CurrentControlEntity()) return;
 
 	SHit& HDS = *pHDS;
 	if (HDS.hit_type < ALife::eHitTypeBurn || HDS.hit_type >= ALife::eHitTypeMax)
@@ -977,7 +982,7 @@ void CActor::Die(CObject* who)
 		else
 			cam_Set(eacFreeLook);
 
-		CurrentGameUI()->HideShownDialogs();
+		if (CurrentGameUI()) CurrentGameUI()->HideShownDialogs();
 
 		/* avo: attempt to set camera on timer */
 		/*CTimer T;
@@ -1218,7 +1223,7 @@ void CActor::UpdateCL()
             HUD().SetFirstBulletCrosshairDisp(pWeapon->GetFirstBulletDisp());
 #endif
 
-			BOOL B = !((mstate_real & mcLookout) && !IsGameTypeSingle());
+			BOOL B = !((mstate_real & mcLookout) && !IsGameTypeSingle() && !IsGameTypeCoop()); // coop as SP: the weapon stays while leaning (MP hides it)
 
 			psHUD_Flags.set(HUD_WEAPON_RT, B);
 
@@ -1296,7 +1301,12 @@ void CActor::UpdateCL()
 		m_bPickupMode = false;
 
 	//Discord
-	if (psDeviceFlags2.test(rsDiscord))
+	// The rich presence payload is built out of Anomaly's singleplayer script
+	// layer -- story/warfare/azazel modes, ironman lives, ranks -- and none of
+	// that exists in a multiplayer session: _g.IsStoryMode reaches straight into
+	// alife(), which is null there. Stock Call of Pripyat has no such block at
+	// all, so skipping it in multiplayer costs nothing.
+	if (psDeviceFlags2.test(rsDiscord) && IsGameTypeSingle())
 	{
 		//God
 		bool isGodmode = psActorFlags.test(AF_GODMODE);
@@ -1402,7 +1412,7 @@ void CActor::UpdateCL()
 
 	// Update environment radiation value if hud is not shown
 	if (!psHUD_Flags.test(HUD_DRAW))
-		CurrentGameUI()->UIMainIngameWnd->get_hud_states()->UpdateZones();
+		if (CurrentGameUI()) CurrentGameUI()->UIMainIngameWnd->get_hud_states()->UpdateZones();
 }
 
 void CActor::set_safemode(bool status)
@@ -1410,8 +1420,12 @@ void CActor::set_safemode(bool status)
 	if (is_safemode() != status)
 	{
 		m_bSafemode = status;
-		g_player_hud->OnMovementChanged(mcAnyMove);
-		g_player_hud->updateMovementLayerState();
+		// The HUD is the controlled actor's (coop: other players' actors and server bodies pass here too).
+		if (g_player_hud && (!g_pGameLevel || this == Level().CurrentControlEntity()))
+		{
+			g_player_hud->OnMovementChanged(mcAnyMove);
+			g_player_hud->updateMovementLayerState();
+		}
 
 		CWeapon* wep = smart_cast<CWeapon*>(inventory().ActiveItem());
 		status ? callback(GameObject::eOnWeaponLowered)(wep ? wep->lua_game_object(): nullptr) : callback(GameObject::eOnWeaponRaised)(wep ? wep->lua_game_object() : nullptr);
@@ -1775,6 +1789,37 @@ void CActor::shedule_Update(u32 DT)
 	setSVU(OnServer());
 	//.	UpdateInventoryOwner			(DT);
 
+	// Coop server: publish this body's condition to the clients (1 Hz, or at 4 Hz when wounds or
+	// boosters change), so the owning client's HUD follows the server: bleeding, satiety and the
+	// active boosters (eating happens on the server, the client never sees ApplyBooster).
+	if (IsGameTypeCoop() && OnServer() && this != Level().CurrentControlEntity() && g_Alive())
+	{
+		struct sent_state { u32 time; float bleeding; u32 boosters; };
+		static xr_map<u16, sent_state> sent;
+		sent_state& last = sent[ID()];
+		const float bleeding = conditions().BleedingSpeed();
+		const CEntityCondition::BOOSTER_MAP boosters = conditions().GetCurBoosterInfluences();
+		const bool changed = !fsimilar(bleeding, last.bleeding, 0.005f) || boosters.size() != last.boosters;
+		if (Device.dwTimeGlobal - last.time >= 250 && (Device.dwTimeGlobal - last.time >= 1000 || changed))
+		{
+			last.time = Device.dwTimeGlobal;
+			last.bleeding = bleeding;
+			last.boosters = u32(boosters.size());
+			NET_Packet P;
+			u_EventGen(P, GE_COOP_CONDITION, ID());
+			P.w_float_q8(bleeding, 0.f, 2.f);
+			P.w_float_q8(conditions().GetSatiety(), 0.f, 1.f);
+			P.w_u8(u8(boosters.size()));
+			for (CEntityCondition::BOOSTER_MAP::const_iterator it = boosters.begin(); it != boosters.end(); ++it)
+			{
+				P.w_u8(u8(it->second.m_type));
+				P.w_float(it->second.fBoostValue);
+				P.w_float(it->second.fBoostTime);
+			}
+			u_EventSend(P);
+		}
+	}
+
 	if (IsFocused())
 	{
 		BOOL bHudView = HUDview();
@@ -2023,7 +2068,8 @@ void CActor::shedule_Update(u32 DT)
 		m_pVehicleWeLookingAt = smart_cast<CHolderCustom*>(game_object);
 		CEntityAlive* pEntityAlive = smart_cast<CEntityAlive*>(game_object);
 
-		if (GameID() == eGameIDSingle)
+		// Coop shows the same use hints as single player; talking goes through the server.
+		if (GameID() == eGameIDSingle || IsGameTypeCoop())
 		{
 			if (m_pUsableObject && m_pUsableObject->tip_text())
 			{
@@ -2031,9 +2077,14 @@ void CActor::shedule_Update(u32 DT)
 			}
 			else
 			{
-				if (m_pPersonWeLookingAt && pEntityAlive && pEntityAlive->g_Alive() && m_pPersonWeLookingAt->IsTalkEnabled())
+				if (IsGameTypeCoop() && OnClient() && pEntityAlive && pEntityAlive->g_Alive() && game_cl_Coop::IsDowned(pEntityAlive->ID()))
 				{
-					m_sDefaultObjAction = m_sCharacterUseAction;
+					m_sDefaultObjAction = game_cl_Coop::ReviveHint(); // a downed teammate: "use" revives
+				}
+				else if (m_pPersonWeLookingAt && pEntityAlive && pEntityAlive->g_Alive() && m_pPersonWeLookingAt->IsTalkEnabled())
+				{
+					// Coop: other players are actors too, but there is no player-to-player dialog.
+					m_sDefaultObjAction = (IsGameTypeSingle() || (IsGameTypeCoop() && !smart_cast<CActor*>(game_object))) ? m_sCharacterUseAction : NULL;
 				}
 				else if (pEntityAlive && !pEntityAlive->g_Alive())
 				{
@@ -2250,7 +2301,8 @@ void CActor::renderable_Render()
     // leg shadows are disabled for DX8 and DX9
     bool validRendererForShadow = (::Render->get_generation() == ::Render->GENERATION_R2) && (::Render->get_dx_level() != 0x00090000);
 
-	if (cam_active == eacFirstEye)
+    // Only the viewed coop actor uses the first-person body rendering rules.
+	if (cam_active == eacFirstEye && (!IsGameTypeCoop() || Level().CurrentViewEntity() == this))
 	{
 		if (::Render->active_phase() == 0) // can render first person body here
 		{
@@ -2402,7 +2454,7 @@ void CActor::OnHUDDraw(CCustomHUD*)
 {
 	R_ASSERT(IsFocused());
 	//demonized: disable hud when FPCam is on
-	if (!((mstate_real & mcLookout) && !IsGameTypeSingle()) && (!m_FPCam || m_FPCam->hudEnabled))
+	if (!((mstate_real & mcLookout) && !IsGameTypeSingle() && !IsGameTypeCoop()) && (!m_FPCam || m_FPCam->hudEnabled)) // coop as SP
 		g_player_hud->render_hud();
 
 
@@ -2583,7 +2635,7 @@ int g_iCorpseRemove = 1;
 
 bool CActor::NeedToDestroyObject() const
 {
-	if (IsGameTypeSingle())
+	if (IsGameTypeSingle() || IsGameTypeCoop()) // coop as SP: a player's corpse stays with its things (MP removed it after 10 minutes)
 	{
 		return false;
 	}

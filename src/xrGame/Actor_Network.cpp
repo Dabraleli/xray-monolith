@@ -59,11 +59,24 @@ CActor* g_actor = NULL;
 
 CActor* Actor()
 {
-	R_ASSERT2(GameID() == eGameIDSingle, "Actor() method invokation must be only in Single Player game!");
-	VERIFY(g_actor);
-	/*if (GameID() != eGameIDSingle) 
-		VERIFY	(g_actor == Level().CurrentControlEntity());*/
-	return (g_actor);
+	// Bootstrap admits only the internal client and one ALife actor.
+	// Lua net_spawn runs before the MP control entity is assigned.
+	if (GameID() == eGameIDSingle || (IsGameTypeCoop() && OnServer()))
+	{
+		VERIFY(g_actor);
+		return (g_actor);
+	}
+
+	// Multiplayer has more than one actor, which is why this used to be a hard
+	// assert. g_actor is merely the last local actor to spawn, and on a listen
+	// server every actor spawns local, so it cannot answer "which one is mine".
+	// The control entity can: it is the actor this client drives. While the
+	// player is a spectator there is none, so callers have to expect NULL --
+	// they had to expect a dead process before, which is hardly better.
+	if (!g_pGameLevel)
+		return (NULL);
+
+	return (smart_cast<CActor*>(Level().CurrentControlEntity()));
 };
 
 //--------------------------------------------------------------------
@@ -328,9 +341,20 @@ void CActor::net_Import_Base(NET_Packet& P)
 	if (N.o_torso.roll > PI)
 		N.o_torso.roll -= PI_MUL_2;
 
-	id_Team = P.r_u8();
-	id_Squad = P.r_u8();
-	id_Group = P.r_u8();
+	{
+		// Coop: a body's team follows its community (the join menu's faction, set on the server);
+		// a registered entity must move between seniority groups, not just change ids —
+		// net_Destroy unregisters from the group of the current ids (crash 129).
+		const int team = P.r_u8(), squad = P.r_u8(), group = P.r_u8();
+		if (IsGameTypeCoop())
+			import_network_team(team, squad, group);
+		else
+		{
+			id_Team = team;
+			id_Squad = squad;
+			id_Group = group;
+		}
+	}
 
 
 	//----------- for E3 -----------------------------
@@ -376,6 +400,13 @@ void CActor::net_Import_Base(NET_Packet& P)
 		//------------------------------------------------
 	{
 		if (ActiveSlot == NO_ACTIVE_SLOT) inventory().SetActiveSlot(NO_ACTIVE_SLOT);
+        else if (IsGameTypeCoop())
+        {
+            // Activate() only runs on the server; a coop client mirrors the
+            // server's slot the way CActorMP does, so ActiveItem() is valid here.
+            if (inventory().GetActiveSlot() != u16(ActiveSlot))
+                inventory().SetActiveSlot(ActiveSlot);
+        }
 		else
 		{
 			if (inventory().GetActiveSlot() != u16(ActiveSlot))
@@ -523,6 +554,7 @@ BOOL CActor::net_Spawn(CSE_Abstract* DC)
 	//force actor to be local on server client
 	CSE_Abstract* e = (CSE_Abstract*)(DC);
 	CSE_ALifeCreatureActor* E = smart_cast<CSE_ALifeCreatureActor*>(e);
+    if (IsGameTypeCoop()) Msg("[COOP_TRACE] ACTOR_SPAWN_INPUT server=%d id=%u health=%f position=%f,%f,%f", OnServer(), E->ID, E->get_health(), VPUSH(E->o_Position));
 	if (OnServer())
 	{
 		E->s_flags.set(M_SPAWN_OBJECT_LOCAL, TRUE);
@@ -549,6 +581,7 @@ BOOL CActor::net_Spawn(CSE_Abstract* DC)
 
 	if (!CInventoryOwner::net_Spawn(DC)) return FALSE;
 	if (!inherited::net_Spawn(DC)) return FALSE;
+    if (IsGameTypeCoop()) Msg("[COOP_TRACE] ACTOR_AFTER_BASE server=%d id=%u health=%f position=%f,%f,%f", OnServer(), ID(), GetfHealth(), VPUSH(Position()));
 
 	CSE_ALifeTraderAbstract* pTA = smart_cast<CSE_ALifeTraderAbstract*>(e);
 	set_money(pTA->m_dwMoney, false);
@@ -565,6 +598,13 @@ BOOL CActor::net_Spawn(CSE_Abstract* DC)
 	mstate_old = mstate_real = mstate_wishful;
 	set_state_box(mstate_real);
 	m_pPhysics_support->in_NetSpawn(e);
+    if (IsGameTypeCoop() && OnServer() && E->s_flags.is(M_SPAWN_OBJECT_ASPLAYER))
+    {
+        character_physics_support()->movement()->SetNonInteractive(true);
+        spatial.type &= ~STYPE_VISIBLEFORAI;
+        Msg("[COOP_SERVER] ANCHOR_NONINTERACTIVE id=%u", ID());
+    }
+    if (IsGameTypeCoop()) Msg("[COOP_TRACE] ACTOR_AFTER_PHYSICS server=%d id=%u health=%f position=%f,%f,%f", OnServer(), ID(), GetfHealth(), VPUSH(Position()));
 
 	//set_state_box( mstate_real );
 	//character_physics_support()->movement()->ActivateBox	(0);
@@ -690,7 +730,7 @@ BOOL CActor::net_Spawn(CSE_Abstract* DC)
 	m_bWasHitted = false;
 	m_dwILastUpdateTime = 0;
 
-	if (IsGameTypeSingle())
+	if (IsGameTypeSingle() || IsGameTypeCoop())
 	{
 		Level().MapManager().AddMapLocation("actor_location", ID());
 		Level().MapManager().AddMapLocation("actor_location_p", ID());
@@ -1374,11 +1414,12 @@ void CActor::save(NET_Packet& output_packet)
 	inherited::save(output_packet);
 	CInventoryOwner::save(output_packet);
 	output_packet.w_u8(u8(m_bOutBorder));
-	CUITaskWnd* task_wnd = HUD().GetGameUI()->GetPdaMenu().pUITaskWnd;
-	output_packet.w_u8(task_wnd->IsTreasuresEnabled() ? 1 : 0);
-	output_packet.w_u8(task_wnd->IsQuestNpcsEnabled() ? 1 : 0);
-	output_packet.w_u8(task_wnd->IsSecondaryTasksEnabled() ? 1 : 0);
-	output_packet.w_u8(task_wnd->IsPrimaryObjectsEnabled() ? 1 : 0);
+	// The headless coop server has no game UI; the PDA filters are saved as "all shown" there.
+	CUITaskWnd* task_wnd = CurrentGameUI() ? CurrentGameUI()->GetPdaMenu().pUITaskWnd : NULL;
+	output_packet.w_u8(!task_wnd || task_wnd->IsTreasuresEnabled() ? 1 : 0);
+	output_packet.w_u8(!task_wnd || task_wnd->IsQuestNpcsEnabled() ? 1 : 0);
+	output_packet.w_u8(!task_wnd || task_wnd->IsSecondaryTasksEnabled() ? 1 : 0);
+	output_packet.w_u8(!task_wnd || task_wnd->IsPrimaryObjectsEnabled() ? 1 : 0);
 
 	output_packet.w_stringZ(g_quick_use_slots[0]);
 	output_packet.w_stringZ(g_quick_use_slots[1]);
@@ -1391,17 +1432,27 @@ void CActor::load(IReader& input_packet)
 	inherited::load(input_packet);
 	CInventoryOwner::load(input_packet);
 	m_bOutBorder = !!(input_packet.r_u8());
-	CUITaskWnd* task_wnd = HUD().GetGameUI()->GetPdaMenu().pUITaskWnd;
-	task_wnd->TreasuresEnabled(!!input_packet.r_u8());
-	task_wnd->QuestNpcsEnabled(!!input_packet.r_u8());
-	task_wnd->SecondaryTasksEnabled(!!input_packet.r_u8());
-	task_wnd->PrimaryObjectsEnabled(!!input_packet.r_u8());
+	CUITaskWnd* task_wnd = CurrentGameUI() ? CurrentGameUI()->GetPdaMenu().pUITaskWnd : NULL;
+	const bool treasures = !!input_packet.r_u8();
+	const bool quest_npcs = !!input_packet.r_u8();
+	const bool secondary = !!input_packet.r_u8();
+	const bool primary = !!input_packet.r_u8();
+	if (task_wnd)
+	{
+		task_wnd->TreasuresEnabled(treasures);
+		task_wnd->QuestNpcsEnabled(quest_npcs);
+		task_wnd->SecondaryTasksEnabled(secondary);
+		task_wnd->PrimaryObjectsEnabled(primary);
+	}
 	//need_quick_slot_reload = true;
 
-	input_packet.r_stringZ(g_quick_use_slots[0], sizeof(g_quick_use_slots[0]));
-	input_packet.r_stringZ(g_quick_use_slots[1], sizeof(g_quick_use_slots[1]));
-	input_packet.r_stringZ(g_quick_use_slots[2], sizeof(g_quick_use_slots[2]));
-	input_packet.r_stringZ(g_quick_use_slots[3], sizeof(g_quick_use_slots[3]));
+	// Coop server bodies must not rewrite the process-wide quick slots of the world actor.
+	string64 slots[4];
+	for (int i = 0; i < 4; ++i)
+		input_packet.r_stringZ(slots[i], sizeof(slots[i]));
+	if (!(IsGameTypeCoop() && OnServer() && this != Level().CurrentControlEntity()))
+		for (int i = 0; i < 4; ++i)
+			xr_strcpy(g_quick_use_slots[i], slots[i]);
 }
 
 #ifdef DEBUG
@@ -1810,6 +1861,16 @@ void CActor::SetHitInfo(CObject* who, CObject* weapon, s16 element, Fvector Pos,
 
 void CActor::OnHitHealthLoss(float NewHealth)
 {
+    // These callbacks report competitive MP scoring; EntityCondition applies
+    // the health change separately after returning from this callback.
+    if (IsGameTypeCoop())
+    {
+        if (OnServer() && m_bWasHitted)
+            Msg("[COOP_DAMAGE] HEALTH actor=%u source=%u before=%f pending=%f",
+                ID(), m_iLastHitterID, GetfHealth(), NewHealth);
+        m_bWasHitted = false;
+        return;
+    }
 	if (!m_bWasHitted) return;
 	if (GameID() == eGameIDSingle || !OnServer()) return;
 	float fNewHealth = NewHealth;
@@ -1833,6 +1894,16 @@ void CActor::OnHitHealthLoss(float NewHealth)
 
 void CActor::OnCriticalHitHealthLoss()
 {
+    // Coop has no ranks, kill awards or weapon-usage statistics. The actual
+    // condition/death path is outside this notification callback.
+    if (IsGameTypeCoop())
+    {
+        if (OnServer())
+            Msg("[COOP_DAMAGE] CRITICAL actor=%u source=%u before=%f",
+                ID(), m_iLastHitterID, GetfHealth());
+        m_bWasHitted = false;
+        return;
+    }
 	if (GameID() == eGameIDSingle || !OnServer()) return;
 
 	CObject* pLastHitter = Level().Objects.net_Find(m_iLastHitterID);

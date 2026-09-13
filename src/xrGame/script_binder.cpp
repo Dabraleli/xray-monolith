@@ -15,6 +15,7 @@
 #include "script_game_object.h"
 #include "gameobject.h"
 #include "level.h"
+#include "game_sv_coop.h"
 
 // comment next string when commiting
 //#define DBG_DISABLE_SCRIPTS
@@ -86,12 +87,23 @@ void CScriptBinder::reload(LPCSTR section)
 		start							= Memory.mem_usage();
 #endif // DEBUG_MEMORY_MANAGER
 #ifndef DBG_DISABLE_SCRIPTS
+	// Reject before invoking Lua: deleting a binder cannot undo its constructor.
+    const bool coop_replica = IsGameTypeCoop() && !OnServer();
+    if (coop_replica && (!smart_cast<CGameObject*>(this)->Local() ||
+        !pSettings->line_exist(section, "script_binding") ||
+        xr_strcmp(pSettings->r_string(section, "script_binding"), "bind_stalker.actor_init")))
+        return;
 	VERIFY(!m_object);
 	if (!pSettings->line_exist(section, "script_binding"))
 		return;
 
+    LPCSTR binding = pSettings->r_string(section, "script_binding");
+    if (coop_replica) binding = "coop_client_actor.actor_init";
+    if (IsGameTypeCoop() && OnServer() && strstr(Core.Params, "-coop_server_probe") &&
+        !xr_strcmp(binding, "bind_stalker.actor_init"))
+        binding = "coop_server_actor.actor_init";
 	::luabind::functor<void> lua_function;
-	if (!ai().script_engine().functor(pSettings->r_string(section, "script_binding"), lua_function))
+	if (!ai().script_engine().functor(binding, lua_function))
 	{
 		ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError, "function %s is not loaded!",
 		                                pSettings->r_string(section, "script_binding"));
@@ -184,7 +196,7 @@ void CScriptBinder::net_Destroy()
 
 void CScriptBinder::set_object(CScriptBinderObject* object)
 {
-	if (IsGameTypeSingle())
+	if (IsGameTypeSingle() || (IsGameTypeCoop() && (OnServer() || smart_cast<CGameObject*>(this)->Local())))
 	{
 		VERIFY2(!m_object, "Cannot bind to the object twice!");
 #ifdef _DEBUG
@@ -202,6 +214,12 @@ void CScriptBinder::shedule_Update(u32 time_delta)
 {
 	if (m_object)
 	{
+		// Coop server: every binder (doors, restrictors, zones, campfires, items) runs its Lua with
+		// the nearest player body as the actor — or its Lua owner's body (companions follow the
+		// player who recruited them). NPC updates already sit in such a scope (nested).
+		// Actor binders (world actor, bodies) are coop-owned and address players explicitly.
+		CGameObject* owner = smart_cast<CGameObject*>(this);
+		CoopLuaActor coop_actor(owner && !owner->cast_actor() ? game_sv_Coop::ContextBodyFor(owner) : NULL, false);
 		try
 		{
 			m_object->shedule_Update(time_delta);

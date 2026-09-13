@@ -3,10 +3,87 @@
 #include "BaseMonster/base_monster.h"
 #include "control_manager.h"
 #include "profiler.h"
+#include "../../level.h"
 
 //#ifdef _DEBUG
 //#include "control_animation_base.h"
 //#endif
+
+
+
+static void report_monster_layers(CBaseMonster* object, const CoopStalkerLayers& state)
+{
+    if (!strstr(Core.Params,"-coop_npc_motion_probe")) return;
+    static xr_map<u16,u32> reports; u32& last=reports[object->ID()];
+    // Record every exported server snapshot: fast turns are not linear over 250 ms.
+    if (object->Remote() && Device.dwTimeGlobal-last<250) return;
+    last=Device.dwTimeGlobal;
+    Fquaternion q; q.set(object->XFORM());
+    Msg("[COOP_MONSTER_LAYERS] side=%s id=%u time=%u ids=%u,%u,%u,%u,%u phases=%f,%f,%f,%f,%f root=%f,%f,%f,%f",
+        object->Remote()?"client":"server",object->ID(),Level().timeServer(),
+        state.motion[0],state.motion[1],state.motion[2],state.motion[3],state.motion[4],
+        state.phase[0],state.phase[1],state.phase[2],state.phase[3],state.phase[4],q.x,q.y,q.z,q.w);
+}
+
+void CControlAnimation::export_network_layers(CoopStalkerLayers& state)
+{
+    if (!m_object->g_Alive()) return;
+    state.ready=1;
+    SAnimationPart* parts[3]={&m_data.global,&m_data.legs,&m_data.torso};
+    for(u32 i=0;i<3;++i)
+    {
+        CBlend* b=parts[i]->blend;
+        if (!b || !parts[i]->get_motion().valid()) continue;
+        state.motion[i]=parts[i]->get_motion().val;
+        state.phase[i]=b->timeCurrent; state.speed[i]=b->playing ? b->speed : 0.f; state.amount[i]=b->blendAmount;
+        state.duration[i]=b->timeTotal;
+        if (!m_skeleton_animated->LL_GetMotionDef(parts[i]->get_motion())->StopAtEnd()) state.looping|=u8(1u<<i);
+    }
+    Fquaternion q; q.set(m_object->XFORM()); q.normalize();
+    state.rotation[0][0]=q.x; state.rotation[0][1]=q.y; state.rotation[0][2]=q.z; state.rotation[0][3]=q.w;
+    report_monster_layers(m_object,state);
+}
+
+void CControlAnimation::apply_network_layers(const CoopStalkerLayers& state)
+{
+    if (!state.ready || !m_object->g_Alive()) return;
+    // Offscreen bones need not be evaluated, but replica clocks must advance.
+    // UpdateTracks guards the current frame/time, so rendering cannot tick twice.
+    m_skeleton_animated->UpdateTracks();
+    Fvector position=m_object->Position();
+    Fquaternion q; q.set(state.rotation[0][3],state.rotation[0][0],state.rotation[0][1],state.rotation[0][2]);
+    q.normalize();
+    m_object->XFORM().rotation(q); m_object->XFORM().translate_over(position);
+    SAnimationPart* parts[3]={&m_data.global,&m_data.legs,&m_data.torso};
+    CoopStalkerLayers applied=state;
+    for(u32 i=0;i<3;++i)
+    {
+        MotionID id; id.val=state.motion[i];
+        if (!id.valid()) { parts[i]->init(); continue; }
+        if (id.slot>=m_skeleton_animated->LL_MotionsSlotCount())
+        { Msg("[COOP_MONSTER_LAYERS] INVALID_MOTION"); return; }
+        shared_motions motions=m_skeleton_animated->LL_MotionsSlot(id.slot);
+        if(id.idx>=motions.motion_defs()->size() || !_valid(state.phase[i]) || !_valid(state.speed[i]) || !_valid(state.amount[i]))
+        { Msg("[COOP_MONSTER_LAYERS] INVALID_MOTION"); return; }
+        CBlend* b=parts[i]->blend;
+        const bool restart=!b || parts[i]->get_motion()!=id || b->motionID!=id || b->blend_state()==CBlend::eFREE_SLOT;
+        if (restart)
+        {
+            u16 part=m_skeleton_animated->LL_GetMotionDef(id)->bone_or_part;
+            if(part==u16(-1)) part=m_skeleton_animated->LL_PartID("default");
+            b=m_skeleton_animated->LL_PlayCycle(part,id,TRUE,0,0);
+            parts[i]->set_motion(id); parts[i]->blend=b; parts[i]->actual=true;
+            if (b && i!=2) m_object->CStepManager::on_animation_start(id,b);
+        }
+        if(b)
+        {
+            state.sync_blend(i,b,restart);
+            applied.phase[i]=b->timeCurrent; applied.motion[i]=b->motionID.val;
+        }
+    }
+    m_skeleton_animated->dcast_PKinematics()->CalculateBones_Invalidate();
+    report_monster_layers(m_object,applied);
+}
 
 void SAnimationPart::set_motion(MotionID const& m)
 {
@@ -39,7 +116,7 @@ void CControlAnimation::reset_data()
 
 void CControlAnimation::update_frame()
 {
-	if (m_freeze) return;
+	if (m_freeze || (IsGameTypeCoop() && m_object->Remote())) return;
 
 	// move to schedule update
 	START_PROFILE("BaseMonster/Animation/Update Tracks")

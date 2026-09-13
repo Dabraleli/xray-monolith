@@ -73,7 +73,8 @@ void CStalkerAnimationPair::play_global_animation(IKinematicsAnimated* skeleton_
 			if (blend && !m_blend)
 				m_blend = blend;
 
-			if (use_animation_movement_control || this->use_animation_movement_control(skeleton_animated, animation()))
+			if (!(IsGameTypeCoop() && m_object->Remote()) &&
+                (use_animation_movement_control || this->use_animation_movement_control(skeleton_animated, animation())))
 			{
 				m_object->create_anim_mov_ctrl(blend, m_target_matrix, local_animation);
 			}

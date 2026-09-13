@@ -121,6 +121,7 @@ struct predicate_remove
 void CControl_Manager::update_frame()
 {
 	if (!m_object->g_Alive()) return;
+    if (IsGameTypeCoop() && m_object->Remote()) return;
 
 	for (COM_VEC_IT it = m_active_elems.begin(); it != m_active_elems.end(); ++it)
 	{
@@ -141,6 +142,7 @@ void CControl_Manager::update_frame()
 void CControl_Manager::update_schedule()
 {
 	if (!m_object->g_Alive()) return;
+    if (IsGameTypeCoop() && m_object->Remote()) return;
 
 	for (COM_VEC_IT it = m_active_elems.begin(); it != m_active_elems.end(); ++it)
 	{

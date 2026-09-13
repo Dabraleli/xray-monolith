@@ -11,6 +11,7 @@
 #include "string_table.h"
 #include "actorcondition.h"
 #include "game_cl_base.h"
+#include "game_cl_coop.h"
 #include "WeaponMagazined.h"
 #include "CharacterPhysicsSupport.h"
 #include "actoreffector.h"
@@ -167,6 +168,15 @@ void CActor::g_cl_CheckControls(u32 mstate_wf, Fvector& vControlAccel, float& Ju
 	float cam_eff_factor = 0.0f;
 	mstate_old = mstate_real;
 	vControlAccel.set(0, 0, 0);
+
+	// Coop client, this body down: it crawls — crouched, no jump, sprint or lookout.
+	if (game_cl_Coop::SelfDowned() && this == Level().CurrentControlEntity())
+	{
+		mstate_wf |= mcCrouch;
+		mstate_wf &= ~(mcJump | mcSprint | mcLLookout | mcRLookout);
+		mstate_wishful |= mcCrouch;
+		mstate_wishful &= ~(mcJump | mcSprint);
+	}
 
 	if (!(mstate_real & mcFall) && (character_physics_support()->movement()->Environment() == CPHMovementControl::
 		peInAir))
@@ -589,6 +599,13 @@ void CActor::g_sv_Orientate(u32 /**mstate_rl/**/, float /**dt/**/)
 		r_torso.pitch += dangle.x;
 		r_torso.roll += dangle.z;
 	}
+    if (IsGameTypeCoop())
+    {
+        // Same mapping the local player uses (GetWorldYaw is -yaw): the unused camera
+        // of a remotely driven body becomes its aim for g_fireParams.
+        cameras[eacFirstEye]->yaw = -unaffected_r_torso.yaw;
+        cameras[eacFirstEye]->pitch = unaffected_r_torso.pitch;
+    }
 }
 
 bool isActorAccelerated(u32 mstate, bool ZoomMode)
@@ -651,7 +668,7 @@ bool CActor::CanMove()
 	{
 		if (mstate_wishful & mcAnyMove)
 		{
-			CurrentGameUI()->AddCustomStatic("cant_walk", true);
+			if (CurrentGameUI()) CurrentGameUI()->AddCustomStatic("cant_walk", true);
 		}
 		return false;
 	}
@@ -659,7 +676,7 @@ bool CActor::CanMove()
 	{
 		if (mstate_wishful & mcAnyMove)
 		{
-			CurrentGameUI()->AddCustomStatic("cant_walk_weight", true);
+			if (CurrentGameUI()) CurrentGameUI()->AddCustomStatic("cant_walk_weight", true);
 		}
 		return false;
 	}

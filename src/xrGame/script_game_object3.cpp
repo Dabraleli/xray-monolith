@@ -10,6 +10,7 @@
 #include "script_game_object.h"
 #include "script_game_object_impl.h"
 #include "ai_space.h"
+#include "game_cl_coop.h"
 #include "script_engine.h"
 #include "cover_evaluators.h"
 #include "cover_point.h"
@@ -2042,6 +2043,7 @@ void CScriptGameObject::SetRemainingUses(u8 value)
 	if (!eItm)
 		return;
 
+	game_cl_Coop::ItemVerb("item|uses|%u|%u", object().ID(), u32(value)); // coop client: the server's item too
 	eItm->SetRemainingUses(value);
 }
 

@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "xrServer.h"
 #include "xrserver_objects.h"
+#include "xrServer_Objects_ALife_Monsters.h"
 
 #ifdef DEBUG
 #	include "xrserver_objects_alife_items.h"
@@ -19,7 +20,16 @@ CSE_Abstract* xrServer::Process_spawn(NET_Packet& P, ClientID sender, BOOL bSpaw
 		P.r_stringZ(s_name);
 		// create entity
 		E = entity_Create(s_name);
-		R_ASSERT3(E, "Can't create entity.", s_name);
+		if (!E)
+		{
+			// Most of Anomaly's object model is script classes whose constructors need
+			// the A-Life simulator, and the multiplayer game types run without one, so
+			// those objects cannot be built. Skip them and keep the rest of the level
+			// instead of aborting the session; singleplayer still treats this as fatal.
+			R_ASSERT3(game->Type() != eGameIDSingle, "Can't create entity.", s_name);
+			Msg("! SERVER: can not create entity [%s], skipping it", s_name);
+			return NULL;
+		}
 		E->Spawn_Read(P);
 		if (
 				//.				!( (game->Type()==E->s_gameid) || (GAME_ANY==E->s_gameid) ) ||
@@ -152,14 +162,44 @@ CSE_Abstract* xrServer::Process_spawn(NET_Packet& P, ClientID sender, BOOL bSpaw
 		SendTo(CL->ID, Packet, net_flags(TRUE,TRUE));
 
 		// For everybody, except client, which contains authorative copy
-		E->Spawn_Write(Packet,FALSE);
+		// (coop: remote replicas never receive the server's saved object state)
+		{
+			CoopHideClientData hide(game->Type() == eGameIDCoop ? E : NULL);
+			E->Spawn_Write(Packet,FALSE);
+		}
 		if (E->s_flags.is(M_SPAWN_UPDATE))
 			E->UPDATE_Write(Packet);
-		SendBroadcast(CL->ID, Packet, net_flags(TRUE,TRUE));
+		// Coop: a player's body spawned while its client is already connected (a new body after a
+		// death) is that client's own, as the connect result would send it; a replica to the rest.
+		xrClientData* controller = NULL;
+		xr_vector<ClientID> others;
+		if (game->Type() == eGameIDCoop && smart_cast<CSE_ALifeCreatureActor*>(E))
+		{
+			auto visit = [&](IClient* client)
+			{
+				xrClientData* data = static_cast<xrClientData*>(client);
+				if (client == CL || !client->flags.bConnected || !data->net_Accepted) return;
+				if (data->owner == E) controller = data; else others.push_back(client->ID);
+			};
+			ForEachClientDo(visit);
+		}
+		if (controller)
+		{
+			NET_Packet own;
+			WriteOwnedConnectSpawn(E, controller, own);
+			SendTo(controller->ID, own, net_flags(TRUE,TRUE));
+			Msg("[COOP_SERVER] BODY_SPAWN_OWNED body=%u client=%u", E->ID, controller->ID.value());
+			for (u32 i = 0; i < others.size(); ++i) SendTo(others[i], Packet, net_flags(TRUE,TRUE));
+		}
+		else
+			SendBroadcast(CL->ID, Packet, net_flags(TRUE,TRUE));
 	}
 	else
 	{
-		E->Spawn_Write(Packet,FALSE);
+		{
+			CoopHideClientData hide(game->Type() == eGameIDCoop ? E : NULL);
+			E->Spawn_Write(Packet,FALSE);
+		}
 		if (E->s_flags.is(M_SPAWN_UPDATE))
 			E->UPDATE_Write(Packet);
 		ClientID clientID;

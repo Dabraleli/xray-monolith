@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "xrserver.h"
 #include "game_sv_single.h"
+#include "game_sv_coop.h"
 #include "alife_simulator.h"
 #include "xrserver_objects.h"
 #include "level.h"
@@ -15,7 +16,16 @@ void xrServer::OnCL_Disconnected(IClient* CL)
 	P.w_clientID(CL->ID);
 	xrClientData* xrCData = (xrClientData*)(CL);
 	VERIFY(xrCData);
+	if (game->Type() == eGameIDCoop)
+		static_cast<game_sv_Coop*>(game)->ReleaseClient(xrCData);
 
+    if (game->Type() == eGameIDCoop && CL != GetServerClient())
+    {
+        // External players control bodies, but never own the server world.
+        // Do not enter the legacy last-client world destruction/migration path.
+        Msg("[COOP_SERVER] EXTERNAL_DISCONNECT client=%u local=%d clients=%u", CL->ID.value(), CL->flags.bLocal, GetClientsCount());
+        return;
+    }
 	if (!xrCData->ps)
 		return;
 

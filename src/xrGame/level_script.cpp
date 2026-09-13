@@ -8,7 +8,9 @@
 
 #include "pch_script.h"
 #include "level.h"
+#include "game_sv_coop.h"
 #include "actor.h"
+#include "ai/stalker/ai_stalker.h"
 #include "script_game_object.h"
 #include "patrol_path_storage.h"
 #include "xrServer.h"
@@ -130,6 +132,10 @@ CScriptGameObject *get_object_by_name(LPCSTR caObjectName)
 // demonized: add u16 id version of function to improve performance
 CScriptGameObject* get_object_by_id(u16 id)
 {
+	// Coop server: Anomaly reaches the player as get_story_object("actor") = object_by_id(0) too;
+	// on behalf of a body (NPC schemes, dialogs, hits) that is the body, not the world actor.
+	if (CGameObject* context = game_sv_Coop::ContextActor(id))
+		return context->lua_game_object();
 	CGameObject* pGameObject = smart_cast<CGameObject*>(Level().Objects.net_Find(id));
 	if (!pGameObject)
 		return nullptr;
@@ -431,6 +437,7 @@ Fvector vertex_position(u32 level_vertex_id)
 	return (ai().level_graph().vertex_position(level_vertex_id));
 }
 
+// Coop server: every map spot the Lua sets is mirrored to the clients' maps (game_sv_Coop::OnMapSpot).
 void map_add_object_spot(u16 id, LPCSTR spot_type, LPCSTR text)
 {
 	CMapLocation* ml = Level().MapManager().AddMapLocation(spot_type, id);
@@ -438,6 +445,7 @@ void map_add_object_spot(u16 id, LPCSTR spot_type, LPCSTR text)
 	{
 		ml->SetHint(text);
 	}
+	game_sv_Coop::OnMapSpot(2, spot_type, id, text, false);
 }
 
 void map_add_object_spot_ser(u16 id, LPCSTR spot_type, LPCSTR text)
@@ -447,6 +455,7 @@ void map_add_object_spot_ser(u16 id, LPCSTR spot_type, LPCSTR text)
 		ml->SetHint(text);
 
 	ml->SetSerializable(true);
+	game_sv_Coop::OnMapSpot(2, spot_type, id, text, true);
 }
 
 void map_change_spot_hint(u16 id, LPCSTR spot_type, LPCSTR text)
@@ -454,17 +463,20 @@ void map_change_spot_hint(u16 id, LPCSTR spot_type, LPCSTR text)
 	CMapLocation* ml = Level().MapManager().GetMapLocation(spot_type, id);
 	if (!ml) return;
 	ml->SetHint(text);
+	game_sv_Coop::OnMapSpot(3, spot_type, id, text, false);
 }
 
 void map_remove_object_spot(u16 id, LPCSTR spot_type)
 {
 	Level().MapManager().RemoveMapLocation(spot_type, id);
+	game_sv_Coop::OnMapSpot(4, spot_type, id, NULL, false);
 }
 
 // demonized: remove all map object spots by id
 void map_remove_all_object_spots(u16 id)
 {
 	Level().MapManager().RemoveAllMapLocationsById(id);
+	game_sv_Coop::OnMapSpot(5, NULL, id, NULL, false);
 }
 
 CUIStatic* map_get_spot_static(u16 id, LPCSTR spot_type)
@@ -1895,6 +1907,151 @@ void g_send(NET_Packet& P, bool bReliable = 0, bool bSequential = 1, bool bHighP
 	Level().Send(P, net_flags(bReliable, bSequential, bHighPriority, bSendImmediately));
 }
 
+// Coop client: hand this player's Lua state (thirst, sleep, ...) to the server, which keeps it under
+// the connection name and returns it on the next join (coop_client_actor.on_player_store).
+void g_coop_player_store(LPCSTR blob)
+{
+	if (!IsGameTypeCoop() || OnServer() || !blob) return;
+	if (xr_strlen(blob) >= 4096)
+	{
+		Msg("! [COOP_CLIENT] PLAYER_STORE too large: %u bytes", xr_strlen(blob));
+		return;
+	}
+	NET_Packet P;
+	P.w_begin(M_COOP_PLAYER_STORE);
+	P.w_stringZ(blob);
+	Level().Send(P, net_flags(TRUE, TRUE));
+}
+
+// Coop: a text from the coop-owned Lua of one side to the other (M_COOP_LUA). On the server
+// `target` is the body whose client receives it (0 or 65535 = every client); on a client the
+// target is ignored and the text goes to the server, which runs coop_server_actor.on_client_lua
+// with the sender's body as db.actor.
+void g_coop_send_lua(u16 target, LPCSTR text)
+{
+	if (!IsGameTypeCoop() || !text) return;
+	if (xr_strlen(text) >= 4096)
+	{
+		Msg("! [COOP] coop_send_lua too large: %u bytes", xr_strlen(text));
+		return;
+	}
+	if (OnServer())
+	{
+		game_sv_Coop::SendLua(target, text);
+		return;
+	}
+	NET_Packet P;
+	P.w_begin(M_COOP_LUA);
+	P.w_stringZ(text);
+	Level().Send(P, net_flags(TRUE, TRUE));
+}
+
+// Coop server: ask the level changer whose zone holds the point (Anomaly's sr_teleport drop point)
+// for the change on behalf of the body (game_sv_Coop::LevelChangeRequest, everyone travels).
+#include "level_changer.h"
+extern xr_vector<CLevelChanger*> g_lchangers;
+bool g_coop_travel(u16 body_id, const Fvector& point)
+{
+	if (!IsGameTypeCoop() || !OnServer()) return false;
+	CActor* body = smart_cast<CActor*>(Level().Objects.net_Find(body_id));
+	if (!body) return false;
+	CLevelChanger* nearest = NULL;
+	float best = flt_max;
+	for (u32 i = 0; i < g_lchangers.size(); ++i)
+	{
+		CLevelChanger* changer = g_lchangers[i];
+		Fvector center;
+		changer->Center(center);
+		const float distance = center.distance_to(point);
+		if (distance <= changer->Radius() + 2.f && distance < best)
+		{
+			best = distance;
+			nearest = changer;
+		}
+	}
+	if (!nearest)
+	{
+		Msg("! [COOP_SERVER] TRAVEL no level changer at %f,%f,%f (changers=%u)", VPUSH(point), u32(g_lchangers.size()));
+		return false;
+	}
+	Msg("[COOP_SERVER] TRAVEL body=%u changer=%s distance=%f", body_id, nearest->cName().c_str(), best);
+	nearest->coop_request(body);
+	return true;
+}
+
+// Coop server: an NPC's Lua owner (companions), and player <-> body lookups by connection name.
+void g_coop_set_lua_owner(u16 object_id, LPCSTR player)
+{
+	if (IsGameTypeCoop() && OnServer()) game_sv_Coop::SetLuaOwner(object_id, player);
+}
+
+u16 g_coop_player_body(LPCSTR player)
+{
+	CActor* body = game_sv_Coop::BodyOfPlayer(player);
+	return body ? body->ID() : u16(-1);
+}
+
+LPCSTR g_coop_body_player(u16 body_id)
+{
+	return IsGameTypeCoop() && OnServer() ? game_sv_Coop::PlayerOfBody(body_id) : "";
+}
+
+// Coop server: the server Lua re-enters a body's scope for work the engine hands it outside one
+// (a task's completion callback, a timer created in a dialog) - db.actor, AC_ID and the engine's
+// context body (news, talk messages, "the actor" lookups) as CoopLuaActor does around NPC Lua.
+// Scopes nest; every enter needs its leave.
+static xr_vector<CoopLuaActor*> g_coop_lua_scopes;
+bool g_coop_enter_body(u16 body_id)
+{
+	if (!IsGameTypeCoop() || !OnServer()) return false;
+	CGameObject* body = smart_cast<CGameObject*>(Level().Objects.net_Find(body_id));
+	if (!body || !game_sv_Coop::BodyOf(body)) return false;
+	g_coop_lua_scopes.push_back(xr_new<CoopLuaActor>(body, false));
+	return true;
+}
+
+void g_coop_leave_body()
+{
+	if (g_coop_lua_scopes.empty()) return;
+	CoopLuaActor* scope = g_coop_lua_scopes.back();
+	g_coop_lua_scopes.pop_back();
+	xr_delete(scope);
+}
+
+// Coop client: the ids of the living stalker replicas present here (db.OnlineStalkers of the PDA
+// contacts tab; the client has no NPC binders to keep that list).
+::luabind::object g_coop_online_stalkers()
+{
+	::luabind::object ids = ::luabind::newtable(ai().script_engine().lua());
+	if (!IsGameTypeCoop() || !g_pGameLevel) return ids;
+	int n = 0;
+	for (u32 i = 0; i < Level().Objects.o_count(); ++i)
+	{
+		CObject* object = Level().Objects.o_get_by_iterator(i);
+		CAI_Stalker* stalker = smart_cast<CAI_Stalker*>(object);
+		if (!stalker || stalker->getDestroy() || !stalker->g_Alive()) continue;
+		ids[++n] = u32(stalker->ID());
+	}
+	return ids;
+}
+
+// Coop client: the downed players as the server announces them (coop_client_actor).
+#include "game_cl_coop.h"
+void g_coop_set_downed(u16 body_id, bool downed)
+{
+	if (IsGameTypeCoop() && !OnServer()) game_cl_Coop::SetDowned(body_id, downed);
+}
+
+bool g_coop_self_downed()
+{
+	return game_cl_Coop::SelfDowned();
+}
+
+void g_coop_revive_hint(LPCSTR text)
+{
+	game_cl_Coop::SetReviveHint(text);
+}
+
 //can spawn entities like bolts, phantoms, ammo, etc. which normally crash when using alife():create()
 void spawn_section(LPCSTR sSection, Fvector3 vPosition, u32 LevelVertexID, u16 ParentID, bool bReturnItem = false)
 {
@@ -2442,6 +2599,18 @@ void CLevel::script_register(lua_State* L)
 			//Alundaio: Extend level namespace exports
 #ifdef NAMESPACE_LEVEL_EXPORTS
 			def("send", &g_send), //allow the ability to send netpacket to level
+			def("coop_player_store", &g_coop_player_store), // coop: keep this player's Lua state on the server
+			def("coop_send_lua", &g_coop_send_lua), // coop: text between the coop-owned Lua of client and server
+			def("coop_travel", &g_coop_travel), // coop server: level change for a body through the changer at a point
+			def("coop_set_lua_owner", &g_coop_set_lua_owner), // coop server: an NPC's Lua runs for this player (companions)
+			def("coop_player_body", &g_coop_player_body), // coop server: the living body id of a connected player, 65535 if none
+			def("coop_body_player", &g_coop_body_player), // coop server: the player (connection name) of a body, "" if not a player's
+			def("coop_enter_body", &g_coop_enter_body), // coop server: run the following Lua as this body (db.actor, AC_ID, news) until coop_leave_body
+			def("coop_leave_body", &g_coop_leave_body),
+			def("coop_online_stalkers", &g_coop_online_stalkers), // coop client: ids of the living stalker replicas here (PDA contacts)
+			def("coop_set_downed", &g_coop_set_downed), // coop client: a player's body is down / up again
+			def("coop_self_downed", &g_coop_self_downed), // coop client: this player's body is down
+			def("coop_revive_hint", &g_coop_revive_hint), // coop client: the "use" hint shown on a downed body
 
 			def("get_target_obj", ((CScriptGameObject * (*)()) & g_get_target_obj)), //intentionally named to what is in xray extensions
 			def("get_target_obj", ((CScriptGameObject* (*)(ETraceTarget)) & g_get_target_obj)), //intentionally named to what is in xray extensions

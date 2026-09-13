@@ -71,6 +71,12 @@ bool CLevel::net_start_client2()
 
 void rescan_mp_archives()
 {
+	// $game_arch_mp$ holds maps downloaded from a server. A singleplayer-only
+	// fsgame.ltx, Anomaly's included, does not declare it, and get_path() asserts
+	// on an unknown alias. Nothing to rescan then.
+	if (!FS.path_exist("$game_arch_mp$"))
+		return;
+
 	FS_Path* mp_archs_path = FS.get_path("$game_arch_mp$");
 	FS.rescan_path(mp_archs_path->m_Path,
 	               mp_archs_path->m_Flags.is(FS_Path::flRecurse)

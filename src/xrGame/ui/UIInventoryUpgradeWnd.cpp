@@ -150,7 +150,7 @@ void CUIInventoryUpgradeWnd::InitInventory(CInventoryItem* item, bool can_upgrad
 	m_back->Show(false);
 	m_btn_repair->Enable(false);
 
-	if (ai().get_alife() && m_inv_item)
+	if (inventory::upgrade::manager_available() && m_inv_item)
 	{
 		if (install_item(*m_inv_item, can_upgrade))
 		{
@@ -406,5 +406,5 @@ void CUIInventoryUpgradeWnd::set_info_cur_upgrade(Upgrade_type* upgrade)
 
 CUIInventoryUpgradeWnd::Manager_type& CUIInventoryUpgradeWnd::get_manager()
 {
-	return ai().alife().inventory_upgrade_manager();
+	return inventory::upgrade::manager();
 }

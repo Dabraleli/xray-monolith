@@ -660,6 +660,8 @@ void CControlAnimationBase::check_hit(MotionID motion, float time_perc)
 	if (!is_angle_between(p, from, to))
 		should_hit = false;
 
+    if (strstr(Core.Params,"-coop_damage_probe"))
+        Msg("[COOP_MELEE] attacker=%u target=%u distance=%f limit=%f hit=%u power=%f",m_object->ID(),enemy->ID(),d.magnitude(),params.dist,should_hit,params.hit_power);
 	if (should_hit)
 		m_object->HitEntity(enemy, params.hit_power, params.impulse, params.impulse_dir);
 

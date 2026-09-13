@@ -27,6 +27,7 @@
 
 #include "holder_custom.h"
 #include "game_cl_base.h"
+#include "game_cl_coop.h"
 #include "xrserver_objects_alife_monsters.h"
 #include "../xrServerEntities/xrServer_Object_Base.h"
 #include "UI/UIGameTutorial.h"
@@ -209,6 +210,8 @@ LPCSTR GameTypeToString(EGameIDs gt, bool bShort)
 {
 	switch (gt)
 	{
+	case eGameIDCoop:
+		return "coop";
 	case eGameIDSingle:
 		return "single";
 		break;
@@ -239,6 +242,8 @@ EGameIDs ParseStringToGameType(LPCSTR str)
 {
 	if (!xr_strcmp(str, "single"))
 		return eGameIDSingle;
+	else if (!xr_strcmp(str, "coop"))
+		return eGameIDCoop;
 	else if (!xr_strcmp(str, "deathmatch") || !xr_strcmp(str, "dm"))
 		return eGameIDDeathmatch;
 	else if (!xr_strcmp(str, "teamdeathmatch") || !xr_strcmp(str, "tdm"))
@@ -262,7 +267,7 @@ void CGamePersistent::UpdateGameType()
 	m_game_params.m_e_game_type = ParseStringToGameType(m_game_params.m_game_type);
 
 
-	if (m_game_params.m_e_game_type == eGameIDSingle)
+	if (m_game_params.m_e_game_type == eGameIDSingle || m_game_params.m_e_game_type == eGameIDCoop)
 		g_current_keygroup = _sp;
 	else
 		g_current_keygroup = _mp;
@@ -645,6 +650,9 @@ void CGamePersistent::OnFrame()
 	{
 		m_intro_event.bind(this, &CGamePersistent::game_loaded);
 	}
+
+	// Coop client: reconnect after the server restarted its world (level change, load).
+	if (strstr(Core.Params, "-coop_client")) game_cl_Coop::ReconnectUpdate();
 
 	if (g_tutorial2)
 	{

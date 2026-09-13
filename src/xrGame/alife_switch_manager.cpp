@@ -9,6 +9,7 @@
 #include "stdafx.h"
 #include "alife_switch_manager.h"
 #include "xrServer_Objects_ALife.h"
+#include "xrServer_Objects_ALife_Items.h"
 #include "alife_graph_registry.h"
 #include "alife_object_registry.h"
 #include "alife_schedule_registry.h"
@@ -110,6 +111,8 @@ void CALifeSwitchManager::switch_online(CSE_ALifeDynamicObject* object)
 //	if (psAI_Flags.test(aiALife))
 		Msg						("[LSS][%d] Going online [%d][%s][%d] ([%f][%f][%f] : [%f][%f][%f]), on '%s'",Device.dwFrame,Device.dwTimeGlobal,object->name_replace(), object->ID,VPUSH(graph().actor()->o_Position),VPUSH(object->o_Position), "*SERVER*");
 #endif
+		if (strstr(Core.Params, "-coop_damage_probe") && smart_cast<CSE_ALifeItemWeapon*>(object))
+			Msg("[COOP_ITEM_SWITCH] online item=%u section=%s parent=%u position=%f,%f,%f", object->ID, object->s_name.c_str(), object->ID_Parent, VPUSH(object->o_Position));
 		object->switch_online();
 	STOP_PROFILE
 }
@@ -121,6 +124,8 @@ void CALifeSwitchManager::switch_offline(CSE_ALifeDynamicObject* object)
 //	if (psAI_Flags.test(aiALife))
 		Msg							("[LSS][%d] Going offline [%d][%s][%d] ([%f][%f][%f] : [%f][%f][%f]), on '%s'",Device.dwFrame,Device.dwTimeGlobal,object->name_replace(), object->ID,VPUSH(graph().actor()->o_Position),VPUSH(object->o_Position), "*SERVER*");
 #endif
+		if (strstr(Core.Params, "-coop_damage_probe") && smart_cast<CSE_ALifeItemWeapon*>(object))
+			Msg("[COOP_ITEM_SWITCH] offline item=%u section=%s parent=%u position=%f,%f,%f", object->ID, object->s_name.c_str(), object->ID_Parent, VPUSH(object->o_Position));
 		object->switch_offline();
 	STOP_PROFILE
 }

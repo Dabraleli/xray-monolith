@@ -1175,6 +1175,8 @@
     <ClInclude Include="game_sv_mp_team.h" />
     <ClInclude Include="game_sv_mp_vote_flags.h" />
     <ClInclude Include="game_sv_single.h" />
+    <ClInclude Include="game_sv_coop.h" />
+    <ClInclude Include="game_cl_coop.h" />
     <ClInclude Include="game_sv_teamdeathmatch.h" />
     <ClInclude Include="GlobalFeelTouch.hpp" />
     <CustomBuild Include="graph_abstract.h" />
@@ -2907,6 +2909,8 @@
     <ClCompile Include="game_sv_item_respawner.cpp" />
     <ClCompile Include="game_sv_mp.cpp" />
     <ClCompile Include="game_sv_single.cpp" />
+    <ClCompile Include="game_sv_coop.cpp" />
+    <ClCompile Include="game_cl_coop.cpp" />
     <ClCompile Include="game_sv_teamdeathmatch.cpp" />
     <ClCompile Include="game_sv_teamdeathmatch_process_event.cpp" />
     <ClCompile Include="GlobalFeelTouch.cpp" />

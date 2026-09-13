@@ -25,6 +25,7 @@
 #include "../UIGameSP.h"
 #include "UITalkWnd.h"
 #include "eatable_item.h"
+#include "../game_cl_coop.h"
 
 // -------------------------------------------------
 
@@ -209,6 +210,8 @@ void CUIActorMenu::ColorizeItem(CUICellItem* itm, bool colorize)
 
 void CUIActorMenu::DeInitTradeMode()
 {
+	if (IsGameTypeCoop() && OnClient())
+		game_cl_Coop::TradeSend(3, 0, NULL); // the server's CTrade of both sides stops with ours
 	if (m_actor_trade)
 	{
 		m_actor_trade->StopTrade();
@@ -414,7 +417,14 @@ bool CUIActorMenu::CanMoveToPartner(PIItem pItem)
 	if (!pItem->CanTrade())
 		return false;
 
-	if (!m_pPartnerInvOwner->trade_parameters().enabled(
+	// Coop client: what the NPC buys is the server's decision (its runtime trade profile,
+	// trade_manager); it sent a price for every item it takes, none for the rest (TradePrice 0).
+	if (IsGameTypeCoop() && OnClient())
+	{
+		if (!game_cl_Coop::TradePrice(pItem->object().ID()))
+			return false;
+	}
+	else if (!m_pPartnerInvOwner->trade_parameters().enabled(
 		CTradeParameters::action_buy(0), pItem->object().cNameSect()))
 	{
 		return false;
@@ -439,7 +449,7 @@ bool CUIActorMenu::CanMoveToPartner(PIItem pItem)
 
 void CUIActorMenu::UpdateActor()
 {
-	if (IsGameTypeSingle())
+	if (IsGameTypeSingle() || IsGameTypeCoop()) // coop: the body's money copy kept by GE_MONEY from the server
 	{
 		string64 buf;
 		xr_sprintf(buf, "%d RU", m_pActorInvOwner->get_money());
@@ -561,10 +571,19 @@ void CUIActorMenu::OnBtnPerformTradeBuy(CUIWindow* w, void* d)
 
 	if ((actor_money >= 0) /*&& ( partner_money >= 0 )*/ && (actor_price >= 0 || partner_price > 0))
 	{
-		m_partner_trade->OnPerformTrade(partner_price, actor_price);
+		if (IsGameTypeCoop() && OnClient())
+		{
+			// The server does the deal (money, item events); the cells wait in the deal list and the
+			// ownership events place the items where they end up (OnInventoryAction).
+			CoopSendDeal(m_pTradePartnerList, true);
+		}
+		else
+		{
+			m_partner_trade->OnPerformTrade(partner_price, actor_price);
 
-		//		TransferItems( m_pTradeActorList,   m_pTradePartnerBagList, m_partner_trade, true );
-		TransferItems(m_pTradePartnerList, m_pTradeActorBagList, m_partner_trade, false);
+			//		TransferItems( m_pTradeActorList,   m_pTradePartnerBagList, m_partner_trade, true );
+			TransferItems(m_pTradePartnerList, m_pTradeActorBagList, m_partner_trade, false);
+		}
 	}
 	else
 	{
@@ -623,10 +642,17 @@ void CUIActorMenu::OnBtnPerformTradeSell(CUIWindow* w, void* d)
 
 	if ((actor_money >= 0) && (partner_money >= 0) && (actor_price >= 0 || partner_price > 0))
 	{
-		m_partner_trade->OnPerformTrade(partner_price, actor_price);
+		if (IsGameTypeCoop() && OnClient())
+		{
+			CoopSendDeal(m_pTradeActorList, false);
+		}
+		else
+		{
+			m_partner_trade->OnPerformTrade(partner_price, actor_price);
 
-		TransferItems(m_pTradeActorList, m_pTradePartnerBagList, m_partner_trade, true);
-		//		TransferItems( m_pTradePartnerList,	m_pTradeActorBagList,	m_partner_trade, false );
+			TransferItems(m_pTradeActorList, m_pTradePartnerBagList, m_partner_trade, true);
+			//		TransferItems( m_pTradePartnerList,	m_pTradeActorBagList,	m_partner_trade, false );
+		}
 	}
 	else
 	{
@@ -665,6 +691,38 @@ void CUIActorMenu::OnBtnPerformTradeSell(CUIWindow* w, void* d)
 	}
 
 	UpdateItemsPlace();
+}
+
+// Coop client: the items put up for the deal are named to the server (M_COOP_TRADE op 2); their
+// cells stay in the deal list until the server's trade events move the items (OnInventoryAction
+// takes the cells out and puts the items into the bag of their new owner), as TransferItems does
+// at once in SP. A refused deal leaves them there for the player to take back.
+void CUIActorMenu::CoopSendDeal(CUIDragDropListEx* pDealList, bool bBuying)
+{
+	xr_vector<u16> ids;
+	for (u32 i = 0; i < pDealList->ItemsCount(); ++i)
+	{
+		CUICellItem* cell_item = pDealList->GetItemIdx(i);
+		PIItem item = (PIItem)cell_item->m_pData;
+		if (item) ids.push_back(item->object().ID());
+		for (u32 j = 0; j < cell_item->ChildsCount(); ++j)
+		{
+			PIItem child = (PIItem)cell_item->Child(j)->m_pData;
+			if (child) ids.push_back(child->object().ID());
+		}
+	}
+	if (!ids.empty()) game_cl_Coop::TradeSend(2, bBuying ? 1 : 0, &ids);
+}
+
+// Coop client: the body's money changed on the server (GE_MONEY): the labels follow.
+void CUIActorMenu::CoopMoneyChanged()
+{
+	if (IsShown() && m_pActorInvOwner) UpdateActor();
+}
+
+bool CUIActorMenu::CoopTradePartner(const CInventoryOwner* owner) const
+{
+	return IsGameTypeCoop() && m_currMenuMode == mmTrade && owner && owner == m_pPartnerInvOwner;
 }
 
 void CUIActorMenu::TransferItems(CUIDragDropListEx* pSellList, CUIDragDropListEx* pBuyList, CTrade* pTrade,

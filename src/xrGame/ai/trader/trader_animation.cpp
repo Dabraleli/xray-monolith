@@ -42,6 +42,8 @@ void CTraderAnimation::head_callback(CBlend* B)
 void CTraderAnimation::set_animation(LPCSTR anim)
 {
 	m_anim_global = anim;
+	m_coop_global = anim;
+	++m_coop_global_serial;
 
 	IKinematicsAnimated* kinematics_animated = smart_cast<IKinematicsAnimated*>(m_trader->Visual());
 	m_motion_global = kinematics_animated->ID_Cycle(m_anim_global);
@@ -51,11 +53,37 @@ void CTraderAnimation::set_animation(LPCSTR anim)
 void CTraderAnimation::set_head_animation(LPCSTR anim)
 {
 	m_anim_head = anim;
+	m_coop_head = anim;
+	++m_coop_head_serial;
 
 	// назначить анимацию головы
 	IKinematicsAnimated* kinematics_animated = smart_cast<IKinematicsAnimated*>(m_trader->Visual());
 	m_motion_head = kinematics_animated->ID_Cycle(m_anim_head);
 	kinematics_animated->PlayCycle(m_motion_head,TRUE, head_callback, this);
+}
+
+void CTraderAnimation::coop_apply(u16 global_serial, LPCSTR global, u16 head_serial, LPCSTR head)
+{
+	IKinematicsAnimated* kinematics_animated = smart_cast<IKinematicsAnimated*>(m_trader->Visual());
+	if (!kinematics_animated) return;
+	if (global_serial != m_coop_global_serial && global && *global)
+	{
+		m_coop_global_serial = global_serial;
+		m_coop_global = global;
+		m_anim_global = m_coop_global.c_str();
+		m_motion_global = kinematics_animated->ID_Cycle_Safe(m_anim_global);
+		if (m_motion_global.valid()) kinematics_animated->PlayCycle(m_motion_global, TRUE, global_callback, this);
+		else Msg("! [COOP_TRADER] unknown global animation %s for %s", global, m_trader->cName().c_str());
+	}
+	if (head_serial != m_coop_head_serial && head && *head)
+	{
+		m_coop_head_serial = head_serial;
+		m_coop_head = head;
+		m_anim_head = m_coop_head.c_str();
+		m_motion_head = kinematics_animated->ID_Cycle_Safe(m_anim_head);
+		if (m_motion_head.valid()) kinematics_animated->PlayCycle(m_motion_head, TRUE, head_callback, this);
+		else Msg("! [COOP_TRADER] unknown head animation %s for %s", head, m_trader->cName().c_str());
+	}
 }
 
 //////////////////////////////////////////////////////////////////////////

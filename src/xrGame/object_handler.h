@@ -47,6 +47,9 @@ protected:
 
 public:
 	bool m_clutched_hammer_enabled;
+	// Coop client replica: the planner does not run here, the server says whether the held
+	// weapon hangs on the back (strapped) or sits in the hands (see CoopStalkerLayers::ready).
+	bool m_coop_weapon_strapped;
 
 private:
 	void actualize_strap_mode(CWeapon* weapon) const;

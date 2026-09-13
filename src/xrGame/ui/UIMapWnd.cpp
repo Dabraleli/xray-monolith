@@ -145,7 +145,7 @@ void CUIMapWnd::Init(LPCSTR xml_name, LPCSTR start_from)
 
 	// initialize local maps
 	xr_string sect_name;
-	if (IsGameTypeSingle())
+	if (IsGameTypeSingle() || IsGameTypeCoop()) // coop plays the single-player levels
 		sect_name = "level_maps_single";
 	else
 		sect_name = "level_maps_mp";

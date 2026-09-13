@@ -92,6 +92,51 @@ enum
 	M_CREATE_PLAYER_STATE,
 	M_COMPRESSED_UPDATE_OBJECTS,
 
+	// coop: per-player Lua state (thirst, sleep, ...) kept by the server under the connection
+	// name. client -> server: stringZ blob to keep; server -> client: the kept blob on join.
+	M_COOP_PLAYER_STORE,
+	// coop: NPC dialog driven by the server for a player body; the client only shows the talk
+	// window. u8 op first: client -> server 1 start(u16 npc) 2 select(stringZ id) 3 stop;
+	// server -> client 1 begin(u16 npc, u8 disable_break) 2 answer(u8 ours, stringZ text)
+	// 3 questions(u8 topic_mode, u8 count, {stringZ text, stringZ id, u8 finalizer}) 4 end
+	// 5 observe(stringZ speaker, stringZ text): another player's conversation for the chat log.
+	M_COOP_TALK,
+	// coop: the shared PDA, server -> clients. u8 op first:
+	// 1 task(stringZ id, u8 type, u8 state, u32 priority, stringZ title, stringZ descr, stringZ icon,
+	//   stringZ map_location, u16 map_object_id, stringZ map_hint, where)
+	// 2 spot add(stringZ spot, u16 id, stringZ hint, u8 serializable, where) 3 spot hint(stringZ spot, u16 id, stringZ hint)
+	//   where = u8 known, then stringZ level, vec3 position: the object's place in the world for
+	//   clients that do not have the object (another level, offline).
+	// 4 spot remove(stringZ spot, u16 id) 5 spots remove by id(u16 id)
+	// 6 news(u8 type, stringZ caption, stringZ text, stringZ texture, s32 show_time)
+	// 7 talk message(stringZ caption, stringZ text, stringZ texture, stringZ template)
+	M_COOP_PDA,
+	// coop: an opaque text between the coop-owned Lua of a client and of the server
+	// (level.coop_send_lua). client -> server: stringZ text, handled by
+	// coop_server_actor.on_client_lua(body, text) with the body as db.actor; server -> client:
+	// stringZ text for coop_client_actor.on_server_lua(text).
+	M_COOP_LUA,
+	// coop: trade between a player body and an NPC, run by the server's CTrade; the client shows
+	// the actor menu with prices the server computed. u8 op first:
+	// client -> server 1 start(u16 npc) 2 deal(u8 buying, u8 count, u16 id...) 3 stop;
+	// server -> client 1 begin(u16 npc, prices) 2 prices 4 refuse(u8 reason);
+	//   prices = u16 count, {u16 id, u32 price}: the actor's items with what the NPC pays for them,
+	//   then the NPC's items with what they cost the actor; an item missing from the list is not traded.
+	M_COOP_TRADE,
+	// coop: sounds the server's Lua and NPCs play, replayed by the clients in range (the headless
+	// server has no audio and the clients have no NPC binders). u8 op first, server -> client:
+	// 1 script sound play(u32 sid, stringZ path, u32 type, u16 object, u8 mode 0 play/1 at pos/2 no
+	//   feedback, vec3 position, float delay, u32 flags, float volume, float frequency)
+	// 2 script sound stop(u32 sid, u8 deferred) 3 script sound position(u32 sid, vec3)
+	// 4 NPC/monster sound player(u16 object, u32 internal type, u32 sound index, u32 max start,
+	//   u32 min start, u32 max stop, u32 min stop, stringZ prefix, u32 max count, u32 type,
+	//   u32 priority, u32 mask, stringZ bone): the collection is added on the client when unknown
+	//   (Lua-added phrase collections), then played like the server's CSoundPlayer::play.
+	M_COOP_SOUND,
+	// coop: the ray of a shot an NPC fired on the server (u16 weapon, vec3 position, vec3 dir), to the
+	// clients in range: their replica's tracer of that shot follows it instead of the barrel.
+	M_COOP_SHOT,
+
 	MSG_FORCEDWORD = u32(-1)
 };
 
@@ -188,6 +233,19 @@ enum
 	GE_REQUEST_PLAYERS_INFO,
 
 	GE_TRADER_FLAGS,
+
+	GE_COOP_CONDITION, // coop: server -> clients, authoritative bleeding of a player body
+	GE_COOP_HEALTH_CHANGE, // coop: client -> its body, health delta from the client-side Lua (thirst, sleep penalties)
+	GE_COOP_USE_OBJECT, // coop: client -> its body, "use" on a script-usable object (doors, levers): u16 object id
+	GE_COOP_TIP_TEXT, // coop: server -> clients, tip text of a usable object set by the server Lua: stringZ
+	// coop: server -> a body's client, a level changer invites this player (CLevelChanger on the
+	// server): u16 game vertex, u32 level vertex, vec3 position, vec3 angles, u8 enabled, stringZ
+	// invite, u8 has reject position, vec3 reject position, vec3 reject angles. The answer is the
+	// SP M_CHANGE_LEVEL of the client's dialog.
+	GE_COOP_LEVEL_INVITE,
+	// coop: server -> the holder's client, the state of a carried item the regular updates never
+	// carry: float condition, u8 remaining uses (0xff none), u16 loaded ammo (0xffff none).
+	GE_COOP_ITEM_STATE,
 
 	GE_FORCEDWORD = u32(-1)
 };

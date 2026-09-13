@@ -85,6 +85,13 @@ xrServer::EConnect xrServer::Connect(shared_str& session_name, GameDescriptionDa
 
 	game->Create(session_name);
 
+	// ALife chooses the actual level during Create; "all" is a spawn set, not a map.
+	if (game->Type() == eGameIDCoop)
+	{
+		xr_strcpy(game_descr.map_name, game->level_name(session_name).c_str());
+		xr_strcpy(game_descr.download_url, get_map_download_url(game_descr.map_name, game_descr.map_version));
+	}
+
 	return IPureServer::Connect(*session_name, game_descr);
 }
 
@@ -99,6 +106,7 @@ IClient* xrServer::new_client(SClientConnectData* cl_data)
 	CL->process_id = cl_data->process_id;
 	CL->name = cl_data->name; //only for offline mode
 	CL->pass._set(cl_data->pass);
+	CL->coop_profile = cl_data->coop; // coop: the character from the join menu (game_sv_Coop::SpawnBody)
 
 	NET_Packet P;
 	P.B.count = 0;
@@ -123,7 +131,13 @@ void xrServer::AttachNewClient(IClient* CL)
 	}
 	else
 	{
+#ifdef XR_USE_ENET
+        // CONFIG must precede the authentication challenge on the same reliable
+        // channel. ENet does not order high-priority traffic against normal.
+        SendTo_LL(CL->ID, &msgConfig, sizeof(msgConfig), net_flags(TRUE, TRUE, FALSE, TRUE));
+#else
 		SendTo_LL(CL->ID, &msgConfig, sizeof(msgConfig), net_flags(TRUE, TRUE, TRUE, TRUE));
+#endif
 		Server_Client_Check(CL);
 	}
 
@@ -142,7 +156,8 @@ void xrServer::AttachNewClient(IClient* CL)
 
 void xrServer::RequestClientDigest(IClient* CL)
 {
-	if (IsGameTypeSingle() || (CL == GetServerClient()))
+	if (IsGameTypeSingle() || (CL == GetServerClient()) ||
+        (game->Type() == eGameIDCoop && strstr(Core.Params, "-coop_server_network_test")))
 	{
 		Check_BuildVersion_Success(CL);
 		return;

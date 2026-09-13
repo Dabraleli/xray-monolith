@@ -10,6 +10,7 @@
 
 #include "ai_space.h"
 #include "alife_simulator.h"
+#include "../inventory_upgrade_manager.h"
 #include "../string_table.h"
 #include "../Inventory_Item.h"
 #include "UIInventoryUtilities.h"
@@ -142,7 +143,7 @@ void CUIItemInfo::InitItemInfo(LPCSTR xml_name)
 		//UIDesc_line->SetAutoDelete		(true);
 		//xml_init.InitStatic				(uiXml, "description_line", 0, UIDesc_line);
 
-		if (ai().get_alife()) // (-designer)
+		if (inventory::upgrade::manager_available()) // (-designer) ALife, or a coop client with its own manager
 		{
 			UIProperties = xr_new<UIInvUpgPropertiesWnd>();
 			UIProperties->init_from_xml("actor_menu_item.xml");
@@ -224,6 +225,7 @@ LPCSTR CUIItemInfo::GetItemDescription(CInventoryItem& pInvItem, LPCSTR m_item_d
 //-- Tronex
 
 bool IsGameTypeSingle();
+#include "../Level.h"
 
 void CUIItemInfo::InitItem(CUICellItem* pCellItem, CInventoryItem* pCompareItem, u32 item_price, LPCSTR trade_tip)
 {
@@ -276,7 +278,7 @@ void CUIItemInfo::InitItem(CUICellItem* pCellItem, CInventoryItem* pCompareItem,
 			UIWeight->SetWndPos(pos);
 		}
 	}
-	if (UICost && IsGameTypeSingle() && item_price != u32(-1))
+	if (UICost && (IsGameTypeSingle() || IsGameTypeCoop()) && item_price != u32(-1)) // coop as SP: the price line
 	{
 		xr_sprintf(str, "%d RU", item_price); // will be owerwritten in multiplayer
 		UICost->SetText(str);
@@ -297,7 +299,7 @@ void CUIItemInfo::InitItem(CUICellItem* pCellItem, CInventoryItem* pCompareItem,
 	//		IBuyWnd* buy_menu = gs_mp->pCurBuyMenu->GetItemPrice();
 	//		GetItemPrice();
 	//	}
-	if (UITradeTip && IsGameTypeSingle())
+	if (UITradeTip && (IsGameTypeSingle() || IsGameTypeCoop())) // coop as SP
 	{
 		pos.y = UITradeTip->GetWndPos().y;
 		if (UIWeight && m_complex_desc)

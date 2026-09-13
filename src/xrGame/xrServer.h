@@ -36,6 +36,7 @@ public:
 
 	BOOL net_PassUpdates;
 	u32 net_LastMoveUpdateTime;
+	u16 coop_last_detached; // item this connection just detached with GE_TRADE_SELL
 
 	game_PlayerState* ps;
 
@@ -185,6 +186,21 @@ public:
 	}
 
 	void Perform_connect_spawn(CSE_Abstract* E, xrClientData* to, NET_Packet& P);
+	void WriteOwnedConnectSpawn(CSE_Abstract* E, xrClientData* to, NET_Packet& P);
+	// Coop: the external connection that controls this body (CSE owner is always the internal client).
+	xrClientData* CoopControllerOf(CSE_Abstract* body);
+	// Coop: a remote client must never load the server's saved actor/NPC state (client_data);
+	// it is consumed by the server's own object spawn and would break replicas. Hides it while
+	// a spawn is written for external clients and puts it back afterwards.
+	struct CoopHideClientData
+	{
+		CSE_Abstract* object;
+		xr_vector<u8> saved;
+		CoopHideClientData(CSE_Abstract* E);
+		~CoopHideClientData();
+	};
+	bool CoopAdmitClientEvent(xrClientData* CL, NET_Packet& P, u16 type, u16 destination);
+	void TestCoopSpawnRouting(CSE_Abstract* body, CSE_Abstract* world);
 	void Perform_transfer(NET_Packet& PR, NET_Packet& PT, CSE_Abstract* what, CSE_Abstract* from, CSE_Abstract* to);
 	void Perform_reject(CSE_Abstract* what, CSE_Abstract* from, int delta);
 	void Perform_destroy(CSE_Abstract* tpSE_Abstract, u32 mode);

@@ -17,6 +17,7 @@
 
 #include "ai_space.h"
 #include "alife_simulator.h"
+#include "../inventory_upgrade_manager.h"
 #include "object_broker.h"
 #include "UIWndCallback.h"
 #include "UIHelper.h"
@@ -233,7 +234,7 @@ void CUIActorMenu::Construct()
 	m_ItemInfo->InitItemInfo("actor_menu_item.xml");
 
 	m_upgrade_info = NULL;
-	if (ai().get_alife())
+	if (inventory::upgrade::manager_available()) // ALife, or a coop client with its own upgrade manager
 	{
 		m_upgrade_info = xr_new<UIInvUpgradeInfo>();
 		m_upgrade_info->SetAutoDelete(true);

@@ -14,11 +14,15 @@
 #include "../PhraseDialogManager.h"
 
 #include "../game_cl_base.h"
+#include "../../xrServerEntities/xrMessages.h"
 #include "../string_table.h"
 #include "../xr_level_controller.h"
 #include "../../xrEngine/cameraBase.h"
 #include "UIXmlInit.h"
 #include "UI3tButton.h"
+#include "../game_cl_coop.h"
+#include "../ai_space.h"
+#include "../../xrServerEntities/script_engine.h"
 
 CUITalkWnd::CUITalkWnd()
 {
@@ -35,6 +39,28 @@ CUITalkWnd::CUITalkWnd()
 	InitTalkWnd();
 	m_bNeedToUpdateQuestions = false;
 	b_disable_break = false;
+	m_remote = false;
+}
+
+void CUITalkWnd::RemoteSend(u8 op, LPCSTR id)
+{
+	NET_Packet P;
+	P.w_begin(M_COOP_TALK);
+	P.w_u8(op);
+	if (id) P.w_stringZ(id);
+	Level().Send(P, net_flags(TRUE, TRUE));
+}
+
+void CUITalkWnd::RemoteAnswer(bool ours, LPCSTR text)
+{
+	if (!m_pOurInvOwner || !m_pOthersInvOwner) return;
+	AddAnswer(text, ours ? m_pOurInvOwner->Name() : m_pOthersInvOwner->Name());
+}
+
+void CUITalkWnd::RemoteClearQuestions()
+{
+	UITalkDialogWnd->ClearQuestions();
+	m_bNeedToUpdateQuestions = false;
 }
 
 CUITalkWnd::~CUITalkWnd()
@@ -73,6 +99,20 @@ void CUITalkWnd::InitTalkDialog()
 	//очистить лог сообщений
 	UITalkDialogWnd->ClearAll();
 
+	if (m_remote)
+	{
+		// Coop client: phrases and questions arrive from the server; the trade button asks the
+		// server (SwitchToTrade), the upgrade button opens the mechanic window here (SwitchToUpgrade).
+		ToTopicMode();
+		m_bNeedToUpdateQuestions = false;
+		Update();
+		UITalkDialogWnd->mechanic_mode = m_pOthersInvOwner->SpecificCharacter().upgrade_mechanic(); // the replica's profile
+		UITalkDialogWnd->SetOsoznanieMode(false);
+		UITalkDialogWnd->Show();
+		UITalkDialogWnd->UpdateButtonsLayout(b_disable_break, m_pOthersInvOwner->IsTradeEnabled());
+		return;
+	}
+
 	InitOthersStartDialog();
 	NeedUpdateQuestions();
 	Update();
@@ -103,6 +143,10 @@ void CUITalkWnd::InitOthersStartDialog()
 
 void CUITalkWnd::NeedUpdateQuestions()
 {
+	// Remote mode: the question list comes from the server; here the flag only marks a click in
+	// flight (AskQuestion/RemoteClearQuestions). Info portions the client's actor receives while
+	// the window is open (ui_pda_hide when the PDA folds away) must not leave the list dead.
+	if (m_remote) return;
 	m_bNeedToUpdateQuestions = true;
 }
 
@@ -216,13 +260,16 @@ void CUITalkWnd::Update()
 			HideDialog();
 	}
 
-	if (m_bNeedToUpdateQuestions)
+	if (m_bNeedToUpdateQuestions && !m_remote)
 	{
 		UpdateQuestions();
 	}
 	inherited::Update();
+	if (!m_pOthersInvOwner) return;
 	UpdateCameraDirection(smart_cast<CGameObject*>(m_pOthersInvOwner));
 
+	// Coop: Anomaly starts trade from a dialog line (npc:start_trade on the server); the button follows
+	// the replica's flag as in SP and, when used, asks the server (SwitchToTrade).
 	UITalkDialogWnd->UpdateButtonsLayout(b_disable_break, m_pOthersInvOwner->IsTradeEnabled());
 
 	if (playing_sound())
@@ -255,11 +302,19 @@ void CUITalkWnd::Show(bool status)
 		{
 			ToTopicMode();
 
+			if (m_remote)
+			{
+				// Tell the server the body left the conversation; the NPC replica follows the actor.
+				RemoteSend(3, NULL);
+				if (m_pOthersInvOwner && m_pOthersInvOwner->IsTalking())
+					m_pOthersInvOwner->StopTalk();
+			}
 			if (m_pActor->IsTalking())
 				m_pActor->StopTalk();
 
 			m_pActor = NULL;
 		}
+		m_remote = false;
 	}
 }
 
@@ -276,6 +331,17 @@ void CUITalkWnd::ToTopicMode()
 void CUITalkWnd::AskQuestion()
 {
 	if (m_bNeedToUpdateQuestions) return; //quick dblclick:(
+	if (m_remote)
+	{
+		// The server decides what the click means (topic or phrase) and answers with new questions.
+		// The list is not cleared here: this runs inside the click dispatch of the very item being
+		// removed (crash in CUIScrollView::OnMouseAction, session 81). The server's questions
+		// message replaces it; until then the busy flag swallows repeated clicks.
+		if (UITalkDialogWnd->m_ClickedQuestionID == "") return;
+		RemoteSend(2, UITalkDialogWnd->m_ClickedQuestionID.c_str());
+		m_bNeedToUpdateQuestions = true;
+		return;
+	}
 	shared_str phrase_id;
 
 	//игрок выбрал тему разговора
@@ -335,6 +401,14 @@ void CUITalkWnd::AddAnswer(const shared_str& text, LPCSTR SpeakerName)
 
 void CUITalkWnd::SwitchToTrade()
 {
+	if (m_remote)
+	{
+		// Coop: the server sets the trade up (CTrade of both sides) and answers with the prices;
+		// the actor menu opens when they arrive (game_cl_Coop::OnTradeMessage).
+		CGameObject* npc = smart_cast<CGameObject*>(m_pOthersInvOwner);
+		if (npc) game_cl_Coop::TradeSend(1, npc->ID(), NULL);
+		return;
+	}
 	if (m_pOurInvOwner->IsTradeEnabled() && m_pOthersInvOwner->IsTradeEnabled())
 	{
 		CUIGameSP* pGameSP = smart_cast<CUIGameSP*>(CurrentGameUI());
@@ -351,6 +425,20 @@ void CUITalkWnd::SwitchToTrade()
 
 void CUITalkWnd::SwitchToUpgrade()
 {
+	if (m_remote)
+	{
+		// Coop: the mechanic window runs here on the replicas (the client's own upgrade manager,
+		// the inventory_upgrades functors with the mirrored story book); an install reaches the
+		// server as GE_INSTALL_UPGRADE, a repair and the prices as item verbs. The Lua learns the
+		// speaker first (get_speaker of the precondition functors).
+		CGameObject* npc = smart_cast<CGameObject*>(m_pOthersInvOwner);
+		CUIGameSP* pGameSP = smart_cast<CUIGameSP*>(CurrentGameUI());
+		if (!npc || !pGameSP) return;
+		::luabind::functor<void> functor;
+		if (ai().script_engine().functor("coop_client_actor.on_upgrade_window", functor)) functor(npc->ID());
+		pGameSP->StartUpgrade(m_pOurInvOwner, m_pOthersInvOwner);
+		return;
+	}
 	//if ( m_pOurInvOwner->IsInvUpgradeEnabled() && m_pOthersInvOwner->IsInvUpgradeEnabled() )
 	{
 		CUIGameSP* pGameSP = smart_cast<CUIGameSP*>(CurrentGameUI());

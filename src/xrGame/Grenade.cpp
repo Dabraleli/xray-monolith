@@ -331,7 +331,7 @@ bool CGrenade::Action(u16 cmd, u32 flags)
 
 bool CGrenade::NeedToDestroyObject() const
 {
-	if (IsGameTypeSingle()) return false;
+	if (IsGameTypeSingle() || IsGameTypeCoop()) return false; // coop as SP: a dropped grenade stays
 	if (Remote()) return false;
 	if (TimePassedAfterIndependant() > m_dwGrenadeRemoveTime)
 		return true;

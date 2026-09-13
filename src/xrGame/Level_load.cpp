@@ -28,6 +28,14 @@ bool CLevel::Load_GameSpecific_Before()
 	g_pGamePersistent->LoadTitle();
 	string_path fn_game;
 
+    coop_heap_check("load: before ai space");
+    if (strstr(Core.Params, "-coop_client") && !ai().get_alife())
+    {
+        R_ASSERT(!Server);
+        ai().load_coop_replica(get_net_DescriptionData().map_name);
+        coop_heap_check("load: replica graph loaded");
+    }
+
 	if (GamePersistent().GameType() == eGameIDSingle && !ai().get_alife() && FS.exist(fn_game, "$level$", "level.ai") &&
 		!net_Hosts.empty())
 		ai().load(net_SessionName());
@@ -37,6 +45,7 @@ bool CLevel::Load_GameSpecific_Before()
 		IReader* stream = FS.r_open(fn_game);
 		ai().patrol_path_storage_raw(*stream);
 		FS.r_close(stream);
+		coop_heap_check("load: patrol paths loaded");
 	}
 
 	CHARACTER_COMMUNITY::Reset();

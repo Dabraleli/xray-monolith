@@ -12,10 +12,15 @@
 #include "gameobject.h"
 #include "ai_space.h"
 #include "script_engine.h"
+#include "game_sv_coop.h"
+
+static u32 g_coop_script_sound_id = 0;
 
 CScriptSound::CScriptSound(LPCSTR caSoundName, ESoundTypes sound_type)
 {
 	m_caSoundToPlay = caSoundName;
+	m_coop_id = ++g_coop_script_sound_id;
+	m_coop_type = u32(sound_type);
 	string_path l_caFileName;
 	VERIFY(::Sound) ;
 	if (FS.exist(l_caFileName, "$game_sounds$", caSoundName, ".ogg"))
@@ -55,6 +60,7 @@ void CScriptSound::Play(CScriptGameObject* object, float delay, int flags)
 	THROW3(m_sound._handle(), "There is no sound", *m_caSoundToPlay);
 	//	Msg							("%6d : CScriptSound::Play (%s), delay %f, flags %d",Device.dwTimeGlobal,m_sound._handle()->file_name(),delay,flags);
 	m_sound.play((object) ? &object->object() : NULL, flags, delay);
+	game_sv_Coop::RelayScriptSound(m_coop_id, m_caSoundToPlay.c_str(), m_coop_type, object ? &object->object() : NULL, 0, NULL, delay, u32(flags), 1.f, 1.f);
 }
 
 void CScriptSound::PlayAtPos(CScriptGameObject* object, const Fvector& position, float delay, int flags)
@@ -62,6 +68,7 @@ void CScriptSound::PlayAtPos(CScriptGameObject* object, const Fvector& position,
 	THROW3(m_sound._handle(), "There is no sound", *m_caSoundToPlay);
 	//	Msg							("%6d : CScriptSound::Play (%s), delay %f, flags %d",m_sound._handle()->file_name(),delay,flags);
 	m_sound.play_at_pos((object) ? &object->object() : NULL, position, flags, delay);
+	game_sv_Coop::RelayScriptSound(m_coop_id, m_caSoundToPlay.c_str(), m_coop_type, object ? &object->object() : NULL, 1, &position, delay, u32(flags), 1.f, 1.f);
 }
 
 void CScriptSound::PlayNoFeedback(CScriptGameObject* object, u32 flags/*!< Looping */, float delay/*!< Delay */,
@@ -69,4 +76,27 @@ void CScriptSound::PlayNoFeedback(CScriptGameObject* object, u32 flags/*!< Loopi
 {
 	THROW3(m_sound._handle(), "There is no sound", *m_caSoundToPlay);
 	m_sound.play_no_feedback((object) ? &object->object() : NULL, flags, delay, &pos, &vol, &freq);
+	game_sv_Coop::RelayScriptSound(m_coop_id, m_caSoundToPlay.c_str(), m_coop_type, object ? &object->object() : NULL, 2, &pos, delay, flags, vol, freq);
+}
+
+// Coop server: the clients' copies follow (game_sv_Coop::RelayScriptSoundStop / Position).
+void CScriptSound::Stop()
+{
+	VERIFY(m_sound._handle());
+	m_sound.stop();
+	game_sv_Coop::RelayScriptSoundStop(m_coop_id, false);
+}
+
+void CScriptSound::StopDeffered()
+{
+	VERIFY(m_sound._handle());
+	m_sound.stop_deffered();
+	game_sv_Coop::RelayScriptSoundStop(m_coop_id, true);
+}
+
+void CScriptSound::SetPosition(const Fvector& position)
+{
+	VERIFY(m_sound._handle());
+	m_sound.set_position(position);
+	game_sv_Coop::RelayScriptSoundPosition(m_coop_id, position);
 }

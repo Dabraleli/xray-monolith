@@ -114,6 +114,13 @@ public:
 
 	shared_str m_owner_task_id;
 
+	// Coop client: where the server says the object is (level and position), used while the
+	// object itself is not on this client (another level, offline). A live object still wins.
+	bool m_coop_external;
+	shared_str m_coop_level;
+	Fvector m_coop_position;
+	void InitCoopExternal(LPCSTR level_name, const Fvector& position);
+
 	void LoadSpot(LPCSTR type, bool bReload);
 	LPCSTR spot_type;
 

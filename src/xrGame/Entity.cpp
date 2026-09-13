@@ -21,6 +21,7 @@
 #include "InventoryOwner.h"
 #include "Inventory.h"
 #include "Weapon.h"
+#include "game_sv_coop.h"
 
 #define BODY_REMOVE_TIME		600000
 
@@ -78,12 +79,12 @@ void CEntity::Die(CObject* who)
 	set_ready_to_save();
 	SetfHealth(-1.f);
 
-	if (IsGameTypeSingle())
+	if (IsGameTypeSingle() || IsGameTypeCoop())
 	{
 		VERIFY(m_registered_member);
 	}
 	m_registered_member = false;
-	if (IsGameTypeSingle())
+	if (IsGameTypeSingle() || IsGameTypeCoop())
 		Level().seniority_holder().team(g_Team()).squad(g_Squad()).group(g_Group()).unregister_member(this);
 }
 
@@ -215,7 +216,7 @@ BOOL CEntity::net_Spawn(CSE_Abstract* DC)
 		}
 	}
 
-	if (g_Alive() && IsGameTypeSingle())
+	if (g_Alive() && (IsGameTypeSingle() || IsGameTypeCoop()))
 	{
 		m_registered_member = true;
 		Level().seniority_holder().team(g_Team()).squad(g_Squad()).group(g_Group()).register_member(this);
@@ -251,7 +252,7 @@ void CEntity::net_Destroy()
 	if (m_registered_member)
 	{
 		m_registered_member = false;
-		if (IsGameTypeSingle())
+		if (IsGameTypeSingle() || IsGameTypeCoop())
 			Level().seniority_holder().team(g_Team()).squad(g_Squad()).group(g_Group()).unregister_member(this);
 	}
 
@@ -262,6 +263,9 @@ void CEntity::net_Destroy()
 
 void CEntity::KillEntity(u16 whoID, BOOL bypass_actor_check /*AVO: added for actor_before_death callback*/)
 {
+	// Coop server: a player's body goes down instead of dying (game_sv_Coop::DownBody); the
+	// bleed-out and the last-player-down rule kill it for real with the bypass (KillDowned).
+	if (!bypass_actor_check && game_sv_Coop::DownBody(this, whoID)) return;
 	//AVO: allow scripts to process actor condition and prevent actor's death or kill him if desired.
 	//IMPORTANT: if you wish to kill actor you need to call db.actor:kill(level:object_by_id(whoID), true) in actor_before_death callback, to ensure all objects are properly destroyed
 	// this will bypass below if block and go to normal KillEntity routine.
@@ -383,13 +387,26 @@ void CEntity::on_after_change_team()
 {
 }
 
+void CEntity::import_network_team(int team, int squad, int group)
+{
+    if (team==g_Team() && squad==g_Squad() && group==g_Group()) return;
+    // Every registered coop entity re-registers, the player's own body included (its team comes
+    // from the server too, with the community of the join menu's faction).
+    const bool registered=IsGameTypeCoop() && m_registered_member;
+    if (registered)
+        Level().seniority_holder().team(g_Team()).squad(g_Squad()).group(g_Group()).unregister_member(this);
+    id_Team=team; id_Squad=squad; id_Group=group;
+    if (registered)
+        Level().seniority_holder().team(g_Team()).squad(g_Squad()).group(g_Group()).register_member(this);
+}
+
 void CEntity::ChangeTeam(int team, int squad, int group)
 {
 	if ((team == g_Team()) && (squad == g_Squad()) && (group == g_Group())) return;
 
 	VERIFY2(g_Alive(), "Try to change team of a dead object");
 
-	if (IsGameTypeSingle())
+	if (IsGameTypeSingle() || IsGameTypeCoop())
 	{
 		VERIFY(m_registered_member);
 	}

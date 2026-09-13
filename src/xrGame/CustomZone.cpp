@@ -13,6 +13,7 @@
 #include "../xrengine/xr_collide_form.h"
 #include "artefact.h"
 #include "ai_object_location.h"
+#include "alife_simulator.h"
 #include "../Include/xrRender/Kinematics.h"
 #include "zone_effector.h"
 #include "breakableobject.h"
@@ -555,7 +556,12 @@ void CCustomZone::UpdateWorkload(u32 dt)
 	default: NODEFAULT;
 	}
 
-	if (Level().CurrentEntity())
+	// The original condition is kept exactly as it was; only the null check is new.
+	// Anomaly reads the control entity here where stock Call of Pripyat used the camera
+	// position, and multiplayer leaves that entity NULL whenever the local player has no
+	// body -- a spectator, or the gap between death and respawn. Singleplayer always has
+	// one, so this block runs there precisely as before.
+	if (Level().CurrentEntity() && Level().CurrentControlEntity())
 	{
 		Fvector P = Level().CurrentControlEntity()->Position();
 		P.y -= 0.9f;
@@ -644,7 +650,13 @@ void CCustomZone::shedule_Update(u32 dt)
 		inherited::shedule_Update(dt);
 
 		// check "fast-mode" border
-		float act_distance = Level().CurrentControlEntity()->Position().distance_to(P) - s.R;
+		CObject* viewer = Level().CurrentControlEntity();
+		// Nobody to measure against means nobody is near: stay in slow mode.
+		float act_distance = viewer
+			                     ? viewer->Position().distance_to(P) - s.R
+			                     : FASTMODE_DISTANCE + 1.f;
+        if (IsGameTypeCoop() && OnServer() && ai().get_alife())
+            act_distance = ai().alife().activation_distance(P, ai_location().game_vertex_id()) - s.R;
 		if (act_distance > FASTMODE_DISTANCE && !m_zone_flags.test(eAlwaysFastmode))
 			o_switch_2_slow();
 		else
@@ -1520,6 +1532,9 @@ void CCustomZone::PlayAwakingParticles()
 void CCustomZone::UpdateOnOffState()
 {
 	if (!m_zone_flags.test(eUseOnOffTime)) return;
+    // Coop: the server owns zone timing; a client replica only applies GE_ZONE_STATE_CHANGE.
+    // Without this a client resends the switch every frame because its own state never changes.
+    if (IsGameTypeCoop() && OnClient()) return;
 
 	bool dest_state;
 	u32 t = (Device.dwTimeGlobal - m_StartTime + m_TimeShift) % (m_TimeToEnable + m_TimeToDisable);

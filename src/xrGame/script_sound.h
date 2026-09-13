@@ -17,6 +17,9 @@ class CScriptSound
 {
 	mutable ref_sound m_sound;
 	shared_str m_caSoundToPlay;
+	// Coop server: this sound's id and type for the clients' replay (game_sv_Coop::RelayScriptSound).
+	u32 m_coop_id;
+	u32 m_coop_type;
 
 	friend class CScriptSoundAction;
 public:
@@ -33,9 +36,9 @@ public:
 	void PlayNoFeedback(CScriptGameObject* object, u32 flags/*!< Looping */, float delay/*!< Delay */, Fvector pos,
 	                    float vol, float freq);
 	IC void AttachTail(LPCSTR caSoundName);
-	IC void Stop();
-	IC void StopDeffered();
-	IC void SetPosition(const Fvector& position);
+	void Stop();
+	void StopDeffered();
+	void SetPosition(const Fvector& position);
 	IC void SetFrequency(float frequency);
 	IC void SetVolume(float volume);
 	IC const CSound_params* GetParams();

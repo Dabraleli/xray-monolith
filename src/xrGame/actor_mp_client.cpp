@@ -5,6 +5,7 @@
 #include "../xrEngine/CameraManager.h"
 
 #include "game_cl_base.h"
+#include "Level.h"
 #include "ui/UIActorMenu.h"
 #include "ui/UIDragDropReferenceList.h"
 #include "uigamecustom.h"
@@ -39,7 +40,7 @@ void CActorMP::Die(CObject* killer)
 void CActorMP::cam_Set(EActorCameras style)
 {
 #ifndef	DEBUG
-	if (style != eacFirstEye)
+	if (style != eacFirstEye && !IsGameTypeCoop()) // coop as SP: the third-person cameras (the object factory gives coop the MP actor class)
 		return;
 #endif
 	CCameraBase* old_cam = cam_Active();

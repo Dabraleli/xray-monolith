@@ -58,7 +58,7 @@ BOOL CBulletManager::test_callback(const collide::ray_defs& rd, CObject* object,
 			CActor* actor = smart_cast<CActor*>(entity);
 			CAI_Stalker* stalker = smart_cast<CAI_Stalker*>(entity);
 			// в кого попали?
-			if (actor && IsGameTypeSingle()/**/ || stalker/**/)
+			if (actor && (IsGameTypeSingle() || IsGameTypeCoop())/**/ || stalker/**/) // coop as SP: the difficulty's hit probability and the bullet whine for players
 			{
 				// попали в актера или сталкера
 				Fsphere S = cform->getSphere();
@@ -278,7 +278,7 @@ void CBulletManager::DynamicObjectHit(CBulletManager::_event& E)
 	}
 
 	if (g_clear) E.Repeated = false;
-	if (GameID() == eGameIDSingle) E.Repeated = false;
+	if (GameID() == eGameIDSingle || IsGameTypeCoop()) E.Repeated = false; // coop as SP
 	bool NeedShootmark = true; //!E.Repeated;
 
 	if (smart_cast<CActor*>(E.R.O))

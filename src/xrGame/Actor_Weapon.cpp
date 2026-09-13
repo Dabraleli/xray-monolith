@@ -113,6 +113,17 @@ SPickParam& CActor::GetPick()
 
 void CActor::g_fireParams(const CHudItem* pHudItem, Fvector& fire_pos, Fvector& fire_dir)
 {
+    // A coop body driven elsewhere has no HUD pick here: shoot along its first-person
+    // camera, which g_sv_Orientate keeps aligned with the networked torso.
+    if (IsGameTypeCoop() && this != Level().CurrentControlEntity())
+    {
+        fire_pos = cameras[eacFirstEye]->Position();
+        fire_dir = cameras[eacFirstEye]->Direction();
+        if (strstr(Core.Params, "-coop_damage_probe"))
+            Msg("[COOP_FIRE] side=%s body=%u pos=%f,%f,%f dir=%f,%f,%f torso=%f,%f", OnServer() ? "server" : "client", ID(),
+                VPUSH(fire_pos), VPUSH(fire_dir), unaffected_r_torso.yaw, unaffected_r_torso.pitch);
+        return;
+    }
 	SPickParam& pp = GetPick();
 
 	attachable_hud_item* item_0 = g_player_hud->attached_item(0);

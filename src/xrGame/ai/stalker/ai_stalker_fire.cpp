@@ -23,6 +23,7 @@
 #include "../../memory_manager.h"
 #include "../../hit_memory_manager.h"
 #include "../../enemy_manager.h"
+#include "../../game_cl_coop.h"
 #include "../../item_manager.h"
 #include "../../stalker_movement_manager_smart_cover.h"
 #include "../../entitycondition.h"
@@ -175,6 +176,25 @@ void CAI_Stalker::g_fireParams(const CHudItem* pHudItem, Fvector& P, Fvector& D)
 			D = weapon_shot_effector_direction(D);
 
 		VERIFY(!fis_zero(D.square_magnitude()));
+		return;
+	}
+
+	// Coop replica: no AI here, its head/body aim state is default. The weapon bone follows
+	// the server's replicated torso and head layers, so the muzzle direction is the honest visual.
+	if (IsGameTypeCoop() && Remote())
+	{
+		P = weapon->get_LastFP();
+		D = weapon->get_LastFD();
+		// The server's ray of this shot, when it has arrived (game_sv_Coop::RelayNpcShot): the
+		// tracer then flies where the server's bullet flew - at the player it hit, not where the
+		// replica's barrel points a hundred milliseconds behind.
+		Fvector position, direction;
+		if (game_cl_Coop::TakeRelayedShot(weapon->ID(), position, direction))
+		{
+			P = position;
+			D = direction;
+		}
+		if (fis_zero(D.square_magnitude())) D.set(0.f, 0.f, 1.f);
 		return;
 	}
 

@@ -207,7 +207,7 @@ void CTorch::LoadLightParams()
 
 	xr_string light_definition = *m_light_section;
 
-	if (parent_id() == g_actor->ID())
+	if (g_actor && parent_id() == g_actor->ID())
 	{
 		light_definition += "_actor";
 

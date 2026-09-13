@@ -4,6 +4,8 @@
 ////////////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+static bool coop_no_scope_ui() { return strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_no_game_ui") && strstr(Core.Params, "-coop_server_no_ui_resources"); }
+
 #include "Weapon.h"
 #include "ParticlesObject.h"
 #include "entity_alive.h"
@@ -402,7 +404,7 @@ void CWeapon::UpdateUIScope()
 		scope_tex_name = m_secondary_scope_tex_name;
 	}
 
-	if (!g_dedicated_server)
+	if (!g_dedicated_server && !coop_no_scope_ui())
 	{
 		xr_delete(m_UIScope);
 		scope_2dtexactive = 0; //crookr
@@ -424,6 +426,7 @@ void CWeapon::SetUIScope(LPCSTR scope_texture)
 	scope_2dtexactive = 0; //crookr
 
 	m_scope_tex_name = scope_texture;
+    if (coop_no_scope_ui()) return;
 	m_UIScope = xr_new<CUIWindow>();
 	CUIXmlInit::InitWindow(*pWpnScopeXml, scope_texture, 0, m_UIScope);
 }
@@ -798,7 +801,7 @@ void CWeapon::Load(LPCSTR section)
 
 		if (!!scope_tex_name && !scope_tex_name.equal("none") && !g_player_hud->m_adjust_mode)
 		{
-			if (!g_dedicated_server)
+			if (!g_dedicated_server && !coop_no_scope_ui())
 			{
 				m_UIScope = xr_new<CUIWindow>();
 				if (!pWpnScopeXml)
@@ -1189,6 +1192,9 @@ void CWeapon::OnEvent(NET_Packet& P, u16 type)
 			else
 				m_set_next_ammoType_on_reload = NextAmmo;
 
+			if (strstr(Core.Params, "-coop_damage_probe"))
+				Msg("[COOP_WPN_STATE] side=%s weapon=%u owner=%u state=%u from=%u ammo=%u working=%u time=%u", OnServer() ? "server" : "client",
+				    ID(), H_Parent() ? H_Parent()->ID() : u16(-1), state, GetState(), AmmoElapsed, IsWorking() ? 1 : 0, Device.dwTimeGlobal);
 			if (OnClient()) SetAmmoElapsed(int(AmmoElapsed));
 			OnStateSwitch(u32(state), GetState());
 		}
@@ -1230,8 +1236,10 @@ void CWeapon::OnH_B_Independent(bool just_before_destroy)
 	m_zoom_params.m_bIsZoomModeNow = false;
 	UpdateXForm();
 
-	if (ParentIsActor())
-		Actor()->set_safemode(false);
+	// The parent actor, not Actor(): on a coop client that is the control entity — another player's
+	// actor, or none while the level goes down (the ownership rejects of remove_objects, 122).
+	if (CActor* parent_actor = ParentIsActor() ? smart_cast<CActor*>(H_Parent()) : NULL)
+		parent_actor->set_safemode(false);
 }
 
 void CWeapon::OnH_A_Independent()
@@ -1343,7 +1351,7 @@ void CWeapon::UpdateCL()
 	if (!IsGameTypeSingle())
 		make_Interpolation();
 
-	if ((GetNextState() == GetState()) && IsGameTypeSingle() && H_Parent() == Level().CurrentEntity())
+	if ((GetNextState() == GetState()) && (IsGameTypeSingle() || IsGameTypeCoop()) && H_Parent() == Level().CurrentEntity()) // coop as SP: the idle "bore" animation
 	{
 		CActor* pActor = smart_cast<CActor*>(H_Parent());
 		if (pActor && !pActor->AnyMove() && this == pActor->inventory().ActiveItem())
@@ -2168,6 +2176,9 @@ void CWeapon::SwitchState(u32 S)
 	SetNextState(S);
 	if (CHudItem::object().Local() && !CHudItem::object().getDestroy() && m_pInventory && OnServer())
 	{
+		if (strstr(Core.Params, "-coop_damage_probe") && smart_cast<CActor*>(H_Parent()))
+			Msg("[COOP_WPN_STATE] side=server weapon=%u owner=%u state=%u from=%u ammo=%d working=%u time=%u", ID(),
+			    H_Parent()->ID(), S, GetState(), iAmmoElapsed, IsWorking() ? 1 : 0, Device.dwTimeGlobal);
 		// !!! Just single entry for given state !!!
 		NET_Packet P;
 		CHudItem::object().u_EventGen(P, GE_WPN_STATE_CHANGE, CHudItem::object().ID());
@@ -2307,7 +2318,7 @@ int g_iWeaponRemove = 1;
 
 bool CWeapon::NeedToDestroyObject() const
 {
-	if (GameID() == eGameIDSingle) return false;
+	if (GameID() == eGameIDSingle || IsGameTypeCoop()) return false; // coop as SP: dropped weapons stay (MP removed them after a minute)
 	if (Remote()) return false;
 	if (H_Parent()) return false;
 	if (g_iWeaponRemove == -1) return false;
@@ -3031,7 +3042,10 @@ void CWeapon::render_item_ui()
 
 bool CWeapon::unlimited_ammo()
 {
-	if (IsGameTypeSingle())
+	// Coop as SP: the stalkers' infinite ammo (their trader flag, g_ai_unlimited_ammo) - without it
+	// the coop server's NPCs shot their one or two boxes off, lost every "weapon that can kill" and
+	// ran from fights unarmed (132); the player bodies keep the actor's own rule (AF_UNLIMITEDAMMO).
+	if (IsGameTypeSingle() || IsGameTypeCoop())
 	{
 		if (m_pInventory)
 		{
@@ -3193,7 +3207,7 @@ void CWeapon::OnStateSwitch(u32 S, u32 oldState)
 	}
 
 	if (ParentIsActor() && smart_cast<CActor*>(H_Parent())->inventory().ActiveItem() == this && GetState() != eIdle)
-		Actor()->set_safemode(false);
+		smart_cast<CActor*>(H_Parent())->set_safemode(false); // the parent actor (see OnH_B_Independent)
 }
 
 void CWeapon::OnAnimationEnd(u32 state)

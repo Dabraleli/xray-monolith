@@ -14,6 +14,7 @@
 #include "ui/UIActorMenu.h"
 
 #include "eatable_item.h"
+#include "actorcondition.h"
 #include "script_engine.h"
 #include "xrmessages.h"
 #include "xr_level_controller.h"
@@ -112,6 +113,7 @@ CInventory::~CInventory()
 
 void CInventory::Clear()
 {
+    m_network_active=false; m_network_active_id=u16(-1);
 	m_all.clear();
 	m_ruck.clear();
 	m_belt.clear();
@@ -228,6 +230,8 @@ void CInventory::Take(CGameObject* pObj, bool bNotActivate, bool strict_placemen
 			if (m_pOwner == CurrentGameUI()->GetActorMenu().GetPartner())
 				CurrentGameUI()->OnInventoryAction(pIItem, GE_OWNERSHIP_TAKE);
 		}
+		else if (CurrentGameUI()->GetActorMenu().CoopTradePartner(m_pOwner))
+			CurrentGameUI()->OnInventoryAction(pIItem, GE_OWNERSHIP_TAKE); // coop: a sold item reaches the NPC
 	};
 }
 
@@ -324,10 +328,16 @@ bool CInventory::DropItem(CGameObject* pObj, bool just_before_destroy, bool dont
 
 		if (Level().CurrentViewEntity() == pActor_owner)
 			CurrentGameUI()->OnInventoryAction(pIItem, GE_OWNERSHIP_REJECT);
+		else if (CurrentGameUI()->GetActorMenu().CoopTradePartner(m_pOwner))
+			CurrentGameUI()->OnInventoryAction(pIItem, GE_OWNERSHIP_REJECT); // coop: a bought item leaves the NPC
 	};
 	if (smart_cast<CWeapon*>(pObj))
 	{
-		Fvector dir = Actor()->Direction();
+		// Coop client: Actor() is NULL while the level goes down (level change, server restart) and
+		// a pending NPC ownership reject still arrives — the owner throws the weapon then.
+		CActor* actor = Actor();
+		CObject* owner_object = actor ? NULL : smart_cast<CObject*>(m_pOwner);
+		Fvector dir = actor ? actor->Direction() : (owner_object ? owner_object->Direction() : Fvector().set(0.f, 0.f, 1.f));
 		dir.y = sin(-45.f * PI / 180.f);
 		dir.normalize();
 		smart_cast<CWeapon*>(pObj)->SetActivationSpeedOverride(dir.mul(7));
@@ -562,6 +572,11 @@ void CInventory::Activate(u16 slot, bool bForce)
 	if (slot != NO_ACTIVE_SLOT)
 		tmp_item = ItemFromSlot(slot);
 
+	if (IsGameTypeCoop() && slot == PDA_SLOT && strstr(Core.Params, "-coop_damage_probe"))
+		Msg("[COOP_PDA_ACTIVATE] owner=%u item=%u blocked=%u active=%u next=%u can=%u force=%u", m_pOwner ? m_pOwner->object_id() : u16(-1),
+		    tmp_item ? tmp_item->object().ID() : u16(-1), tmp_item && IsSlotBlocked(tmp_item) ? 1 : 0, u32(GetActiveSlot()), u32(GetNextActiveSlot()),
+		    m_slots[slot].CanBeActivated() ? 1 : 0, bForce ? 1 : 0);
+
 	if (tmp_item && IsSlotBlocked(tmp_item) && (!bForce))
 	{
 		//to restore after unblocking ...
@@ -750,7 +765,7 @@ bool CInventory::Action(u16 cmd, u32 flags)
 	case kWPN_6:
 	{
 		b_send_event = true;
-		if (cmd == kWPN_6 && !IsGameTypeSingle()) return false;
+		if (cmd == kWPN_6 && !IsGameTypeSingle() && !IsGameTypeCoop()) return false;
 
 		u16 slot = u16(cmd - kWPN_1 + 1);
 		if (flags & CMD_START)
@@ -781,7 +796,8 @@ bool CInventory::Action(u16 cmd, u32 flags)
 		b_send_event = true;
 		if (flags & CMD_START)
 		{
-			if (!psActorFlags.test(AF_3D_PDA)) return false;
+			// The 3D-PDA preference is the client's; the coop server toggles the body's PDA on request.
+			if (!psActorFlags.test(AF_3D_PDA) && !(IsGameTypeCoop() && OnServer())) return false;
 
 			if (smart_cast<CPda*>(ActiveItem()))
 			{
@@ -812,6 +828,16 @@ void CInventory::ActiveWeapon(u16 slot)
 		return;
 	}
 	Activate(slot);
+}
+
+PIItem CInventory::ActiveItem() const
+{
+    if (!m_network_active) return m_iActiveSlot==NO_ACTIVE_SLOT ? NULL : ItemFromSlot(m_iActiveSlot);
+    if (m_network_active_id==u16(-1)) return NULL;
+    for (PIItem item : m_all)
+        if (item->object().ID()==m_network_active_id && item->object().H_Parent() &&
+            item->object().H_Parent()->ID()==m_pOwner->object_id()) return item;
+    return NULL; // A snapshot may arrive before its child spawn; retry next frame.
 }
 
 void CInventory::Update()
@@ -1137,9 +1163,9 @@ bool CInventory::Eat(PIItem pIItem)
 			Actor()->callback(GameObject::eUseObject)((smart_cast<CGameObject*>(pIItem))->lua_game_object());
 
 		if (pItemToEat->IsUsingCondition() && pItemToEat->GetRemainingUses() < 1 && pItemToEat->CanDelete())
-			CurrentGameUI()->GetActorMenu().RefreshCurrentItemCell();
+			if (CurrentGameUI()) CurrentGameUI()->GetActorMenu().RefreshCurrentItemCell();
 
-		CurrentGameUI()->GetActorMenu().SetCurrentItem(NULL);
+		if (CurrentGameUI()) CurrentGameUI()->GetActorMenu().SetCurrentItem(NULL);
 	}
 
 	if (pItemToEat->Empty())
@@ -1173,6 +1199,15 @@ bool CInventory::ClientEat(PIItem pIItem)
 	CGameObject::u_EventGen(P, GEG_PLAYER_ITEM_EAT, pIItem->parent_id());
 	P.w_u16(pIItem->object().ID());
 	CGameObject::u_EventSend(P);
+
+	// Coop client: the server eats for this body and never reports back, so the presentation side
+	// runs here on send: the use sound and the Lua use_object callback (item animation, thirst, ...).
+	CActor* actor = smart_cast<CActor*>(entity_alive);
+	if (IsGameTypeCoop() && actor && actor == Level().CurrentControlEntity())
+	{
+		actor->conditions().PlayUseSound(pIItem->object().cNameSect());
+		actor->callback(GameObject::eUseObject)((smart_cast<CGameObject*>(pIItem))->lua_game_object());
+	}
 	return true;
 }
 

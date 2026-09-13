@@ -1,5 +1,7 @@
 // exxZERO Time Stamp AddIn. Document modified at : Thursday, March 07, 2002 14:12:50 , by user : Oles , from computer : OLES
 #include "stdafx.h"
+
+static bool coop_no_ui_resources() { return (strstr(Core.Params, "-coop_server_probe") && strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_cpu_target") && strstr(Core.Params, "-coop_server_no_game_ui") && strstr(Core.Params, "-coop_server_no_ui_resources")); }
 #include "HitMarker.h"
 #include "../xrEngine/render.h"
 #include "../xrEngine/LightAnimLibrary.h"
@@ -20,11 +22,13 @@ CHitMarker::CHitMarker()
 
 void CHitMarker::InitShader(LPCSTR tex_name)
 {
+    if (coop_no_ui_resources()) { return; }
 	hShader2->create("hud\\default", tex_name);
 }
 
 void CHitMarker::InitShader_Grenade(LPCSTR tex_name)
 {
+    if (coop_no_ui_resources()) { return; }
 	hShader_Grenade->create("hud\\default", tex_name); // "hud\\default2"
 }
 
@@ -48,6 +52,7 @@ CHitMarker::~CHitMarker()
 
 void CHitMarker::Render()
 {
+    if (coop_no_ui_resources()) { return; }
 	float h1, p1;
 	Device.vCameraDirection.getHP(h1, p1);
 
@@ -82,6 +87,7 @@ void CHitMarker::Render()
 
 void CHitMarker::Hit(const Fvector& dir)
 {
+    if (coop_no_ui_resources()) { return; }
 	Fvector hit_dir = dir;
 	hit_dir.mul(-1.0f);
 	m_HitMarks.push_back(xr_new<SHitMark>(hShader2, hit_dir));
@@ -89,6 +95,7 @@ void CHitMarker::Hit(const Fvector& dir)
 
 bool CHitMarker::AddGrenade_ForMark(CGrenade* grn)
 {
+    if (coop_no_ui_resources()) return false;
 	if (!grn) return false;
 	u16 new_id = grn->ID();
 

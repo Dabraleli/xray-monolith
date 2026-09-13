@@ -8,6 +8,7 @@
 
 #include "StdAfx.h"
 bool IsGameTypeSingle();
+#include "../Level.h"
 #include "UIMessagesWindow.h"
 #include "UIGameLog.h"
 #include "UIChatWnd.h"
@@ -69,7 +70,7 @@ void CUIMessagesWindow::Init(float x, float y, float width, float height)
 	m_pGameLog->SetAutoDelete(true);
 	m_pGameLog->Show(true);
 	AttachChild(m_pGameLog);
-	if (IsGameTypeSingle())
+	if (IsGameTypeSingle() || IsGameTypeCoop()) // coop as SP: the SP game log layout
 	{
 		CUIXmlInit::InitScrollView(xml, "sp_log_list", 0, m_pGameLog);
 	}

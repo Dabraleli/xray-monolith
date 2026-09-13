@@ -11,6 +11,7 @@
 #include "xrServer_Objects_ALife.h"
 #include "xrServer_Objects_ALife_Items.h"
 #include "character_info_defs.h"
+#include "../Include/xrRender/animation_motion.h"
 #include "associative_vector.h"
 #include "alife_movement_manager_holder.h"
 
@@ -118,6 +119,13 @@ SERVER_ENTITY_DECLARE_BEGIN2(CSE_ALifeTrader, CSE_ALifeDynamicObjectVisual, CSE_
 	virtual CSE_Abstract* cast_abstract() { return this; };
 	virtual CSE_ALifeTraderAbstract* cast_trader_abstract() { return this; };
 	virtual CSE_ALifeTrader* cast_trader() { return this; };
+	// Coop: the trader's animations are set by the server Lua only (CTraderAnimation); the
+	// update carries them to the clients. Serials let a re-play of the same name apply again.
+	u16 coop_anim_serial;
+	u16 coop_head_serial;
+	shared_str coop_anim_global;
+	shared_str coop_anim_head;
+	virtual BOOL Net_Relevant();
 SERVER_ENTITY_DECLARE_END
 
 SERVER_ENTITY_DECLARE_BEGIN(CSE_ALifeCustomZone, CSE_ALifeSpaceRestrictor)
@@ -431,6 +439,7 @@ SERVER_ENTITY_DECLARE_BEGIN(CSE_ALifeMonsterZombie, CSE_ALifeMonsterAbstract)
 SERVER_ENTITY_DECLARE_END
 
 SERVER_ENTITY_DECLARE_BEGIN2(CSE_ALifeMonsterBase, CSE_ALifeMonsterAbstract, CSE_PHSkeleton)
+    CoopStalkerLayers coop_layers;
 	u16 m_spec_object_id;
 
 	CSE_ALifeMonsterBase(LPCSTR caSection); // constructor for variable initialization
@@ -508,6 +517,7 @@ SERVER_ENTITY_DECLARE_END
 
 SERVER_ENTITY_DECLARE_BEGIN2(CSE_ALifeHumanStalker, CSE_ALifeHumanAbstract, CSE_PHSkeleton)
 	shared_str m_start_dialog;
+    CoopStalkerLayers coop_layers;
 
 	CSE_ALifeHumanStalker(LPCSTR caSection);
 	virtual ~CSE_ALifeHumanStalker();

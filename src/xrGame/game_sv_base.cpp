@@ -372,6 +372,73 @@ void game_sv_GameState::OnPlayerDisconnect(ClientID id_who, LPSTR, u16)
 
 static float rpoints_Dist [TEAM_COUNT] = {1000.f, 1000.f, 1000.f, 1000.f};
 
+// Anomaly ships singleplayer content only, and every level.game in it carries an
+// empty RPOINT chunk -- so a multiplayer game type finds nowhere to put players
+// and aborts in game_sv_Deathmatch::Create. Until spawn points are authored per
+// level, seed them from this table. The coordinates are vertices of the level's
+// own AI map (level.ai), so they are walkable by construction.
+struct fallback_rpoint
+{
+	Fvector position;
+	float heading;
+};
+
+struct fallback_level
+{
+	LPCSTR name;
+	const fallback_rpoint* points;
+	u32 count;
+};
+
+static const fallback_rpoint fallback_rpoints_k00_marsh[] =
+{
+	{{-175.700f, 1.819f, -280.000f}, 0.f},
+	{{-179.200f, 1.819f, -277.900f}, 0.f},
+	{{-175.700f, 1.819f, -284.200f}, 0.f},
+	{{-173.600f, 1.819f, -276.500f}, 0.f},
+	{{-172.200f, 1.819f, -282.100f}, 0.f},
+	{{-180.600f, 1.819f, -282.100f}, 0.f},
+	{{-177.100f, 1.833f, -274.400f}, 0.f},
+	{{-170.100f, 1.796f, -278.600f}, 0.f},
+};
+
+#define FALLBACK_LEVEL(level) 	{#level, fallback_rpoints_##level, sizeof(fallback_rpoints_##level) / sizeof(fallback_rpoints_##level[0])}
+
+static const fallback_level fallback_levels[] =
+{
+	FALLBACK_LEVEL(k00_marsh),
+};
+
+static void seed_fallback_rpoints(game_sv_GameState* game, shared_str& options)
+{
+	shared_str const level = game_sv_GameState::parse_level_name(options);
+
+	for (u32 l = 0; l < sizeof(fallback_levels) / sizeof(fallback_levels[0]); ++l)
+	{
+		const fallback_level& fl = fallback_levels[l];
+		if (xr_strcmp(*level, fl.name))
+			continue;
+
+		for (int team = 0; team < TEAM_COUNT; ++team)
+		{
+			for (u32 i = 0; i < fl.count; ++i)
+			{
+				RPoint R;
+				R.P = fl.points[i].position;
+				R.A.set(0.f, fl.points[i].heading, 0.f);
+				game->rpoints[team].push_back(R);
+			}
+			game->rpoints_MinDist[team] = 2.f;
+			rpoints_Dist[team] = 2.f;
+		}
+
+		Msg("* level [%s] carries no rpoints, seeded %d built-in spawn points per team", fl.name, fl.count);
+		return;
+	}
+
+	Msg("! level [%s] has neither rpoints nor built-in spawn points, multiplayer cannot start on it", *level);
+}
+
 void game_sv_GameState::Create(shared_str& options)
 {
 	string_path fn_game;
@@ -447,6 +514,10 @@ void game_sv_GameState::Create(shared_str& options)
 
 		FS.r_close(F);
 	}
+
+	// singleplayer content has no spawn points for the multiplayer game types
+	if (rpoints[0].empty() && Type() != eGameIDSingle && Type() != eGameIDCoop)
+		seed_fallback_rpoints(this, options);
 
 	if (!g_dedicated_server)
 	{

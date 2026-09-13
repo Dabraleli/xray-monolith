@@ -89,6 +89,8 @@ public:
 
 	CBlend* current_blend() { return m_data.global.blend; }
 
+    void export_network_layers(CoopStalkerLayers& state);
+    void apply_network_layers(const CoopStalkerLayers& state);
 	void restart();
 
 	void freeze();

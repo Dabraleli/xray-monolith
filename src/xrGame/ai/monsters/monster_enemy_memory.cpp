@@ -11,6 +11,9 @@
 #include "ai_monster_squad_manager.h"
 #include "../../Actor.h"
 #include "../../actor_memory.h"
+#include "../../level.h"
+#include "../../xrServer.h"
+#include "xrServer_Objects.h"
 
 CMonsterEnemyMemory::CMonsterEnemyMemory()
 {
@@ -104,8 +107,53 @@ void CMonsterEnemyMemory::update()
 			add_enemy(*I);
 	}
 
+    if (strstr(Core.Params,"-coop_damage_probe")) {
+        // Diagnostic only: every monster reports why it does or does not see nearby players.
+        static xr_map<u16,u32> reports; u32& last=reports[monster->ID()];
+        if (Device.dwTimeGlobal-last>=1000) {
+            last=Device.dwTimeGlobal;
+            for (u32 n=0;n<Level().Objects.o_count();++n) {
+                CActor* actor=smart_cast<CActor*>(Level().Objects.o_get_by_iterator(n));
+                if (!actor || actor->ID()==0 || monster->Position().distance_to(actor->Position())>=15.f) continue;
+                float pending=0.f;
+                for (const auto& item : monster->memory().visual().not_yet_visible_objects())
+                    if (item.m_object==actor) pending=item.m_value;
+                Msg("[COOP_ENEMY] monster=%u section=%s actor=%u monster_team=%u actor_team=%u relation=%u useful=%u visible=%u see_now=%u lum=%f pending=%f threshold=%f melee_dist=%f melee_min=%f distance=%f enemy=%u",
+                    monster->ID(),*monster->cNameSect(),actor->ID(),monster->g_Team(),actor->g_Team(),u32(monster->tfGetRelationType(actor)),
+                    monster->memory().enemy().is_useful(actor),monster->memory().visual().visible_now(actor),monster->memory().visual().visible_right_now(actor),
+                    monster->memory().visual().object_luminocity(actor),pending,monster->memory().visual().current_state().m_visibility_threshold,
+                    monster->MeleeChecker.distance_to_enemy(actor),monster->MeleeChecker.get_min_distance(),
+                    monster->Position().distance_to(actor->Position()),monster->EnemyMan.get_enemy()?monster->EnemyMan.get_enemy()->ID():u16(-1));
+            }
+        }
+    }
 	float const feel_enemy_max_distance = monster->get_feel_enemy_max_distance();
-	if (g_actor)
+    if (IsGameTypeCoop() && OnServer() && Level().Server)
+    {
+        xr_vector<u16> players;
+        auto collect = [&](IClient* connection) {
+            if (connection==Level().Server->GetServerClient() || !connection->flags.bConnected) return;
+            xrClientData* client=static_cast<xrClientData*>(connection);
+            if (client->owner) players.push_back(client->owner->ID);
+        };
+        Level().Server->ForEachClientDo(collect);
+        for (u16 id : players) {
+            CActor* actor=smart_cast<CActor*>(Level().Objects.net_Find(id));
+            if (!actor || !actor->g_Alive() || !monster->memory().enemy().is_useful(actor)) continue;
+            if (monster->Position().distance_to_xz(actor->Position())>=feel_enemy_max_distance ||
+                _abs(monster->Position().y-actor->Position().y)>=10.f) continue;
+            Fvector from,to,direction;
+            monster->Center(from); actor->Center(to); direction.sub(to,from);
+            const float distance=direction.magnitude();
+            if (distance>EPS) {
+                direction.div(distance);
+                collide::rq_result result;
+                if (Level().ObjectSpace.RayPick(from,direction,distance,collide::rqtBoth,result,monster) && result.O!=actor) continue;
+            }
+            add_enemy(actor);
+        }
+    }
+    else if (g_actor)
 	{
 		float const xz_dist = monster->Position().distance_to_xz(g_actor->Position());
 		float const y_dist = _abs(monster->Position().y - g_actor->Position().y);

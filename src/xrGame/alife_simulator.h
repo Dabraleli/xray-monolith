@@ -28,6 +28,8 @@ public:
 	virtual ~CALifeSimulator();
 	virtual void destroy();
 	IReader const* get_config(shared_str config) const;
+    bool uses_player_anchors() const;
+    float activation_distance(const Fvector& position, u32 game_vertex_id) const;
 
 #if 0//def DEBUG
 			void	validate			();

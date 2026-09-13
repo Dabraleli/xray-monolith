@@ -323,6 +323,7 @@ protected:
 	void UpdatePrices();
 	bool CanMoveToPartner(PIItem pItem);
 	void TransferItems(CUIDragDropListEx* pSellList, CUIDragDropListEx* pBuyList, CTrade* pTrade, bool bBuying);
+	void CoopSendDeal(CUIDragDropListEx* pDealList, bool bBuying);
 
 public:
 	CUIActorMenu();
@@ -345,6 +346,10 @@ public:
 	void xr_stdcall OnMesBoxNo(CUIWindow*, void*);
 
 	void OnInventoryAction(PIItem pItem, u16 action_type);
+	void CoopPricesChanged() { if (m_currMenuMode == mmTrade) UpdatePrices(); } // coop client: new server prices
+	void CoopMoneyChanged(); // coop client: the body's money arrived from the server
+	// Coop client, trade mode: the partner's items are placed by the server's trade events too.
+	bool CoopTradePartner(const CInventoryOwner* owner) const;
 	void ShowRepairButton(bool status);
 	bool SetInfoCurUpgrade(Upgrade_type* upgrade_type, CInventoryItem* inv_item);
 	void SeparateUpgradeItem();

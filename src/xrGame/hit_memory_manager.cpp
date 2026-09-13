@@ -8,6 +8,7 @@
 
 #include "pch_script.h"
 #include "hit_memory_manager.h"
+#include "game_sv_coop.h"
 #include "memory_space_impl.h"
 #include "custommonster.h"
 #include "ai_object_location.h"
@@ -112,13 +113,18 @@ void CHitMemoryManager::add(float amount, const Fvector& vLocalDir, const CObjec
 		m_last_hit_time = Device.dwTimeGlobal;
 	}
 
-	object().callback(GameObject::eHit)(
-		m_object->lua_game_object(),
-		amount,
-		vLocalDir,
-		smart_cast<const CGameObject*>(who)->lua_game_object(),
-		element
-	);
+	{
+		// Coop server: a hit by a player body is a hit by "the actor" for the NPC's Lua (schemes
+		// compare who:id() with db.actor:id()).
+		CoopLuaActor coop_actor(game_sv_Coop::BodyOf(who), false);
+		object().callback(GameObject::eHit)(
+			m_object->lua_game_object(),
+			amount,
+			vLocalDir,
+			smart_cast<const CGameObject*>(who)->lua_game_object(),
+			element
+		);
+	}
 
 	Fvector direction;
 	m_object->XFORM().transform_dir(direction, vLocalDir);

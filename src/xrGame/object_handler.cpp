@@ -33,6 +33,7 @@ CObjectHandler::CObjectHandler()
 {
 	m_planner = xr_new<CObjectHandlerPlanner>();
 	m_inventory_actual = false;
+	m_coop_weapon_strapped = false;
 	//	m_last_enemy_for_best_weapon= 0;
 }
 
@@ -167,7 +168,12 @@ bool CObjectHandler::goal_reached()
 void CObjectHandler::weapon_bones(int& b0, int& b1, int& b2) const
 {
 	CWeapon* weapon = smart_cast<CWeapon*>(inventory().ActiveItem());
-	if (!weapon || !planner().m_storage.property(ObjectHandlerSpace::eWorldPropertyStrapped))
+	// Coop client replica: the strap state is replicated (m_coop_weapon_strapped), the planner is idle.
+	const bool replica = IsGameTypeCoop() && planner().m_object && planner().m_object->Remote();
+	const bool strapped = replica
+		? (m_coop_weapon_strapped && weapon && weapon->can_be_strapped())
+		: planner().m_storage.property(ObjectHandlerSpace::eWorldPropertyStrapped);
+	if (!weapon || !strapped)
 	{
 		if (weapon)
 			weapon->strapped_mode(false);

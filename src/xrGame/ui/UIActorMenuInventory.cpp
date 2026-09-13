@@ -35,6 +35,7 @@
 #include "../PDA.h"
 #include "../ActorBackpack.h"
 #include "../actor_defs.h"
+#include "../game_cl_coop.h"
 
  //Alundaio
 
@@ -239,12 +240,18 @@ bool RemoveItemFromList(CUIDragDropListEx* lst, PIItem pItem)
 
 void CUIActorMenu::OnInventoryAction(PIItem pItem, u16 action_type)
 {
+	// Coop: the trade partner's lists too — the server's trade events move the items between the
+	// body and the NPC (no TransferItems on the client), so a bought item leaves the partner's lists
+	// and a sold one arrives in its bag here.
+	const bool coop_trade = IsGameTypeCoop() && m_currMenuMode == mmTrade;
 	CUIDragDropListEx* all_lists[] =
 	{
 		m_pInventoryBeltList,
 		m_pInventoryBagList,
 		m_pTradeActorBagList,
 		m_pTradeActorList,
+		coop_trade ? m_pTradePartnerBagList : NULL,
+		coop_trade ? m_pTradePartnerList : NULL,
 		NULL
 	};
 
@@ -267,7 +274,9 @@ void CUIActorMenu::OnInventoryAction(PIItem pItem, u16 action_type)
 				Msg("item place [%d]", pl);
 #endif // #ifndef MASTER_GOLD
 
-			if (pl.type == eItemPlaceSlot)
+			if (coop_trade && m_pPartnerInvOwner && pItem->parent_id() == m_pPartnerInvOwner->object_id())
+				lst_to_add = m_pTradePartnerBagList; // whatever place the NPC's replica gave it
+			else if (pl.type == eItemPlaceSlot)
 				lst_to_add = GetSlotList(pl.slot_id);
 			else if (pl.type == eItemPlaceBelt)
 				lst_to_add = GetListByType(iActorBelt);
@@ -1030,6 +1039,25 @@ bool CUIActorMenu::TryUseItem(CUICellItem* cell_itm)
 	cell_itm->UpdateConditionProgressBar(); //Alundaio
 
 	u16 recipient = m_pActorInvOwner->object_id();
+
+	// Coop client, own item: run the per-player Lua rule here (booster stacking, required tools,
+	// its refusal message), exactly like the quick-use keys do; the server does not re-check it for
+	// bodies. ClientEat then sends the request and plays the presentation side.
+	if (IsGameTypeCoop() && OnClient() && item->parent_id() == recipient)
+	{
+		::luabind::functor<bool> funct;
+		if (ai().script_engine().functor("_G.CInventory__eat", funct))
+		{
+			CGameObject* GO = item->cast_game_object();
+			if (!GO || !funct(GO->lua_game_object()))
+				return false;
+		}
+		if (!m_pActorInvOwner->inventory().ClientEat(item))
+			return false;
+		PlaySnd(eItemUse);
+		return true;
+	}
+
 	if (item->parent_id() != recipient)
 	{
 		//move_item_from_to	(itm->parent_id(), recipient, itm->object_id());
@@ -1265,7 +1293,7 @@ void CUIActorMenu::PropertiesBoxForWeapon(CUICellItem* cell_item, PIItem item, b
 		{
 		}
 	}
-	if (smart_cast<CWeaponMagazined*>(pWeapon) && IsGameTypeSingle())
+	if (smart_cast<CWeaponMagazined*>(pWeapon) && (IsGameTypeSingle() || IsGameTypeCoop())) // coop: the server unloads (item verb)
 	{
 		bool b = (pWeapon->GetAmmoElapsed() != 0);
 		if (!b)
@@ -1888,14 +1916,19 @@ void CUIActorMenu::ProcessPropertiesBoxClicked(CUIWindow* w, void* d)
 			{
 				break;
 			}
-			weap_mag->UnloadMagazine();
+			// Coop client: the server unloads its weapon and spawns the ammo; the replica follows
+			// (GE_COOP_ITEM_STATE, the ammo spawns).
+			const bool coop_client = IsGameTypeCoop() && OnClient();
+			if (coop_client) game_cl_Coop::ItemVerb("item|unload|%u|1", weap_mag->object_id());
+			else weap_mag->UnloadMagazine();
 			for (u32 i = 0; i < cell_item->ChildsCount(); ++i)
 			{
 				CUICellItem* child_itm = cell_item->Child(i);
 				CWeaponMagazined* child_weap_mag = smart_cast<CWeaponMagazined*>((CWeapon*)child_itm->m_pData);
 				if (child_weap_mag)
 				{
-					child_weap_mag->UnloadMagazine();
+					if (coop_client) game_cl_Coop::ItemVerb("item|unload|%u|1", child_weap_mag->object_id());
+					else child_weap_mag->UnloadMagazine();
 				}
 			}
 			break;

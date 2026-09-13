@@ -216,6 +216,16 @@ void CActorCondition::UpdateCondition()
 		UpdateBoosters();
 	}
 
+    if (strstr(Core.Params,"-coop_damage_probe")) {
+        static xr_map<u16,u32> reports; u32& last=reports[object().ID()];
+        if (Device.dwTimeGlobal-last>=1000) {
+            last=Device.dwTimeGlobal;
+            Msg("[COOP_CONDITION] side=%s id=%u local=%u health=%f bleed=%f dt=%f bleed_v=%f restore=%f can_harm=%u",OnServer()?"server":"client",object().ID(),object().Local(),GetHealth(),BleedingSpeed(),m_fDeltaTime,change_v().m_fV_Bleeding,change_v().m_fV_HealthRestore,CanBeHarmed());
+            CWeapon* weapon = smart_cast<CWeapon*>(object().inventory().ActiveItem());
+            Msg("[COOP_WEAPON] side=%s id=%u slot=%u item=%s weapon=%u ammo=%d state=%u items=%u",OnServer()?"server":"client",object().ID(),object().inventory().GetActiveSlot(),
+                object().inventory().ActiveItem()?object().inventory().ActiveItem()->object().cNameSect().c_str():"none",weapon?weapon->ID():0,weapon?weapon->GetAmmoElapsed():-1,weapon?weapon->GetState():0,u32(object().inventory().m_all.size()));
+        }
+    }
 	if (GodMode()) return;
 	if (!object().g_Alive()) return;
 	if (!object().Local() && m_object != Level().CurrentViewEntity()) return;
@@ -235,7 +245,7 @@ void CActorCondition::UpdateCondition()
 			ConditionStand(cur_weight / base_weight);
 		}
 
-		if (IsGameTypeSingle())
+		if (IsGameTypeSingle() || IsGameTypeCoop()) // coop as SP: the carried weight wears the max power down
 		{
 			float k_max_power = k_max_power = 1.0f + _min(cur_weight, base_weight) / base_weight
 					+ _max(0.0f, (cur_weight - base_weight) / 10.0f);
@@ -323,14 +333,19 @@ void CActorCondition::UpdateCondition()
 
 void CActorCondition::UpdateBoosters()
 {
-	for (u8 i = 0; i < eBoostMaxCount; i++)
+	// Coop client: the list is a mirror of the server body (SetRemoteBoosters); the server expires it.
+	const bool remote = IsGameTypeCoop() && OnClient();
+	for (u8 i = 0; i < eBoostMaxCount && !remote; i++)
 	{
 		BOOSTER_MAP::iterator it = m_booster_influences.find((EBoostParams)i);
 		if (it != m_booster_influences.end())
 		{
-			it->second.fBoostTime -= m_fDeltaTime / (IsGameTypeSingle() ? Level().GetGameTimeFactor() : 1.0f);
+			// The delta is in game seconds in SP and coop (UpdateConditionTime); boost_time is real seconds.
+			it->second.fBoostTime -= m_fDeltaTime / ((IsGameTypeSingle() || IsGameTypeCoop()) ? Level().GetGameTimeFactor() : 1.0f);
 			if (it->second.fBoostTime <= 0.0f)
 			{
+				if (IsGameTypeCoop() && strstr(Core.Params, "-coop_damage_probe"))
+					Msg("[COOP_BOOSTER] expire side=%s id=%u type=%u time=%u", OnServer() ? "server" : "client", object().ID(), u32(i), Device.dwTimeGlobal);
 				DisableBoostParameters(it->second);
 				m_booster_influences.erase(it);
 			}
@@ -338,7 +353,47 @@ void CActorCondition::UpdateBoosters()
 	}
 
 	if (m_object == Level().CurrentViewEntity())
-		CurrentGameUI()->UIMainIngameWnd->UpdateBoosterIndicators(m_booster_influences);
+		if (CurrentGameUI()) CurrentGameUI()->UIMainIngameWnd->UpdateBoosterIndicators(m_booster_influences);
+}
+
+void CActorCondition::SetRemoteBoosters(const BOOSTER_MAP& boosters)
+{
+	for (BOOSTER_MAP::iterator it = m_booster_influences.begin(); it != m_booster_influences.end();)
+	{
+		if (boosters.find(it->first) == boosters.end())
+		{
+			DisableBoostParameters(it->second);
+			it = m_booster_influences.erase(it);
+		}
+		else
+			++it;
+	}
+	for (BOOSTER_MAP::const_iterator it = boosters.begin(); it != boosters.end(); ++it)
+	{
+		BOOSTER_MAP::iterator cur = m_booster_influences.find(it->first);
+		if (cur != m_booster_influences.end())
+		{
+			if (fsimilar(cur->second.fBoostValue, it->second.fBoostValue))
+			{
+				cur->second.fBoostTime = it->second.fBoostTime;
+				continue;
+			}
+			DisableBoostParameters(cur->second);
+		}
+		m_booster_influences[it->first] = it->second;
+		BoostParameters(it->second);
+	}
+}
+
+void CActorCondition::PlayUseSound(const shared_str& sect)
+{
+	if (!pSettings->line_exist(sect, "use_sound"))
+		return;
+	if (m_use_sound._feedback())
+		m_use_sound.stop();
+	shared_str snd_name = pSettings->r_string(sect, "use_sound");
+	m_use_sound.create(snd_name.c_str(), st_Effect, sg_SourceType);
+	m_use_sound.play(NULL, sm_2D);
 }
 
 float CActorCondition::GetBoosterValue(LPCSTR name, bool type)
@@ -482,7 +537,7 @@ void CActorCondition::UpdateSatiety()
 {
 	float v_satiety_power = IsSleeping() ? m_fV_SatietyPowerSleep : m_fV_SatietyPower;
 	
-	if (!IsGameTypeSingle())
+	if (!IsGameTypeSingle() && !IsGameTypeCoop()) // coop as SP: hunger runs (the server's value reaches the client, GE_COOP_CONDITION)
 	{
 		m_fDeltaPower += v_satiety_power * m_fDeltaTime;
 		return;
@@ -513,6 +568,9 @@ void CActorCondition::UpdateSatiety()
 CWound* CActorCondition::ConditionHit(SHit* pHDS)
 {
 	if (GodMode()) return NULL;
+	// Coop client: health and wounds are decided on the server and arrive with the actor
+	// update; inventing a local wound here only made the HUD disagree with the server.
+	if (IsGameTypeCoop() && OnClient()) return NULL;
 	return inherited::ConditionHit(pHDS);
 }
 
@@ -569,7 +627,7 @@ bool CActorCondition::IsCantWalk() const
 
 bool CActorCondition::IsCantWalkWeight()
 {
-	if (IsGameTypeSingle() && !GodMode())
+	if ((IsGameTypeSingle() || IsGameTypeCoop()) && !GodMode()) // coop as SP: overweight stops walking
 	{
 		float max_w = m_object->MaxWalkWeight();
 
@@ -1032,17 +1090,7 @@ bool CActorCondition::ApplyBooster(const SBooster& B, const shared_str& sect)
 	if (B.fBoostValue > 0.0f)
 	{
 		if (m_object->Local() && m_object == Level().CurrentViewEntity())
-		{
-			if (pSettings->line_exist(sect, "use_sound"))
-			{
-				if (m_use_sound._feedback())
-					m_use_sound.stop();
-
-				shared_str snd_name = pSettings->r_string(sect, "use_sound");
-				m_use_sound.create(snd_name.c_str(), st_Effect, sg_SourceType);
-				m_use_sound.play(NULL, sm_2D);
-			}
-		}
+			PlayUseSound(sect);
 
 		BOOSTER_MAP::iterator it = m_booster_influences.find(B.m_type);
 		if (it != m_booster_influences.end())
@@ -1056,6 +1104,9 @@ bool CActorCondition::ApplyBooster(const SBooster& B, const shared_str& sect)
 
 		m_booster_influences[B.m_type] = B;
 		BoostParameters(B);
+		if (IsGameTypeCoop() && strstr(Core.Params, "-coop_damage_probe"))
+			Msg("[COOP_BOOSTER] apply side=%s id=%u type=%u value=%f boost_time=%f factor=%f time=%u", OnServer() ? "server" : "client",
+				object().ID(), u32(B.m_type), B.fBoostValue, B.fBoostTime, Level().GetGameTimeFactor(), Device.dwTimeGlobal);
 	}
 	return true;
 }

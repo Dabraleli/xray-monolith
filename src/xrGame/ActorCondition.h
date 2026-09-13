@@ -74,6 +74,10 @@ public:
 	void BoostTelepaticProtection(const float value);
 	void BoostChemicalBurnProtection(const float value);
 	BOOSTER_MAP GetCurBoosterInfluences() { return m_booster_influences; };
+	// Coop client: mirror the server body's boosters (GE_COOP_CONDITION); the client never eats itself.
+	void SetRemoteBoosters(const BOOSTER_MAP& boosters);
+	// The item's use_sound, normally played from ApplyBooster on the eating side.
+	void PlayUseSound(const shared_str& sect);
 
 	// хромание при потере сил и здоровья
 	virtual bool IsLimping() const;

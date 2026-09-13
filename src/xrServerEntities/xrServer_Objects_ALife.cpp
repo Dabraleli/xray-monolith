@@ -1083,6 +1083,27 @@ static inline bool check(const u8& mask, const u8& test)
 	return (!!(mask & test));
 }
 
+// Coop physic updates carry the other shell elements after the freeze byte (see
+// CPhysicObject::net_Export): one record per element = position (3 floats), quaternion
+// (4 floats), enabled (u8). Only the coop server and coop clients write and read it, so
+// single-player packets and saves keep their original layout.
+const u32 CSE_ALifeObjectPhysic::coop_element_record = 3 * sizeof(float) + 4 * sizeof(float) + sizeof(u8);
+
+bool coop_net_runtime()
+{
+#ifdef XRGAME_EXPORTS
+	static const bool runtime = !!strstr(Core.Params, "-coop_server_probe") || !!strstr(Core.Params, "-coop_client");
+	return runtime;
+#else
+	return false;
+#endif
+}
+
+bool CSE_ALifeObjectPhysic::coop_physic_runtime()
+{
+	return coop_net_runtime();
+}
+
 const u32 CSE_ALifeObjectPhysic::m_freeze_delta_time = 5000;
 const u32 CSE_ALifeObjectPhysic::random_limit = 40;
 
@@ -1191,7 +1212,8 @@ void CSE_ALifeObjectPhysic::UPDATE_Read(NET_Packet& tNetPacket)
 		}*/
 	}
 	prev_freezed = freezed;
-	if (tNetPacket.r_eof()) // in case spawn + update 
+	coop_elements.clear();
+	if (tNetPacket.r_eof()) // in case spawn + update
 	{
 		freezed = false;
 		return;
@@ -1209,6 +1231,14 @@ void CSE_ALifeObjectPhysic::UPDATE_Read(NET_Packet& tNetPacket)
 			m_freeze_time	= 0;
 #endif
 		freezed = true;
+	}
+	// Coop tail (other shell elements): u8 count + count records, kept verbatim for UPDATE_Write.
+	if (coop_physic_runtime() && !tNetPacket.r_eof())
+	{
+		const u8 count = tNetPacket.r_u8();
+		coop_elements.resize(1 + u32(count) * coop_element_record);
+		coop_elements[0] = count;
+		if (count) tNetPacket.r(&coop_elements[1], u32(count) * coop_element_record);
 	}
 }
 
@@ -1271,6 +1301,11 @@ void CSE_ALifeObjectPhysic::UPDATE_Write(NET_Packet& tNetPacket)
 	}
 	//.	Msg("--- Sync PH [%d].", ID);
 	tNetPacket.w_u8(1); //not freezed - doesn't mean anything..
+	if (coop_physic_runtime())
+	{
+		if (coop_elements.empty()) tNetPacket.w_u8(0);
+		else tNetPacket.w(&coop_elements[0], u32(coop_elements.size()));
+	}
 
 #ifdef XRGAME_EXPORTS
 #ifdef DEBUG

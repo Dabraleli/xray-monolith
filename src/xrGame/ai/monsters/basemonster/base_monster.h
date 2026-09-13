@@ -226,6 +226,7 @@ public:
 
 	// Team	
 	virtual void ChangeTeam(int team, int squad, int group);
+    void import_network_team(int team, int squad, int group);
 
 	// ---------------------------------------------------------------------------------
 	// Abilities

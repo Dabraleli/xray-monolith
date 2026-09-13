@@ -203,7 +203,7 @@ bool CTeleWhirlwindObject::destroy_object(const Fvector dir, float val)
 		if (m_pTelekinesis->GetSpawnSkeleton())
 		{
 			D->Destroy(m_pTelekinesis->GetOwnerID());
-			if (IsGameTypeSingle())
+			if (IsGameTypeSingle() || IsGameTypeCoop()) // coop as SP
 			{
 				for (auto& object : D->m_destroyed_obj_visual_names)
 				{
@@ -567,7 +567,7 @@ bool CTeleTrampolinObject::destroy_object(const Fvector dir, float val)
 		D->PhysicallyRemoveSelf();
 		D->Destroy(m_pTelekinesis->GetOwnerID());
 
-		if (IsGameTypeSingle())
+		if (IsGameTypeSingle() || IsGameTypeCoop()) // coop as SP
 		{
 			for (auto& object : D->m_destroyed_obj_visual_names)
 			{

@@ -11,6 +11,8 @@
 #include "xr_level_controller.h"
 #include "FoodItem.h"
 #include "ActorCondition.h"
+#include "UIGameCustom.h"
+#include "ui/UIActorMenu.h"
 #include "Grenade.h"
 
 #include "CameraLook.h"
@@ -23,6 +25,8 @@
 #endif
 #include <luabind/luabind.hpp>
 #include "script_game_object.h"
+#include "game_sv_coop.h"
+#include "UIGameSP.h"
 
 void CActor::OnEvent(NET_Packet& P, u16 type)
 {
@@ -251,16 +255,22 @@ void CActor::OnEvent(NET_Packet& P, u16 type)
 				inventory().Ruck(iitem);
 				break; //2
 			case GEG_PLAYER_ITEM_EAT:
-				::luabind::functor<bool> funct;
-				if (iitem && ai().script_engine().functor("_G.CInventory__eat", funct))
 				{
-					CGameObject* GO = iitem->cast_game_object();
-					if (GO && funct(GO->lua_game_object()))
+					// Coop server: the owning client already ran the per-player Lua rule (booster
+					// stacking, required tools) against its own body. The server's Lua only knows the
+					// world actor, so re-checking here would apply one player's boosters to everybody.
+					const bool coop_body = IsGameTypeCoop() && OnServer() && this != Level().CurrentControlEntity();
+					bool allowed = coop_body;
+					::luabind::functor<bool> funct;
+					if (!coop_body && iitem && ai().script_engine().functor("_G.CInventory__eat", funct))
 					{
-						inventory().Eat(iitem);
-						break; //2
+						CGameObject* GO = iitem->cast_game_object();
+						allowed = GO && funct(GO->lua_game_object());
 					}
+					if (iitem && allowed)
+						inventory().Eat(iitem);
 				}
+				break; //2
 			} //switch
 		}
 		break; //1
@@ -292,6 +302,112 @@ void CActor::OnEvent(NET_Packet& P, u16 type)
 			u16 State = P.r_u16();
 			BOOL Set = !!P.r_u8();
 			inventory().SetSlotsBlocked(State, !!Set);
+		}
+		break;
+	case GE_COOP_CONDITION:
+		{
+			// Coop: the server's condition for this body; the owning client's HUD shows it instead of
+			// local guesses: bleeding, satiety and the active boosters (see CActor::shedule_Update).
+			float bleeding, satiety;
+			P.r_float_q8(bleeding, 0.f, 2.f);
+			P.r_float_q8(satiety, 0.f, 1.f);
+			CEntityCondition::BOOSTER_MAP boosters;
+			for (u8 count = P.r_u8(); count > 0; --count)
+			{
+				SBooster B;
+				B.m_type = (EBoostParams)P.r_u8();
+				B.fBoostValue = P.r_float();
+				B.fBoostTime = P.r_float();
+				boosters[B.m_type] = B;
+			}
+			if (OnClient() && IsGameTypeCoop())
+			{
+				conditions().SetRemoteBleeding(bleeding);
+				if (this == Level().CurrentControlEntity())
+				{
+					conditions().SetSatiety(satiety);
+					conditions().SetRemoteBoosters(boosters);
+				}
+			}
+		}
+		break;
+	case GEG_PLAYER_USE_BOOSTER:
+		{
+			// Coop client: the server body used a portioned item (CEatableItem::UseBy sends this in
+			// every non-single game); only the replica's remaining uses follow, the effects come with
+			// GE_COOP_CONDITION and the health update.
+			const u16 item_id = P.r_u16();
+			if (!(IsGameTypeCoop() && OnClient())) break;
+			CEatableItem* eatable = smart_cast<CEatableItem*>(Level().Objects.net_Find(item_id));
+			if (!eatable) break;
+			const u8 uses = eatable->GetRemainingUses();
+			if (uses != u8(-1) && uses > 0)
+				eatable->SetRemainingUses(uses - 1);
+			if (CurrentGameUI() && this == Level().CurrentControlEntity())
+				CurrentGameUI()->GetActorMenu().RefreshCurrentItemCell();
+		}
+		break;
+	case GE_COOP_HEALTH_CHANGE:
+		{
+			// Coop server: a health delta requested by the owning client's Lua (thirst/sleep penalties).
+			const float delta = P.r_float();
+			if (IsGameTypeCoop() && OnServer() && g_Alive() && this != Level().CurrentControlEntity())
+				conditions().ChangeHealth(delta);
+		}
+		break;
+	case GE_MONEY:
+		{
+			// Coop client: the server's authoritative money for this body (trade, rewards).
+			const u32 money = P.r_u32();
+			if (IsGameTypeCoop() && OnClient())
+			{
+				set_money(money, false);
+				if (CurrentGameUI() && Level().CurrentViewEntity() == this)
+					CurrentGameUI()->GetActorMenu().CoopMoneyChanged();
+			}
+		}
+		break;
+	case GE_COOP_LEVEL_INVITE:
+		{
+			// Coop client: a level changer on the server invites this player; the SP dialog decides
+			// and its OK sends M_CHANGE_LEVEL to the server, which moves everyone together.
+			GameGraph::_GRAPH_ID game_vertex = GameGraph::_GRAPH_ID(P.r_u16());
+			const u32 level_vertex = P.r_u32();
+			Fvector position, angles, reject_position, reject_angles;
+			P.r_vec3(position);
+			P.r_vec3(angles);
+			const bool enabled = !!P.r_u8();
+			shared_str invite;
+			P.r_stringZ(invite);
+			const bool has_reject = !!P.r_u8();
+			P.r_vec3(reject_position);
+			P.r_vec3(reject_angles);
+			CUIGameSP* ui = smart_cast<CUIGameSP*>(CurrentGameUI());
+			if (ui && IsGameTypeCoop() && OnClient() && Level().CurrentViewEntity() == this)
+				ui->ChangeLevel(game_vertex, level_vertex, position, angles, reject_position, reject_angles, has_reject, invite, enabled);
+		}
+		break;
+	case GE_COOP_USE_OBJECT:
+		{
+			// Coop server: the owning client pressed "use" on a script-usable object (door, lever).
+			// Its Lua use_callback(obj, who) runs with this body as the actor.
+			const u16 object_id = P.r_u16();
+			CGameObject* object = smart_cast<CGameObject*>(Level().Objects.net_Find(object_id));
+			CUsableScriptObject* usable = object ? smart_cast<CUsableScriptObject*>(object) : NULL;
+			// A downed teammate: "use" starts the revive (game_sv_Coop::ReviveStart).
+			CActor* downed = object && game_sv_Coop::IsDowned(object_id) ? smart_cast<CActor*>(object) : NULL;
+			if (IsGameTypeCoop() && OnServer() && g_Alive() && downed && !object->getDestroy())
+			{
+				static_cast<game_sv_Coop*>(Level().Server->game)->ReviveStart(this, downed);
+			}
+			else if (IsGameTypeCoop() && OnServer() && g_Alive() && this != Level().CurrentControlEntity() && usable && !object->getDestroy())
+			{
+				CoopLuaActor coop_actor(this, false);
+				const bool used = usable->use(this);
+				if (strstr(Core.Params, "-coop_damage_probe"))
+					Msg("[COOP_USE] side=server body=%u object=%u name=%s used=%u tip=%s", ID(), object_id, object->cName().c_str(), used ? 1 : 0,
+					    usable->tip_text() ? usable->tip_text() : "<null>");
+			}
 		}
 		break;
 	case GE_MOVE_ACTOR:

@@ -6,12 +6,14 @@
 #include "script_game_object.h"
 #include "script_game_object_impl.h"
 #include "InventoryOwner.h"
+#include "game_cl_coop.h"
 #include "Pda.h"
 #include "xrMessages.h"
 #include "character_info.h"
 #include "gametask.h"
 #include "actor.h"
 #include "level.h"
+#include "game_sv_coop.h"
 #include "date_time.h"
 #include "uigamesp.h"
 #include "restricted_object.h"
@@ -70,6 +72,10 @@ bool CScriptGameObject::GiveInfoPortion(LPCSTR info_id)
 {
 	CInventoryOwner* pInventoryOwner = smart_cast<CInventoryOwner*>(&object());
 	if (!pInventoryOwner) return false;
+	// Coop client: the story book is the server's (item scripts give map/recipe infos); the
+	// window flags of actor_menu (*_wnd_open) are this client's own.
+	if (IsGameTypeCoop() && OnClient() && &object() == Level().CurrentControlEntity() && !strstr(info_id, "_wnd_open"))
+		game_cl_Coop::ItemVerb("item|info|%s|1", info_id);
 	pInventoryOwner->TransferInfo(info_id, true);
 	return true;
 }
@@ -78,6 +84,8 @@ bool CScriptGameObject::DisableInfoPortion(LPCSTR info_id)
 {
 	CInventoryOwner* pInventoryOwner = smart_cast<CInventoryOwner*>(&object());
 	if (!pInventoryOwner) return false;
+	if (IsGameTypeCoop() && OnClient() && &object() == Level().CurrentControlEntity() && !strstr(info_id, "_wnd_open"))
+		game_cl_Coop::ItemVerb("item|info|%s|0", info_id);
 	pInventoryOwner->TransferInfo(info_id, false);
 	return true;
 }
@@ -91,6 +99,12 @@ void CScriptGameObject::AddIconedTalkMessage(LPCSTR caption, LPCSTR text, LPCSTR
 
 void _AddIconedTalkMessage(LPCSTR caption, LPCSTR text, LPCSTR texture_name, LPCSTR templ_name)
 {
+	// Coop server: the dialog window is on the talking player's client.
+	if (IsGameTypeCoop() && OnServer())
+	{
+		game_sv_Coop::OnTalkMessage(caption, text, texture_name, templ_name);
+		return;
+	}
 	CUIGameSP* pGameSP = smart_cast<CUIGameSP*>(CurrentGameUI());
 	if (!pGameSP) return;
 
@@ -160,6 +174,18 @@ void CScriptGameObject::StopTalk()
 {
 	CInventoryOwner* pInventoryOwner = smart_cast<CInventoryOwner*>(&object());
 	if (!pInventoryOwner) return;
+	// Coop server: the NPC schemes (xr_meet process_npc_usability) end a talk when db.actor, the
+	// world actor, is not near. A body's dialog is ended only by its own phrases (dialog scope) or
+	// by the player; scheme-driven stops while a body talks are ignored.
+	if (IsGameTypeCoop() && OnServer() && pInventoryOwner->IsTalking() && !game_sv_Coop::InDialogScope())
+	{
+		CActor* partner = smart_cast<CActor*>(pInventoryOwner->GetTalkPartner());
+		if (partner && partner != Level().CurrentControlEntity())
+		{
+			Msg("[COOP_SERVER] TALK_LUA_STOP_IGNORED npc=%u body=%u", object().ID(), partner->ID());
+			return;
+		}
+	}
 	pInventoryOwner->StopTalk();
 }
 
@@ -390,6 +416,9 @@ void CScriptGameObject::UnloadMagazine(bool bKeepAmmo)
 	if (stalker && stalker->hammer_is_clutched())
 		return;
 
+	// Coop client: the server unloads its weapon and spawns the ammo; the replica learns the
+	// magazine from GE_COOP_ITEM_STATE and the ammo boxes arrive as spawns.
+	if (game_cl_Coop::ItemVerb("item|unload|%u|%d", object().ID(), bKeepAmmo ? 1 : 0)) return;
 	weapon_magazined->UnloadMagazine(bKeepAmmo);
 }
 
@@ -411,6 +440,7 @@ void CScriptGameObject::ForceUnloadMagazine(bool bKeepAmmo)
 		return;
 	}
 
+	if (game_cl_Coop::ItemVerb("item|unload|%u|%d", object().ID(), bKeepAmmo ? 1 : 0)) return; // coop client, as above
 	weapon_magazined->UnloadMagazine(bKeepAmmo);
 }
 
@@ -737,6 +767,10 @@ void CScriptGameObject::GiveMoney(int money)
 	CInventoryOwner* pOurOwner = smart_cast<CInventoryOwner*>(&object());
 	VERIFY(pOurOwner);
 
+	// Coop client: the money is the server body's (upgrade and repair prices, money bags); the
+	// replica moves at once, the server answers with GE_MONEY.
+	if (IsGameTypeCoop() && OnClient() && &object() == Level().CurrentControlEntity())
+		game_cl_Coop::ItemVerb("item|money|%d", money);
     GiveMoneySafe(pOurOwner, money, true);
 }
 
@@ -1691,6 +1725,17 @@ void CScriptGameObject::activate_slot(u32 slot_id)
 		                                "CInventoryOwner : cannot access class member activate_slot!");
 		return;
 	}
+	// Coop client: CInventory::Activate is server-only; the presentation Lua (item-use animations
+	// lowering the weapon) asks the server body the same way the inventory UI does.
+	if (IsGameTypeCoop() && OnClient())
+	{
+		if (&object() != Level().CurrentControlEntity()) return;
+		NET_Packet P;
+		CGameObject::u_EventGen(P, GEG_PLAYER_ACTIVATE_SLOT, object().ID());
+		P.w_u16((u16)slot_id);
+		CGameObject::u_EventSend(P);
+		return;
+	}
 	inventory_owner->inventory().Activate((u16)slot_id);
 }
 
@@ -2347,7 +2392,7 @@ bool CScriptGameObject::InstallUpgrade(LPCSTR upgrade)
 	if (!pSettings->section_exist(upgrade))
 		return false;
 
-	return ai().alife().inventory_upgrade_manager().upgrade_install(*item, upgrade, false);
+	return inventory::upgrade::manager().upgrade_install(*item, upgrade, false);
 }
 
 bool CScriptGameObject::HasUpgrade(LPCSTR upgrade)

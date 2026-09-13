@@ -268,13 +268,50 @@ void CCustomMonster::mk_orientation(Fvector& dir, Fmatrix& mR)
 	}
 }
 
+// Coop replicas (Remote NPCs and monsters on a client) are shown this far behind the server
+// clock, so that two snapshots bracket the render time despite the update cadence
+// (net_sv_update_rate 30: one every 33 ms, sent when the server frame allows) and the arrival
+// jitter. MP's NET_Latency (50 ms) had the replica fall out of the pair every few frames and
+// snap to the newest snapshot until the next one came - the small jerks of 132. When the render
+// time still passes the newest snapshot, the position runs on at the last velocity for up to
+// coop_npc_extrap ms instead of standing. Console: coop_npc_interp, coop_npc_extrap (ms).
+int g_coop_npc_interp = 100;
+int g_coop_npc_extrap = 150;
+
+// -coop_npc_motion_probe: how the replicas' frames split between the two branches, and the
+// cadence of the snapshots that arrive (server clock gaps, arrival gaps).
+static struct SCoopInterpProbe
+{
+	u32 frames = 0, interp = 0, extrap = 0, ahead_max = 0, ahead_sum = 0;
+	u32 packets = 0, gap_sum = 0, gap_max = 0, arrival_sum = 0, arrival_max = 0, last_arrival = 0;
+	u32 reported = 0;
+	void report()
+	{
+		if (Device.dwTimeGlobal - reported < 5000) return;
+		if (reported && (frames || packets))
+			Msg("[COOP_INTERP] delay=%d frames=%u interp=%u extrap=%u ahead_avg=%u ahead_max=%u packets=%u gap_avg=%u gap_max=%u arrival_avg=%u arrival_max=%u",
+			    g_coop_npc_interp, frames, interp, extrap, extrap ? ahead_sum / extrap : 0, ahead_max, packets,
+			    packets ? gap_sum / packets : 0, gap_max, packets ? arrival_sum / packets : 0, arrival_max);
+		reported = Device.dwTimeGlobal;
+		frames = interp = extrap = ahead_max = ahead_sum = 0;
+		packets = gap_sum = gap_max = arrival_sum = arrival_max = 0;
+	}
+} s_coop_interp_probe;
+static bool coop_interp_probe_on() { return IsGameTypeCoop() && strstr(Core.Params, "-coop_npc_motion_probe"); }
+
 void CCustomMonster::net_Export(NET_Packet& P) // export to server
 {
 	R_ASSERT(Local());
 
 	// export last known packet
 	R_ASSERT(!NET.empty());
-	net_update& N = NET.back();
+    net_update snapshot = NET.back();
+    if (IsGameTypeCoop())
+    {
+        snapshot.dwTimeStamp = Level().timeServer();
+        snapshot.p_pos = Position();
+    }
+    net_update& N = snapshot;
 	P.w_float(GetfHealth());
 	P.w_u32(N.dwTimeStamp);
 	P.w_u8(0);
@@ -313,6 +350,21 @@ void CCustomMonster::net_Import(NET_Packet& P)
 
 	if (NET.empty() || (NET.back().dwTimeStamp < N.dwTimeStamp))
 	{
+		if (!NET.empty() && coop_interp_probe_on())
+		{
+			SCoopInterpProbe& probe = s_coop_interp_probe;
+			const u32 gap = N.dwTimeStamp - NET.back().dwTimeStamp;
+			++probe.packets;
+			probe.gap_sum += gap;
+			probe.gap_max = _max(probe.gap_max, gap);
+			if (probe.last_arrival)
+			{
+				const u32 arrival = Device.dwTimeGlobal - probe.last_arrival;
+				probe.arrival_sum += arrival;
+				probe.arrival_max = _max(probe.arrival_max, arrival);
+			}
+			probe.last_arrival = Device.dwTimeGlobal;
+		}
 		NET.push_back(N);
 		NET_WasInterpolating = TRUE;
 	}
@@ -326,7 +378,7 @@ void CCustomMonster::shedule_Update(u32 DT)
 	VERIFY(!g_Alive() || processing_enabled());
 	// Queue shrink
 	VERIFY(_valid(Position()));
-	u32 dwTimeCL = Level().timeServer() - NET_Latency;
+	u32 dwTimeCL = Level().timeServer() - ((IsGameTypeCoop() && Remote()) ? u32(g_coop_npc_interp) : NET_Latency);
 	VERIFY(!NET.empty());
 	while ((NET.size() > 2) && (NET[1].dwTimeStamp < dwTimeCL)) NET.pop_front();
 
@@ -426,6 +478,35 @@ void CCustomMonster::net_update::lerp(CCustomMonster::net_update& A, CCustomMons
 	o_torso.pitch = angle_lerp(A.o_torso.pitch, B.o_torso.pitch, f);
 	p_pos.lerp(A.p_pos, B.p_pos, f);
 	fHealth = A.fHealth * (1.f - f) + B.fHealth * f;
+    coop_gait = f < 1.f ? A.coop_gait : B.coop_gait;
+    coop_velocity.lerp(A.coop_velocity, B.coop_velocity, f);
+    coop_layers = f < 1.f ? A.coop_layers : B.coop_layers;
+    if (A.coop_layers.ready && B.coop_layers.ready)
+    {
+        for (u32 i=0;i<4;++i)
+        {
+            Fquaternion a,b,q;
+            a.set(A.coop_layers.rotation[i][3],A.coop_layers.rotation[i][0],A.coop_layers.rotation[i][1],A.coop_layers.rotation[i][2]);
+            b.set(B.coop_layers.rotation[i][3],B.coop_layers.rotation[i][0],B.coop_layers.rotation[i][1],B.coop_layers.rotation[i][2]);
+            q.slerp(a,b,f); q.normalize();
+            coop_layers.rotation[i][0]=q.x; coop_layers.rotation[i][1]=q.y;
+            coop_layers.rotation[i][2]=q.z; coop_layers.rotation[i][3]=q.w;
+        }
+        for (u32 i=0;i<5;++i)
+            if (A.coop_layers.motion[i]==B.coop_layers.motion[i]) {
+                float delta=B.coop_layers.phase[i]-A.coop_layers.phase[i];
+                const float duration=A.coop_layers.duration[i];
+                const bool cyclic=(A.coop_layers.looping & B.coop_layers.looping & (1u<<i)) && duration>EPS;
+                if (delta<0.f && cyclic) delta+=duration;
+                if (delta>=0.f) {
+                    float phase=A.coop_layers.phase[i]+delta*f;
+                    if (cyclic && phase>=duration) phase-=duration;
+                    coop_layers.phase[i]=phase;
+                }
+                coop_layers.speed[i]=A.coop_layers.speed[i]*(1.f-f)+B.coop_layers.speed[i]*f;
+                coop_layers.amount[i]=A.coop_layers.amount[i]*(1.f-f)+B.coop_layers.amount[i]*f;
+            }
+    }
 }
 
 void CCustomMonster::update_sound_player()
@@ -435,6 +516,17 @@ void CCustomMonster::update_sound_player()
 
 void CCustomMonster::UpdateCL()
 {
+    if (IsGameTypeCoop() && strstr(Core.Params, "-coop_npc_motion_probe"))
+    {
+        static xr_map<u16, u32> last_reports;
+        u32& last = last_reports[ID()];
+        if (Device.dwTimeGlobal - last >= 100)
+        {
+            last = Device.dwTimeGlobal;
+            Msg("[COOP_CREATURE] side=%s id=%u server_time=%u alive=%d position=%f,%f,%f",
+                OnServer() ? "server" : "client", ID(), Level().timeServer(), g_Alive(), VPUSH(Position()));
+        }
+    }
 	START_PROFILE("CustomMonster/client_update")
 		m_client_update_delta = (u32)std::min(Device.dwTimeGlobal - m_last_client_update_time, u32(100));
 		m_last_client_update_time = Device.dwTimeGlobal;
@@ -483,18 +575,58 @@ void CCustomMonster::UpdateCL()
 			m_dwCurrentTime = Device.dwTimeGlobal;
 
 			// distinguish interpolation/extrapolation
-			u32 dwTime = Level().timeServer() - NET_Latency;
+			const bool coop_replica = IsGameTypeCoop() && Remote();
+			u32 dwTime = Level().timeServer() - (coop_replica ? u32(g_coop_npc_interp) : NET_Latency);
 			net_update& N = NET.back();
+			if (coop_replica && coop_interp_probe_on())
+			{
+				++s_coop_interp_probe.frames;
+				s_coop_interp_probe.report();
+			}
 			if ((dwTime > N.dwTimeStamp) || (NET.size() < 2))
 			{
 				// BAD.	extrapolation
 				NET_Last = N;
+                if (coop_replica && dwTime>N.dwTimeStamp) {
+                    // Predict the animation clocks during a short packet gap.
+                    const u32 ahead_ms = dwTime - N.dwTimeStamp;
+                    const float elapsed=float(_min(ahead_ms,u32(250)))*.001f;
+                    for(u32 i=0;i<5;++i) {
+                        float& phase=NET_Last.coop_layers.phase[i];
+                        const float duration=NET_Last.coop_layers.duration[i];
+                        phase+=elapsed*NET_Last.coop_layers.speed[i];
+                        if(duration>EPS && (NET_Last.coop_layers.looping & (1u<<i))) {
+                            phase=fmodf(phase,duration);
+                            if(phase<0.f) phase+=duration;
+                        } else phase=_max(0.f,_min(phase,duration));
+                    }
+                    // The position runs on at the velocity of the last two snapshots (the server's
+                    // own estimate when they are too far apart) for a short gap; a longer one holds.
+                    if (g_Alive() && NET.size() >= 2 && ahead_ms <= u32(g_coop_npc_extrap))
+                    {
+                        const net_update& A = NET[NET.size() - 2];
+                        const u32 span = N.dwTimeStamp - A.dwTimeStamp;
+                        Fvector velocity = N.coop_velocity;
+                        if (span > 0 && span <= 500) velocity.sub(N.p_pos, A.p_pos).div(float(span) * .001f);
+                        if (velocity.magnitude() <= 15.f) NET_Last.p_pos.mad(N.p_pos, velocity, float(ahead_ms) * .001f);
+                    }
+                    if (coop_interp_probe_on())
+                    {
+                        ++s_coop_interp_probe.extrap;
+                        s_coop_interp_probe.ahead_sum += ahead_ms;
+                        s_coop_interp_probe.ahead_max = _max(s_coop_interp_probe.ahead_max, ahead_ms);
+                    }
+                }
 			}
 			else
 			{
 				// OK.	interpolation
 				NET_WasExtrapolating = FALSE;
+				if (coop_replica && coop_interp_probe_on()) ++s_coop_interp_probe.interp;
 				// Search 2 keyframes for interpolation
+                // A remote replica must not retain an old transform when the
+                // interpolation clock falls outside its current packet window.
+                if (IsGameTypeCoop() && Remote()) NET_Last = NET.front();
 				int select = -1;
 				for (u32 id = 0; id < NET.size() - 1; ++id)
 				{
@@ -517,7 +649,7 @@ void CCustomMonster::UpdateCL()
 					}
 					else
 					{
-						if (!bfScriptAnimation())
+						if (!bfScriptAnimation() && !IsGameTypeCoop())
 							SelectAnimation(XFORM().k, movement().detail().direction(), movement().speed());
 					}
 
@@ -566,7 +698,40 @@ void CCustomMonster::UpdateCL()
 		UpdateCamera				();
 #endif // DEBUG
 
-		update_animation_movement_controller();
+        update_animation_movement_controller();
+
+        if (IsGameTypeCoop() && Remote() && g_Alive())
+        {
+            if (!bfScriptAnimation()) SelectAnimation(XFORM().k, movement().detail().direction(), movement().speed());
+            CPHMovementControl* proxy = character_physics_support()->movement();
+            if (proxy->CharacterExist())
+            {
+                Fvector before = Position();
+                proxy->GetCharacterPosition(before);
+                if (!strstr(Core.Params, "-coop_npc_no_proxy_sync"))
+                {
+                    // Replica physics follows the same pose as rendering.
+                    // No independent client locomotion or retained velocity.
+                    proxy->SetPosition(Position());
+                    proxy->SetVelocity(0.f, 0.f, 0.f);
+                    spatial_move();
+                }
+                if (strstr(Core.Params, "-coop_npc_motion_probe"))
+                {
+                    static xr_map<u16, u32> reports;
+                    u32& last = reports[ID()];
+                    if (Device.dwTimeGlobal - last >= 100)
+                    {
+                        last = Device.dwTimeGlobal;
+                        Fvector after = Position();
+                        proxy->GetCharacterPosition(after);
+                        Msg("[COOP_PROXY] id=%u time=%u before=%f after=%f model=%f,%f,%f physics=%f,%f,%f",
+                            ID(), Level().timeServer(), before.distance_to(Position()), after.distance_to(Position()),
+                            VPUSH(Position()), VPUSH(after));
+                    }
+                }
+            }
+        }
 
 #ifdef DEBUG
 	if( animation_movement() )

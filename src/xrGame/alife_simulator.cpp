@@ -15,6 +15,11 @@
 #include "mainmenu.h"
 #include "object_factory.h"
 #include "alife_object_registry.h"
+#include "alife_graph_registry.h"
+#include "xrServer.h"
+#include "xrServer_Objects_ALife_Monsters.h"
+#include "level.h"
+#include "game_graph.h"
 #include "../xrEngine/xr_ioconsole.h"
 
 #ifdef DEBUG
@@ -22,6 +27,38 @@
 #endif // DEBUG
 
 LPCSTR alife_section = "alife";
+
+bool CALifeSimulator::uses_player_anchors() const
+{
+    return IsGameTypeCoop();
+}
+
+float CALifeSimulator::activation_distance(const Fvector& position, u32 game_vertex_id) const
+{
+    if (!uses_player_anchors())
+        return graph().actor()->o_Position.distance_to(position);
+
+    // No connected body means no spatial anchor. The world actor is identity only.
+    float nearest = flt_max;
+    if (!ai().game_graph().valid_vertex_id(game_vertex_id)) return nearest;
+    const auto level_id = ai().game_graph().vertex(game_vertex_id)->level_id();
+    IClient* internal = server().GetServerClient();
+    auto visit = [&](IClient* connection)
+    {
+        if (connection == internal || !connection->flags.bConnected) return;
+        xrClientData* client = static_cast<xrClientData*>(connection);
+        if (!client->ps || !client->owner) return;
+        CSE_Abstract* record = server().ID_to_entity(client->ps->GameID);
+        if (record != client->owner) return;
+        CSE_ALifeCreatureActor* body = smart_cast<CSE_ALifeCreatureActor*>(record);
+        if (!body || body == graph().actor() || body->owner != internal ||
+            !ai().game_graph().valid_vertex_id(body->m_tGraphID) ||
+            ai().game_graph().vertex(body->m_tGraphID)->level_id() != level_id) return;
+        nearest = _min(nearest, body->o_Position.distance_to(position));
+    };
+    server().ForEachClientDo(visit);
+    return nearest;
+}
 
 extern void destroy_lua_wpn_params();
 
@@ -57,7 +94,7 @@ CALifeSimulator::CALifeSimulator(xrServer* server, shared_str* command_line) :
 	R_ASSERT2(
 		xr_strlen(p.m_game_or_spawn) &&
 		!xr_strcmp(p.m_alife,"alife") &&
-		!xr_strcmp(p.m_game_type,"single"),
+		(!xr_strcmp(p.m_game_type,"single") || !xr_strcmp(p.m_game_type,"coop")),
 		"Invalid server options!"
 	);
 

@@ -80,7 +80,7 @@ void CRadioactiveZone::Affect(SZoneObjectInfo* O)
 void CRadioactiveZone::feel_touch_new(CObject* O)
 {
 	inherited::feel_touch_new(O);
-	if (GameID() != eGameIDSingle)
+	if (GameID() != eGameIDSingle && !IsGameTypeCoop()) // coop as SP: Affect() irradiates; the MP path on top doubled it
 	{
 		if (smart_cast<CActor*>(O))
 		{
@@ -106,7 +106,7 @@ bool CRadioactiveZone::feel_touch_contact(CObject* O)
 
 void CRadioactiveZone::UpdateWorkload(u32 dt)
 {
-	if (IsEnabled() && GameID() != eGameIDSingle)
+	if (IsEnabled() && GameID() != eGameIDSingle && !IsGameTypeCoop()) // coop as SP (see feel_touch_new)
 	{
 		OBJECT_INFO_VEC_IT it;
 		Fvector pos;

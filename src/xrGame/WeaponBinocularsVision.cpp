@@ -178,7 +178,7 @@ void SBinocVisibleObj::Update()
 
 				if (our_inv_owner && others_inv_owner && !monster)
 				{
-					if (IsGameTypeSingle())
+					if (IsGameTypeSingle() || IsGameTypeCoop()) // coop as SP
 					{
 						switch (RELATION_REGISTRY().GetRelationType(others_inv_owner, our_inv_owner))
 						{

@@ -149,13 +149,16 @@ void CLevel::net_Stop()
 	else if (IsDemoSave() && !IsDemoInfoSaved())
 		SaveDemoInfo();
 
+	coop_heap_check("net_Stop: before remove_objects");
 	remove_objects();
+	coop_heap_check("net_Stop: after remove_objects");
 
 	//WARNING ! remove_objects() uses this flag, so position of this line must e here ..
 	game_configured = FALSE;
 
 	IGame_Level::net_Stop();
 	IPureClient::Disconnect();
+	coop_heap_check("net_Stop: after IPureClient::Disconnect");
 
 	if (Server)
 	{
@@ -169,6 +172,7 @@ void CLevel::net_Stop()
 
 	if (!g_dedicated_server)
 		ai().script_engine().collect_all_garbage();
+	coop_heap_check("net_Stop: after collect_all_garbage");
 
 #ifdef DEBUG
 	show_animation_stats		();
@@ -364,6 +368,7 @@ bool CLevel::Connect2Server(const char* options)
 	}
 
 	if (!Connect(options)) return FALSE;
+    if (strstr(Core.Params, "-coop_client_probe")) { Msg("[COOP_CLIENT] TRANSPORT_READY awaiting_auth=1"); FlushLog(); }
 	//---------------------------------------------------------------------------
 	if (psNET_direct_connect) m_bConnectResultReceived = true;
 	u32 EndTime = GetTickCount() + ConnectionTimeOut;
@@ -397,6 +402,7 @@ bool CLevel::Connect2Server(const char* options)
 	}
 	Msg("%c client : connection %s - <%s>", m_bConnectResult ? '*' : '!', m_bConnectResult ? "accepted" : "rejected",
 	    m_sConnectResult.c_str());
+	if (strstr(Core.Params, "-coop_client_probe")) FlushLog();
 	if (!m_bConnectResult)
 	{
 		if (Server)
@@ -415,11 +421,26 @@ bool CLevel::Connect2Server(const char* options)
 	else
 		net_Syncronize();
 
+	// This loop used to only sleep: DirectPlay's own threads carried the clock
+	// sync round trips. Nothing runs by itself any more, so drive both ends here
+	// exactly like the connect loop above, and do not wait forever if the sync
+	// never completes.
+	u32 SyncEndTime = GetTickCount() + ConnectionTimeOut;
 	while (!net_IsSyncronised())
 	{
+		ClientReceive();
+		if (Server)
+			Server->Update();
 		Sleep(1);
 		if (net_Disconnected)
 		{
+			OnConnectRejected();
+			Disconnect();
+			return FALSE;
+		}
+		if (GetTickCount() > SyncEndTime)
+		{
+			Msg("! client : time synchronization with the server timed out");
 			OnConnectRejected();
 			Disconnect();
 			return FALSE;
@@ -442,6 +463,8 @@ void CLevel::OnBuildVersionChallenge()
 	Msg("* Sending auth value ...");
 #else
 	u64 auth = FS.auth_get();
+    // Coop animation wire revision 1. Old clients fail auth before object import.
+    if (IsGameTypeCoop() || strstr(Core.Params,"-coop_client")) auth ^= 0x434F4F50414E4902ull;
 #endif //#ifdef DEBUG
 	P.w_u64(auth);
 	SecureSend(P, net_flags(TRUE, TRUE, TRUE, TRUE));
@@ -536,6 +559,7 @@ void CLevel::ClearAllObjects()
 	while (ParentFound)
 	{
 		ParentFound = false;
+        {
         xrSRWLockGuard g(prefetch_lock);
 		for (u32 i = 0; i < CLObjNum; i++)
 		{
@@ -550,7 +574,7 @@ void CLevel::ClearAllObjects()
 			GEN.w_u16(pObj->H_Parent()->ID());
 			GEN.w_u16(u16(pObj->ID()));
 			game_events->insert(GEN);
-			if (g_bDebugEvents) ProcessGameEvents();
+
 			//-------------------------------------------------------------
 			ParentFound = true;
 			//-------------------------------------------------------------
@@ -558,11 +582,13 @@ void CLevel::ClearAllObjects()
 			Msg ("Rejection of %s[%d] from %s[%d]", *(pObj->cNameSect()), pObj->ID(), *(pObj->H_Parent()->cNameSect()), pObj->H_Parent()->ID());
 #endif
 		};
+        }
 		ProcessGameEvents();
 	};
 
 	CLObjNum = Level().Objects.o_count();
 
+    {
     xrSRWLockGuard g(prefetch_lock);
 	for (u32 i = 0; i < CLObjNum; i++)
 	{
@@ -587,7 +613,7 @@ void CLevel::ClearAllObjects()
 		GEN.w_u16(GE_DESTROY);
 		GEN.w_u16(u16(pObj->ID()));
 		game_events->insert(GEN);
-		if (g_bDebugEvents) ProcessGameEvents();
+
 		//-------------------------------------------------------------
 		ParentFound = true;
 		//-------------------------------------------------------------
@@ -595,6 +621,7 @@ void CLevel::ClearAllObjects()
 		Msg ("Destruction of %s[%d]", *(pObj->cNameSect()), pObj->ID());
 #endif
 	};
+    }
 	ProcessGameEvents();
 };
 

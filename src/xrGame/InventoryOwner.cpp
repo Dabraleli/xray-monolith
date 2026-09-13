@@ -24,7 +24,11 @@
 #include "trade_parameters.h"
 #include "purchase_list.h"
 #include "alife_object_registry.h"
+#include "ai_space.h"
+#include "alife_simulator.h"
+#include "alife_graph_registry.h"
 #include "CustomOutfit.h"
+#include "game_sv_coop.h"
 #include "Bolt.h"
 #include "string_table.h"
 
@@ -123,7 +127,7 @@ BOOL CInventoryOwner::net_Spawn(CSE_Abstract* DC)
 	if (!pThis) return FALSE;
 	CSE_Abstract* E = (CSE_Abstract*)(DC);
 
-	if (IsGameTypeSingle())
+	if (IsGameTypeSingle() || IsGameTypeCoop())
 	{
 		CSE_ALifeTraderAbstract* pTrader = NULL;
 		if (E) pTrader = smart_cast<CSE_ALifeTraderAbstract*>(E);
@@ -135,7 +139,13 @@ BOOL CInventoryOwner::net_Spawn(CSE_Abstract* DC)
 		CharacterInfo().Init(pTrader);
 
 		//-------------------------------------
-		m_known_info_registry->registry().init(E->ID);
+		// Coop server: every player body reads and writes the world actor's info portions, so the
+		// story (dialog conditions, given infos, has_alife_info in Lua) is one shared book. Clients
+		// keep a local registry for their own UI flags.
+		u16 info_holder = E->ID;
+		if (IsGameTypeCoop() && OnServer() && smart_cast<CActor*>(pThis) && ai().get_alife() && ai().alife().graph().actor())
+			info_holder = ai().alife().graph().actor()->ID;
+		m_known_info_registry->registry().init(info_holder);
 		//-------------------------------------
 
 		CAI_PhraseDialogManager* dialog_manager = smart_cast<CAI_PhraseDialogManager*>(this);
@@ -426,6 +436,14 @@ u16 CInventoryOwner::object_id() const
 	return smart_cast<const CGameObject*>(this)->ID();
 }
 
+void CInventoryOwner::coop_known_infos(xr_vector<shared_str>& out) const
+{
+	out.clear();
+	const KNOWN_INFO_VECTOR* known = m_known_info_registry ? m_known_info_registry->registry().objects_ptr() : NULL;
+	if (!known) return;
+	out.insert(out.end(), known->begin(), known->end());
+}
+
 //////////////////////////////////////////////////////////////////////////
 //установка группировки на клиентском и серверном объкте
 
@@ -452,10 +470,43 @@ void CInventoryOwner::SetCommunity(CHARACTER_COMMUNITY_INDEX new_community)
 		Actor()->RPC_UpdateFaction();
 }
 
+CInventoryOwner* CInventoryOwner::coop_shared_standing() const
+{
+	if (!IsGameTypeCoop() || !OnServer() || !g_actor) return NULL;
+	const CGameObject* self = smart_cast<const CGameObject*>(this);
+	if (!self || self == g_actor || !game_sv_Coop::BodyOf(self)) return NULL;
+	return smart_cast<CInventoryOwner*>(g_actor); // the world actor
+}
+
+CHARACTER_RANK_VALUE CInventoryOwner::Rank() const
+{
+	const CInventoryOwner* shared = coop_shared_standing();
+	return (shared ? shared : this)->CharacterInfo().Rank().value();
+}
+
+CHARACTER_REPUTATION_VALUE CInventoryOwner::Reputation() const
+{
+	const CInventoryOwner* shared = coop_shared_standing();
+	return (shared ? shared : this)->CharacterInfo().Reputation().value();
+}
+
 void CInventoryOwner::SetRank(CHARACTER_RANK_VALUE rank)
 {
+	if (CInventoryOwner* shared = coop_shared_standing())
+	{
+		shared->SetRank(rank);
+		return;
+	}
 	CEntityAlive* EA = smart_cast<CEntityAlive*>(this);
 	VERIFY(EA);
+	if (IsGameTypeCoop() && !ai().get_alife())
+	{
+		// a coop client has no ALife: it mirrors the shared standing the server sent (coop_client_actor)
+		CharacterInfo().m_CurrentRank.set(rank);
+		if (Actor() && EA->ID() == Actor()->ID())
+			Actor()->RPC_UpdateRank();
+		return;
+	}
 	CSE_Abstract* e_entity = ai().alife().objects().object(EA->ID(), false);
 	if (!e_entity) return;
 	CSE_ALifeTraderAbstract* trader = smart_cast<CSE_ALifeTraderAbstract*>(e_entity);
@@ -475,8 +526,21 @@ void CInventoryOwner::ChangeRank(CHARACTER_RANK_VALUE delta)
 
 void CInventoryOwner::SetReputation(CHARACTER_REPUTATION_VALUE reputation)
 {
+	if (CInventoryOwner* shared = coop_shared_standing())
+	{
+		shared->SetReputation(reputation);
+		return;
+	}
 	CEntityAlive* EA = smart_cast<CEntityAlive*>(this);
 	VERIFY(EA);
+	if (IsGameTypeCoop() && !ai().get_alife())
+	{
+		// a coop client has no ALife: it mirrors the shared standing the server sent (coop_client_actor)
+		CharacterInfo().m_CurrentReputation.set(reputation);
+		if (Actor() && EA->ID() == Actor()->ID())
+			Actor()->RPC_UpdateReputation();
+		return;
+	}
 	CSE_Abstract* e_entity = ai().alife().objects().object(EA->ID(), false);
 	if (!e_entity) return;
 
@@ -647,6 +711,9 @@ void CInventoryOwner::set_money(u32 amount, bool bSendEvent)
 		packet.w_u32(m_money);
 		object->u_EventSend(packet);
 	}
+	// Coop server: the body's client keeps a copy of its money for the menus (trade, inventory).
+	if (IsGameTypeCoop() && OnServer())
+		game_sv_Coop::SyncMoney(this);
 }
 
 bool CInventoryOwner::use_default_throw_force()

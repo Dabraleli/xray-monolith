@@ -269,7 +269,7 @@ void CUITaskWnd::TaskSetTargetMap(CGameTask* task)
 
 	TaskShowMapSpot(task, true);
 	CMapLocation* ml = task->LinkedMapLocation();
-	if (ml && ml->SpotEnabled())
+	if (ml && ml->SpotEnabled() && ml->GetLevelName().size())
 	{
 		ml->CalcPosition();
 		m_pMapWnd->SetTargetMap(ml->GetLevelName(), ml->GetPosition(), true);
@@ -290,7 +290,8 @@ void CUITaskWnd::TaskShowMapSpot(CGameTask* task, bool show)
 		{
 			ml->EnableSpot();
 			ml->CalcPosition();
-			m_pMapWnd->SetTargetMap(ml->GetLevelName(), ml->GetPosition(), true);
+			if (ml->GetLevelName().size()) // coop: a target the client knows nothing about has no level yet
+				m_pMapWnd->SetTargetMap(ml->GetLevelName(), ml->GetPosition(), true);
 		}
 		else
 		{

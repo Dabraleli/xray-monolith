@@ -8,6 +8,7 @@
 
 #include "pch_script.h"
 #include "base_monster.h"
+#include "../../../game_sv_coop.h"
 #include "../../../actor.h"
 #include "../../../ActorEffector.h"
 #include "../ai_monster_effector.h"
@@ -263,13 +264,17 @@ void CBaseMonster::HitSignal(float amount, Fvector& vLocalDir, CObject* who, s16
 
 	Morale.on_hit();
 
-	callback(GameObject::eHit)(
-		lua_game_object(),
-		amount,
-		vLocalDir,
-		smart_cast<const CGameObject*>(who)->lua_game_object(),
-		element
-	);
+	{
+		// Coop server: a hit by a player body is a hit by "the actor" for the monster's Lua.
+		CoopLuaActor coop_actor(game_sv_Coop::BodyOf(who), false);
+		callback(GameObject::eHit)(
+			lua_game_object(),
+			amount,
+			vLocalDir,
+			smart_cast<const CGameObject*>(who)->lua_game_object(),
+			element
+		);
+	}
 
 	// если нейтрал - добавить как врага
 	CEntityAlive* obj = smart_cast<CEntityAlive*>(who);

@@ -97,6 +97,9 @@ public:
 		SRotation o_torso; // torso in world coords
 		Fvector p_pos; // in world coords
 		float fHealth;
+        u8 coop_gait = 0;
+        CoopStalkerLayers coop_layers;
+        Fvector coop_velocity = Fvector().set(0.f, 0.f, 0.f);
 
 		// non-exported (temporal)
 

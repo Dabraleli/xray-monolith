@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "monster_enemy_manager.h"
+#include "../../game_sv_coop.h"
 #include "BaseMonster/base_monster.h"
 #include "../ai_monsters_misc.h"
 #include "../../ai_object_location.h"
@@ -242,9 +243,10 @@ bool CMonsterEnemyManager::see_enemy_recently(const CEntityAlive* enemy)
 
 bool CMonsterEnemyManager::enemy_see_me_now()
 {
-	if (Actor() == enemy)
+	const CActor* enemy_actor = smart_cast<const CActor*>(enemy); // the local actor or a coop player body
+	if (enemy_actor)
 	{
-		return (Actor()->memory().visual().visible_right_now(monster));
+		return (enemy_actor->memory().visual().visible_right_now(monster));
 	}
 	else
 	{

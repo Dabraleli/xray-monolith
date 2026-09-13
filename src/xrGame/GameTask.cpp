@@ -18,6 +18,7 @@
 #include "game_object_space.h"
 #include "object_broker.h"
 #include "ui/uitexturemaster.h"
+#include "game_sv_coop.h"
 
 
 CGameTask::CGameTask()
@@ -132,10 +133,13 @@ void CGameTask::ChangeMapLocation(LPCSTR new_map_location, u16 new_map_object_id
 
 	m_task_state = eTaskStateInProgress;
 	CreateMapLocation(false);
+	game_sv_Coop::OnTaskChanged(this); // coop server: the clients' copies follow the new target
 }
 
 void CGameTask::ChangeStateCallback()
 {
+	// Coop client: a mirrored task may arrive before the player's actor exists; no Lua listens there.
+	if (!g_actor) return;
 	Actor()->callback(GameObject::eTaskStateChange)(this, GetTaskState());
 }
 

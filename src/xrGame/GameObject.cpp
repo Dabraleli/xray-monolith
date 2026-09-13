@@ -228,7 +228,7 @@ void CGameObject::OnEvent(NET_Packet& P, u16 type)
 			SetHitInfo(Hitter, Weapon, HDS.bone(), HDS.p_in_bone_space, HDS.dir);
 			Hit(&HDS);
 			//---------------------------------------------------------------------------
-			if (GameID() != eGameIDSingle)
+			if (GameID() != eGameIDSingle && !IsGameTypeCoop())
 			{
 				Game().m_WeaponUsageStatistic->OnBullet_Check_Result(false);
 				game_cl_mp* mp_game = smart_cast<game_cl_mp*>(&Game());
@@ -257,6 +257,20 @@ void CGameObject::OnEvent(NET_Packet& P, u16 type)
 
 			setDestroy(TRUE);
 			//			MakeMeCrow		();
+		}
+		break;
+	case GE_COOP_TIP_TEXT:
+		{
+			// Coop client: the server Lua set this usable object's hint (ph_door tip_open/tip_close...).
+			const u8 has_text = P.r_u8();
+			shared_str text;
+			if (has_text) P.r_stringZ(text);
+			CUsableScriptObject* usable = smart_cast<CUsableScriptObject*>(this);
+			if (usable && IsGameTypeCoop() && OnClient())
+			{
+				if (has_text) usable->set_tip_text(text.c_str() ? text.c_str() : "");
+				else usable->set_tip_text_default();
+			}
 		}
 		break;
 	}

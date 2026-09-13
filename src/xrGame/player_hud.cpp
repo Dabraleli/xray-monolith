@@ -3,6 +3,7 @@
 #include "HudItem.h"
 #include "ui_base.h"
 #include "actor.h"
+#include "Level.h"
 #include "physic_item.h"
 #include "static_cast_checked.hpp"
 #include "actoreffector.h"
@@ -682,7 +683,7 @@ u32 attachable_hud_item::anim_play(const shared_str& anm_name_b, BOOL bMixIn, co
 		//R_ASSERT2		(parent_object, "object has no parent actor");
 		//CObject*		parent_object = static_cast_checked<CObject*>(&m_parent_hud_item->object());
 
-		if (IsGameTypeSingle() && parent_object.H_Parent() == Level().CurrentControlEntity())
+		if ((IsGameTypeSingle() || IsGameTypeCoop()) && parent_object.H_Parent() == Level().CurrentControlEntity()) // coop as SP: the weapon animations' camera effects
 		{
 			CActor* current_actor = static_cast_checked<CActor*>(Level().CurrentControlEntity());
 			VERIFY(current_actor);

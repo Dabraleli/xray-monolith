@@ -438,6 +438,17 @@ void CShootingObject::RenderLight()
 
 bool CShootingObject::SendHitAllowed(CObject* pUser)
 {
+	if (IsGameTypeCoop())
+	{
+		// Coop: a player's shots register on that player's client, against the replicas as it
+		// sees and aims at them (the display runs coop_npc_interp ms behind the server, and the
+		// server's copy of the shot only knows the body's torso direction from the updates); the
+		// world's shooters (NPCs, monsters, turrets) register on the server as before. The
+		// server admits the client's hit (xrServer::CoopAdmitClientEvent) and broadcasts it like
+		// any other; its own copy of the player's bullet flies without a hit.
+		if (!smart_cast<CActor*>(pUser)) return OnServer();
+		return OnClient() && Level().CurrentControlEntity() == pUser;
+	}
 	if (Game().IsServerControlHits())
 		return OnServer();
 

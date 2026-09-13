@@ -24,6 +24,7 @@ CPda::CPda(void)
 	m_SpecificChracterOwner = NULL;
 	TurnOff();
 	m_bZoomed = false;
+	m_coop_idle_pending = false;
 	m_eDeferredEnable = eDefault;
 	joystick = BI_NONE;
 	target_screen_switch = 0.f;
@@ -104,7 +105,35 @@ float CPda::GetNearWallOffset()
 
 void CPda::OnStateSwitch(u32 S, u32 oldState)
 {
+	// Coop client: the server's clock for "showing" started before ours (network delay), so its idle
+	// can come while the local showing animation is still playing; finish it first, then go idle.
+	if (IsGameTypeCoop() && OnClient() && S == eIdle && GetState() == eShowing && m_bStopAtEndAnimIsRunning)
+	{
+		m_coop_idle_pending = true;
+		return;
+	}
+	m_coop_idle_pending = false;
 	inherited::OnStateSwitch(S, oldState);
+    if (!CurrentGameUI())
+    {
+        // Headless coop server: no HUD to draw, but the HUD motion length still times the state (the
+        // way weapons work here), so OnAnimationEnd moves showing -> idle and hiding -> hidden in step
+        // with the clients' animations and the slot is freed afterwards (sessions 97-98).
+        if (S == eShowing || S == eHiding)
+        {
+            SetPending(TRUE);
+            const u32 length = S == eShowing ? PlayHUDMotion("anm_show", FALSE, this, GetState(), 1.f, 0.f, false)
+                                             : PlayHUDMotion("anm_hide", TRUE, this, GetState());
+            if (!length)
+            {
+                SetPending(FALSE);
+                SwitchState(S == eShowing ? eIdle : eHidden);
+            }
+        }
+        else
+            SetPending(FALSE);
+        return;
+    }
 
 	if (!ParentIsActor())
 		return;
@@ -201,6 +230,11 @@ void CPda::OnAnimationEnd(u32 state)
 		}
 		SetPending(FALSE);
 		SwitchState(eIdle);
+		if (m_coop_idle_pending) // coop client: the server's idle waited for this animation
+		{
+			m_coop_idle_pending = false;
+			OnStateSwitch(eIdle, eShowing);
+		}
 	}
 	break;
 	case eHiding:
@@ -221,6 +255,7 @@ void CPda::OnAnimationEnd(u32 state)
 
 void CPda::JoystickCallback(CBoneInstance* B)
 {
+    if (!CurrentGameUI()) return;
 	CPda* Pda = static_cast<CPda*>(B->callback_param());
 	CUIPdaWnd* pda = &CurrentGameUI()->GetPdaMenu();
 
@@ -283,6 +318,7 @@ extern bool IsMainMenuActive();
 void CPda::UpdateCL()
 {
 	inherited::UpdateCL();
+    if (!CurrentGameUI()) return; // Presentation only; scheduled contacts still update.
 
 	if (!ParentIsActor() || Actor()->inventory().ActiveItem() != this)
 		return;
@@ -419,6 +455,7 @@ void CPda::shedule_Update(u32 dt)
 void CPda::OnMovementChanged(ACTOR_DEFS::EMoveCommand cmd)
 {
 	inherited::OnMovementChanged(cmd);
+    if (!CurrentGameUI()) return;
 
 	if (cmd == mcSprint)
 	{
@@ -436,6 +473,7 @@ void CPda::OnMovementChanged(ACTOR_DEFS::EMoveCommand cmd)
 
 bool CPda::Action(u16 cmd, u32 flags)
 {
+    if (!CurrentGameUI()) return inherited::Action(cmd, flags);
 	CUIPdaWnd* pda = &CurrentGameUI()->GetPdaMenu();
 
 	switch (cmd)
@@ -449,6 +487,16 @@ bool CPda::Action(u16 cmd, u32 flags)
 				{
 					if (GetState() != eHidden && GetState() != eHiding)
 					{
+						if (IsGameTypeCoop() && OnClient())
+						{
+							// The slot is the server's: the key (or ESC) goes to it as the PDA action and the
+							// server toggles from its own state, so hammering the key during an animation cannot
+							// desynchronise the sides. Sent here so it also works while the window holds the
+							// input (zoomed mode); the window closes with the hiding state.
+							pda->Enable(false);
+							Actor()->inventory().SendActionEvent(kACTIVE_JOBS, CMD_START);
+							return true;
+						}
 						Actor()->inventory().Activate(NO_ACTIVE_SLOT);
 						pda->HideDialog();
 						return true;
@@ -520,6 +568,12 @@ bool CPda::Action(u16 cmd, u32 flags)
 void CPda::OnMoveToRuck(const SInvItemPlace& prev)
 {
 	inherited::OnMoveToRuck(prev);
+    if (!CurrentGameUI())
+    {
+        StopCurrentAnimWithoutCallback();
+        SetPending(FALSE);
+        return;
+    }
 
 	if (!ParentIsActor())
 		return;
@@ -539,6 +593,7 @@ void CPda::OnMoveToRuck(const SInvItemPlace& prev)
 
 void CPda::UpdateHudAdditional(Fmatrix& trans)
 {
+    if (!CurrentGameUI()) return;
 	CActor* pActor = smart_cast<CActor*>(H_Parent());
 	if (!pActor)
 		return;
@@ -1015,6 +1070,7 @@ void CPda::OnH_B_Independent(bool just_before_destroy)
 {
 	inherited::OnH_B_Independent(just_before_destroy);
 	TurnOff();
+    if (!CurrentGameUI()) return;
 
 	if (!ParentIsActor() || !g_player_hud->attached_item(0))
 		return;

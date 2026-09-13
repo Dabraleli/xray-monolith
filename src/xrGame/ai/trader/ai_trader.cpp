@@ -150,11 +150,34 @@ void CAI_Trader::net_Export(NET_Packet& P)
 
 	//	P.w_float						(inventory().TotalWeight());
 	//	P.w_u32							(m_dwMoney);
+	if (IsGameTypeCoop())
+	{
+		// The animations the server Lua set (mob_trader: desk idle, hello...). Layout mirrored by
+		// CSE_ALifeTrader::UPDATE_Read/Write; without it a client shows the model collapsed.
+		P.w_u16(animation().coop_global_serial());
+		P.w_stringZ(animation().coop_global().c_str() ? animation().coop_global().c_str() : "");
+		P.w_u16(animation().coop_head_serial());
+		P.w_stringZ(animation().coop_head().c_str() ? animation().coop_head().c_str() : "");
+	}
 }
 
 void CAI_Trader::net_Import(NET_Packet& P)
 {
 	R_ASSERT(Remote());
+
+	if (IsGameTypeCoop())
+	{
+		const u16 global_serial = P.r_u16();
+		shared_str global;
+		P.r_stringZ(global);
+		const u16 head_serial = P.r_u16();
+		shared_str head;
+		P.r_stringZ(head);
+		animation().coop_apply(global_serial, global.c_str(), head_serial, head.c_str());
+		setVisible(TRUE);
+		setEnabled(TRUE);
+		return;
+	}
 
 	float fDummy;
 	P.r_float(fDummy);
@@ -292,6 +315,22 @@ void CAI_Trader::UpdateCL()
 
 	if (!GetScriptControl() && !bfScriptAnimation())
 		animation().update_frame();
+
+	if (IsGameTypeCoop() && strstr(Core.Params, "-coop_damage_probe"))
+	{
+		// Where the trader is and whether it can be drawn on this side (session 88: not seen on clients).
+		static xr_map<u16, u32> reports;
+		u32& last = reports[ID()];
+		if (Device.dwTimeGlobal - last >= 5000)
+		{
+			last = Device.dwTimeGlobal;
+			IKinematicsAnimated* animated = smart_cast<IKinematicsAnimated*>(Visual());
+			Msg("[COOP_TRADER] side=%s id=%u name=%s pos=%f,%f,%f visible=%u enabled=%u visual=%s animated=%u alive=%u remote=%u script=%u",
+			    OnServer() ? "server" : "client", ID(), cName().c_str(), Position().x, Position().y, Position().z,
+			    getVisible() ? 1 : 0, getEnabled() ? 1 : 0, cNameVisual().c_str(), animated ? 1 : 0, g_Alive() ? 1 : 0,
+			    Remote() ? 1 : 0, GetScriptControl() ? 1 : 0);
+		}
+	}
 }
 
 BOOL CAI_Trader::UsedAI_Locations()

@@ -157,12 +157,14 @@
 #	include "DestroyablePhysicsObject.h"
 
 #	include "game_sv_single.h"
+#	include "game_sv_coop.h"
 #	include "game_sv_deathmatch.h"
 #	include "game_sv_teamdeathmatch.h"
 #	include "game_sv_ArtefactHunt.h"
 #	include "game_sv_capture_the_artefact.h"
 
 #	include "game_cl_single.h"
+#	include "game_cl_coop.h"
 #	include "game_cl_deathmatch.h"
 #	include "game_cl_teamdeathmatch.h"
 #	include "game_cl_ArtefactHunt.h"
@@ -206,6 +208,7 @@ void CObjectFactory::register_classes()
 
 #ifndef NO_SINGLE
 	add<game_sv_Single>(CLSID_SV_GAME_SINGLE, "game_sv_single");
+	add<game_sv_Coop>(CLSID_SV_GAME_COOP, "game_sv_coop");
 #endif // #ifndef NO_SINGLE
 #ifndef	BENCHMARK_BUILD
 	add<game_sv_Deathmatch>(CLSID_SV_GAME_DEATHMATCH, "game_sv_deathmatch");
@@ -216,6 +219,7 @@ void CObjectFactory::register_classes()
 	//Client Game type
 #ifndef NO_SINGLE
 	add<game_cl_Single>(CLSID_CL_GAME_SINGLE, "game_cl_single");
+	add<game_cl_Coop>(CLSID_CL_GAME_COOP, "game_cl_coop");
 #endif // #ifndef NO_SINGLE
 #ifndef	BENCHMARK_BUILD
 	add<game_cl_Deathmatch>(CLSID_CL_GAME_DEATHMATCH, "game_cl_deathmatch");

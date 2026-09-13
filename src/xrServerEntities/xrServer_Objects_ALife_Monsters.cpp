@@ -323,7 +323,9 @@ shared_str CSE_ALifeTraderAbstract::specific_character()
 {
 #ifdef XRGAME_EXPORTS
 #pragma todo("Dima to Yura, MadMax : Remove that hacks, please!")
-	if (g_pGameLevel && Level().game && (GameID() != eGameIDSingle)) return m_SpecificCharacter;
+	// A-Life owns profile selection in coop; remote clients consume the serialized ID.
+    if (g_pGameLevel && Level().game && GameID() != eGameIDSingle &&
+        !(GameID() == eGameIDCoop && ai().get_alife())) return m_SpecificCharacter;
 #endif
 
 	if (m_SpecificCharacter.size())
@@ -601,6 +603,14 @@ CSE_ALifeTrader::CSE_ALifeTrader(LPCSTR caSection) : CSE_ALifeDynamicObjectVisua
 {
 	if (pSettings->section_exist(caSection) && pSettings->line_exist(caSection, "visual"))
 		set_visual(pSettings->r_string(caSection, "visual"));
+	coop_anim_serial = 0;
+	coop_head_serial = 0;
+}
+
+BOOL CSE_ALifeTrader::Net_Relevant()
+{
+	// Coop: the trader animates through updates (see UPDATE_Write); elsewhere as before (never).
+	return coop_net_runtime() ? TRUE : inherited1::Net_Relevant();
 }
 
 CSE_ALifeTrader::~CSE_ALifeTrader()
@@ -679,12 +689,27 @@ void CSE_ALifeTrader::UPDATE_Write(NET_Packet& tNetPacket)
 {
 	inherited1::UPDATE_Write(tNetPacket);
 	inherited2::UPDATE_Write(tNetPacket);
+	if (coop_net_runtime())
+	{
+		// Same layout as CAI_Trader::net_Export / net_Import.
+		tNetPacket.w_u16(coop_anim_serial);
+		tNetPacket.w_stringZ(coop_anim_global.c_str() ? coop_anim_global.c_str() : "");
+		tNetPacket.w_u16(coop_head_serial);
+		tNetPacket.w_stringZ(coop_anim_head.c_str() ? coop_anim_head.c_str() : "");
+	}
 };
 
 void CSE_ALifeTrader::UPDATE_Read(NET_Packet& tNetPacket)
 {
 	inherited1::UPDATE_Read(tNetPacket);
 	inherited2::UPDATE_Read(tNetPacket);
+	if (coop_net_runtime() && !tNetPacket.r_eof())
+	{
+		tNetPacket.r_u16(coop_anim_serial);
+		tNetPacket.r_stringZ(coop_anim_global);
+		tNetPacket.r_u16(coop_head_serial);
+		tNetPacket.r_stringZ(coop_anim_head);
+	}
 };
 
 bool CSE_ALifeTrader::interactive() const
@@ -2015,12 +2040,14 @@ void CSE_ALifeMonsterBase::UPDATE_Read(NET_Packet& tNetPacket)
 {
 	inherited1::UPDATE_Read(tNetPacket);
 	inherited2::UPDATE_Read(tNetPacket);
+    if (flags & 0x80) coop_layers.read(tNetPacket);
 }
 
 void CSE_ALifeMonsterBase::UPDATE_Write(NET_Packet& tNetPacket)
 {
 	inherited1::UPDATE_Write(tNetPacket);
 	inherited2::UPDATE_Write(tNetPacket);
+    if (flags & 0x80) coop_layers.write(tNetPacket);
 }
 
 void CSE_ALifeMonsterBase::load(NET_Packet& tNetPacket)
@@ -2191,6 +2218,7 @@ void CSE_ALifeHumanStalker::UPDATE_Write(NET_Packet& tNetPacket)
 	inherited1::UPDATE_Write(tNetPacket);
 	inherited2::UPDATE_Write(tNetPacket);
 	tNetPacket.w_stringZ(m_start_dialog);
+    if (flags & 0x80) coop_layers.write(tNetPacket);
 }
 
 void CSE_ALifeHumanStalker::UPDATE_Read(NET_Packet& tNetPacket)
@@ -2198,6 +2226,7 @@ void CSE_ALifeHumanStalker::UPDATE_Read(NET_Packet& tNetPacket)
 	inherited1::UPDATE_Read(tNetPacket);
 	inherited2::UPDATE_Read(tNetPacket);
 	tNetPacket.r_stringZ(m_start_dialog);
+    if (flags & 0x80) coop_layers.read(tNetPacket);
 }
 
 void CSE_ALifeHumanStalker::load(NET_Packet& tNetPacket)

@@ -351,7 +351,7 @@ void game_cl_GameState::shedule_Update(u32 dt)
 	{
 	case GAME_PHASE_INPROGRESS:
 		{
-			if (!IsGameTypeSingle())
+			if (!IsGameTypeSingle() && !IsGameTypeCoop())
 				m_WeaponUsageStatistic->Update();
 		}
 		break;

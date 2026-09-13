@@ -165,8 +165,10 @@ public:
 	IC void SetConditionDeltaTime(float DeltaTime) { m_fDeltaTime = DeltaTime; };
 
 
-	//скорость потери крови из всех открытых ран 
+	//скорость потери крови из всех открытых ран
 	float BleedingSpeed();
+	// Coop client: the server's bleeding speed replaces the local wound sum once received.
+	void SetRemoteBleeding(float value) { m_fRemoteBleeding = value; }
 
 	CObject* GetWhoHitLastTime() { return m_pWho; }
 	u16 GetWhoHitLastTimeID() { return m_iWhoID; }
@@ -213,6 +215,7 @@ protected:
 	float m_fPsyHealth; //здоровье
 	float m_fEntityMorale; //мораль
 	float m_fBleedSpeedK;
+	float m_fRemoteBleeding; // < 0: not received, use local wounds
 
 	//максимальные величины
 	//	float m_fSatietyMax;
