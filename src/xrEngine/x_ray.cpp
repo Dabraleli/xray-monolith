@@ -213,14 +213,19 @@ PROTECT_API void InitSettings()
 	path_excluder_predicate tmp_excluder(&tmp_ignore_pathes);
 	CInifile::allow_include_func_t tmp_functor;
 	tmp_functor.bind(&tmp_excluder, &path_excluder_predicate::is_allow_include);
-	pSettingsAuth = xr_new<CInifile>(
-		fname,
-		TRUE,
-		TRUE,
-		FALSE,
-		0,
-		tmp_functor
-	);
+	// The verification copy of system.ltx (the includes of the ignore list left out) is built from
+	// the reader, not by file name: the by-name constructor answers from the DLTX cache with the
+	// data pSettings just loaded - localization.ltx included - and the version code changed with the
+	// language ("Different version" between a Russian and an English client).
+	{
+		string_path path, folder;
+		_splitpath(fname, path, folder, 0, 0);
+		xr_strcat(path, sizeof(path), folder);
+		IReader* R = FS.r_open(fname);
+		CHECK_OR_EXIT(R, make_string("Cannot find file %s.\nReinstalling application may fix this problem.", fname));
+		pSettingsAuth = xr_new<CInifile>(R, path, tmp_functor);
+		FS.r_close(R);
+	}
 
 	FS.update_path(fname, "$game_config$", "game.ltx");
 	pGameIni = xr_new<CInifile>(fname, TRUE);
