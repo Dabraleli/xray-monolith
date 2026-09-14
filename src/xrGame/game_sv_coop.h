@@ -226,7 +226,8 @@ public:
     void Revive(u16 body_id, SDowned& downed, CActor* body);
     void KillDowned(u16 body_id, SDowned& downed, CActor* body, LPCSTR reason);
     void RespawnClient(xrClientData* client, CActor* corpse);
-    CSE_ALifeCreatureActor* SpawnBody(xrClientData* client, bool with_loadout);
+    // standing_from: the corpse whose rank and reputation the new body inherits (respawn)
+    CSE_ALifeCreatureActor* SpawnBody(xrClientData* client, bool with_loadout, const CInventoryOwner* standing_from = NULL);
     static bool IsDowned(u16 body_id);
     // The character from the join menu (IClient::coop_profile): faction and icon wait for the live
     // body and go on it through coop_server_actor.on_body_profile (game_relations follow the

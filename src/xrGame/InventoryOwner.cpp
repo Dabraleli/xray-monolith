@@ -470,33 +470,20 @@ void CInventoryOwner::SetCommunity(CHARACTER_COMMUNITY_INDEX new_community)
 		Actor()->RPC_UpdateFaction();
 }
 
-CInventoryOwner* CInventoryOwner::coop_shared_standing() const
-{
-	if (!IsGameTypeCoop() || !OnServer() || !g_actor) return NULL;
-	const CGameObject* self = smart_cast<const CGameObject*>(this);
-	if (!self || self == g_actor || !game_sv_Coop::BodyOf(self)) return NULL;
-	return smart_cast<CInventoryOwner*>(g_actor); // the world actor
-}
-
+// Coop: rank and reputation are the character's own - every player body has its standing (kept in
+// its server entity, carried to the new body on respawn); the info book stays the world's.
 CHARACTER_RANK_VALUE CInventoryOwner::Rank() const
 {
-	const CInventoryOwner* shared = coop_shared_standing();
-	return (shared ? shared : this)->CharacterInfo().Rank().value();
+	return CharacterInfo().Rank().value();
 }
 
 CHARACTER_REPUTATION_VALUE CInventoryOwner::Reputation() const
 {
-	const CInventoryOwner* shared = coop_shared_standing();
-	return (shared ? shared : this)->CharacterInfo().Reputation().value();
+	return CharacterInfo().Reputation().value();
 }
 
 void CInventoryOwner::SetRank(CHARACTER_RANK_VALUE rank)
 {
-	if (CInventoryOwner* shared = coop_shared_standing())
-	{
-		shared->SetRank(rank);
-		return;
-	}
 	CEntityAlive* EA = smart_cast<CEntityAlive*>(this);
 	VERIFY(EA);
 	if (IsGameTypeCoop() && !ai().get_alife())
@@ -526,11 +513,6 @@ void CInventoryOwner::ChangeRank(CHARACTER_RANK_VALUE delta)
 
 void CInventoryOwner::SetReputation(CHARACTER_REPUTATION_VALUE reputation)
 {
-	if (CInventoryOwner* shared = coop_shared_standing())
-	{
-		shared->SetReputation(reputation);
-		return;
-	}
 	CEntityAlive* EA = smart_cast<CEntityAlive*>(this);
 	VERIFY(EA);
 	if (IsGameTypeCoop() && !ai().get_alife())

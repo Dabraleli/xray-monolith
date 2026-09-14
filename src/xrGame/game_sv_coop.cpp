@@ -1353,8 +1353,10 @@ void game_sv_Coop::RespawnClient(xrClientData* client, CActor* corpse)
     // The corpse stays a plain server object; the client's assignment moves to the new body.
     client->owner = NULL;
     client->ps->GameID = u16(-1);
-    CSE_ALifeCreatureActor* body = SpawnBody(client, false);
-    Msg("[COOP_SERVER] RESPAWN client=%u player=%s corpse=%u body=%u", client->ID.value(), client->name.c_str(), corpse->ID(), body ? body->ID : u16(-1));
+    // The standing is the player's, not the body's: the new body starts with the corpse's rank and reputation.
+    CSE_ALifeCreatureActor* body = SpawnBody(client, false, corpse);
+    Msg("[COOP_SERVER] RESPAWN client=%u player=%s corpse=%u body=%u rank=%d reputation=%d", client->ID.value(), client->name.c_str(),
+        corpse->ID(), body ? body->ID : u16(-1), corpse->Rank(), corpse->Reputation());
     if (body)
     {
         string256 text;
@@ -2145,7 +2147,7 @@ void game_sv_Coop::PrepareClient(xrClientData* client)
 
 // A new body for the player at the level's entry (Anomaly's new-game start on Cordon, the world
 // actor's place elsewhere): on a first connection with the [loadout], after a death without it.
-CSE_ALifeCreatureActor* game_sv_Coop::SpawnBody(xrClientData* client, bool with_loadout)
+CSE_ALifeCreatureActor* game_sv_Coop::SpawnBody(xrClientData* client, bool with_loadout, const CInventoryOwner* standing_from)
 {
     CSE_ALifeCreatureActor* world = alife().graph().actor();
     Fvector position = world->o_Position;
@@ -2242,6 +2244,11 @@ CSE_ALifeCreatureActor* game_sv_Coop::SpawnBody(xrClientData* client, bool with_
     // body's spawn as its own from Process_spawn (WriteOwnedConnectSpawn), the others as a replica.
     client->owner = body;
     client->ps->GameID = body->ID;
+    if (standing_from) // before the spawn packet is written: the live body reads them from it
+    {
+        body->m_rank = standing_from->Rank();
+        body->m_reputation = standing_from->Reputation();
+    }
     if (!body->m_bOnline) alife().switch_online(body);
     Msg("[COOP_TRACE] CSE_ONLINE id=%u health=%f position=%f,%f,%f", body->ID, body->get_health(), VPUSH(body->o_Position));
     R_ASSERT(body->owner == server().GetServerClient());

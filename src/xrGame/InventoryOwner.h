@@ -209,9 +209,6 @@ public:
 	CHARACTER_RANK_VALUE Rank() const;
 	CHARACTER_REPUTATION_VALUE Reputation() const;
 	float Sympathy() const { return CharacterInfo().Sympathy(); }
-	// Coop server: player bodies share one standing (rank, reputation) with the world actor, the
-	// same way they share its info book; NULL everywhere else (own values).
-	CInventoryOwner* coop_shared_standing() const;
 
 protected:
 	CCharacterInfo* m_pCharacterInfo;
