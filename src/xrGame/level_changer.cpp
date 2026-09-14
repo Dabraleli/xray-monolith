@@ -145,6 +145,10 @@ void CLevelChanger::feel_touch_new(CObject* tpObject)
 	VERIFY(l_tpActor);
 	if (!l_tpActor->g_Alive())
 		return;
+	// Coop client: the changer is the server's — it invites the touching player (GE_COOP_LEVEL_INVITE)
+	// and moves everyone; the client has neither the reject patrol path nor the say.
+	if (IsGameTypeCoop() && !OnServer())
+		return;
 
 	{
 		Fvector rp, rr;
@@ -197,8 +201,10 @@ bool CLevelChanger::get_reject_pos(Fvector& p, Fvector& r)
 	if (m_ini_file && m_ini_file->section_exist("pt_move_if_reject"))
 	{
 		LPCSTR p_name = m_ini_file->r_string("pt_move_if_reject", "path");
-		const CPatrolPath* patrol_path = ai().patrol_paths().path(p_name);
+		const CPatrolPath* patrol_path = ai().patrol_paths().path(p_name, true);
 		VERIFY(patrol_path);
+		if (!patrol_path || patrol_path->vertex_count() < 2) // the path is the spawn's, not every side has it
+			return false;
 
 		const CPatrolPoint* pt;
 		pt = &patrol_path->vertex(0)->data();
@@ -222,6 +228,8 @@ bool CLevelChanger::feel_touch_contact(CObject* object)
 
 void CLevelChanger::update_actor_invitation()
 {
+	// Coop client: the server's invitation (feel_touch_new).
+	if (IsGameTypeCoop() && !OnServer()) return;
 	// Coop server: a silent changer keeps asking too — the change waits for the other players.
 	if (m_bSilentMode && !(IsGameTypeCoop() && OnServer())) return;
 	xr_vector<CObject*>::iterator it = feel_touch.begin();
