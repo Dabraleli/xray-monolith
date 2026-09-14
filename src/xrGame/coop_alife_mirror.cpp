@@ -211,6 +211,19 @@ void CCoopAlifeMirror::release(CSE_Abstract* object, bool)
 	if (ai().script_engine().functor("alife_release_id", release_id)) release_id(u32(object->ID));
 }
 
+void CCoopAlifeMirror::iterate_objects(const luabind::functor<bool>& functor)
+{
+	xr_vector<u16> ids;
+	ids.reserve(m_entities.size());
+	for (xr_map<u16, CSE_Abstract*>::const_iterator I = m_entities.begin(); I != m_entities.end(); ++I)
+		ids.push_back(I->first); // the functor may create or release: iterate a copy of the keys
+	for (u32 i = 0; i < ids.size(); ++i)
+	{
+		CSE_ALifeDynamicObject* dynamic = object(ids[i]);
+		if (dynamic && functor(dynamic)) break;
+	}
+}
+
 void CCoopAlifeMirror::unsupported(LPCSTR what)
 {
 	shared_str key(what);
@@ -256,6 +269,7 @@ void CCoopAlifeMirror::script_register(lua_State* L)
 		.def("switch_distance", &CCoopAlifeMirror::switch_distance)
 		.def("set_switch_distance", &CCoopAlifeMirror::set_switch_distance)
 		.def("object_count", &CCoopAlifeMirror::object_count)
+		.def("iterate_objects", &CCoopAlifeMirror::iterate_objects)
 		.def("uses_player_anchors", &CCoopAlifeMirror::uses_player_anchors)
 	];
 	module(L, "level")

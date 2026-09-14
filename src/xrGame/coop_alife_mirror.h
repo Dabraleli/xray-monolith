@@ -61,6 +61,9 @@ public:
 	void set_objects_per_update(u32 count) {}
 	void set_switch_distance(float) {}
 	u32 object_count() const { return count(); }
+	// alife():iterate_objects(functor) of the modded exes over what the mirror holds (the online
+	// objects seen here; the functor returns true to stop)
+	void iterate_objects(const luabind::functor<bool>& functor);
 	bool uses_player_anchors() const { return false; }
 	void unsupported(LPCSTR what);
 	static void script_register(lua_State* L);
