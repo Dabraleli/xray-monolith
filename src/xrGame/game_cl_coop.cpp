@@ -497,13 +497,15 @@ void game_cl_Coop::OnTalkMessage(NET_Packet& P)
         else if (actor->IsTalking()) actor->StopTalk();
         break;
     }
-    case 5: // another player's conversation, shown in the chat log
+    case 5: // another player's conversation, shown in the chat log ("speaker: phrase")
     {
         shared_str speaker, text;
         P.r_stringZ(speaker);
         P.r_stringZ(text);
+        string256 who;
+        xr_sprintf(who, "%s:", speaker.c_str() ? speaker.c_str() : "");
         if (ui->m_pMessagesWnd)
-            ui->m_pMessagesWnd->AddChatMessage(CStringTable().translate(text), speaker);
+            ui->m_pMessagesWnd->AddChatMessage(CStringTable().translate(text), who);
         break;
     }
     }

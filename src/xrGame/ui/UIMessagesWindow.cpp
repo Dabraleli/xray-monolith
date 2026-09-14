@@ -73,6 +73,15 @@ void CUIMessagesWindow::Init(float x, float y, float width, float height)
 	if (IsGameTypeSingle() || IsGameTypeCoop()) // coop as SP: the SP game log layout
 	{
 		CUIXmlInit::InitScrollView(xml, "sp_log_list", 0, m_pGameLog);
+		// Coop: the other players' conversations arrive as chat lines (game_cl_Coop::OnTalkMessage);
+		// without a chat log they go into this log, with the chat font.
+		if (IsGameTypeCoop() && xml.NavigateToNode("chat_log_list:font", 0))
+		{
+			u32 color;
+			CGameFont* pFont;
+			CUIXmlInit::InitFont(xml, "chat_log_list:font", 0, color, pFont);
+			m_pGameLog->SetTextAtrib(pFont, color);
+		}
 	}
 	else
 	{
@@ -153,7 +162,9 @@ void CUIMessagesWindow::AddIconedPdaMessage(GAME_NEWS_DATA* news)
 
 void CUIMessagesWindow::AddChatMessage(shared_str msg, shared_str author)
 {
-	m_pChatLog->AddChatMessage(*msg, *author);
+	// The SP layout (single, coop) has no chat log: the line goes into the game log.
+	CUIGameLog* log = m_pChatLog ? m_pChatLog : m_pGameLog;
+	if (log) log->AddChatMessage(*msg, *author);
 }
 
 /*
