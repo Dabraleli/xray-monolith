@@ -41,6 +41,7 @@
 #include "MainMenu.h"
 #include "xrEngine/XR_IOConsole.h"
 #include "actor.h"
+#include "game_cl_coop.h"
 #include "inventory_upgrade_manager.h"
 #include "player_hud.h"
 #include "UI/UIGameTutorial.h"
@@ -1112,6 +1113,10 @@ void CLevel::OnFrame()
 
 	if (m_bNeed_CrPr)
 		make_NetCorrectionPrediction();
+	// Coop client: the server restarts its world (level change, load) and the bodies leave first;
+	// until the disconnect the level's objects would tick with no actor (a poltergeist read it).
+	if (IsGameTypeCoop() && OnClient() && game_cl_Coop::RestartPending() && !Actor())
+		return;
 	if (!g_dedicated_server)
 	{
 		if (g_mt_config.test(mtMap))

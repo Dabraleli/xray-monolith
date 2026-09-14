@@ -38,10 +38,20 @@ void game_cl_Coop::OnPlayerStore(NET_Packet& P)
         Msg("! [COOP_CLIENT] PLAYER_STORE dropped: coop_client_actor.on_player_store is not loaded");
 }
 
+static bool coop_restart_pending = false;
+
+bool game_cl_Coop::RestartPending()
+{
+    return coop_restart_pending;
+}
+
 void game_cl_Coop::OnLuaMessage(NET_Packet& P)
 {
     shared_str text;
     P.r_stringZ(text);
+    // The world restarts on the server: from here on the level only waits for the disconnect.
+    if (text.c_str() && (!strncmp(text.c_str(), "levelchange|", 12) || !strncmp(text.c_str(), "reload|", 7)))
+        coop_restart_pending = true;
     if (text.c_str() && !strncmp(text.c_str(), "reply|", 6))
     {
         u32 request = 0, part = 0, parts = 0; int consumed = 0;
@@ -179,6 +189,7 @@ void game_cl_Coop::ScheduleReconnect()
     coop_reconnect.pending = !coop_reconnect.client_options.empty();
     coop_reconnect.next_attempt = Device.dwTimeGlobal + 20000; // the server reloads its world first
     coop_reconnect.deadline = Device.dwTimeGlobal + 180000;
+    coop_restart_pending = true;
     Msg("[COOP_CLIENT] RECONNECT scheduled options=%s", coop_reconnect.client_options.c_str());
 }
 
@@ -514,6 +525,7 @@ void game_cl_Coop::OnTalkMessage(NET_Packet& P)
 void game_cl_Coop::OnConnected()
 {
     inherited::OnConnected();
+    coop_restart_pending = false;
     coop_downed_bodies.clear(); // a fresh world: the server tells again who is down
     ReleaseRelayedSounds();
     m_relayed_shots.clear();

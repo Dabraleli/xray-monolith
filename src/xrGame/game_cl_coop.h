@@ -53,6 +53,9 @@ public:
     // and reconnects with its own client options until the server answers again (2 minutes).
     static void ScheduleReconnect();
     static void ReconnectUpdate(); // from CGamePersistent::OnFrame, level or no level
+    // The server announced the restart (levelchange|, reload| over the Lua channel, or M_CHANGE_LEVEL):
+    // the bodies leave first, and the level's objects must not tick without an actor (CLevel::OnFrame).
+    static bool RestartPending();
     // Downed players (server messages down/revived/died, kept by coop_client_actor through
     // level.coop_set_downed): the own body crawls with no weapon (ActorInput), a teammate's body
     // shows the revive hint and "use" on it asks the server to revive (GE_COOP_USE_OBJECT).
