@@ -26,6 +26,12 @@ public:
     // object id, -1 on refusal or timeout; the mirror answers alife():object(id) with a stand-in
     // entity until the real M_SPAWN arrives.
     static int CreateWait(u32 request, u32 timeout_ms);
+    // A text answer of the server's coop Lua to a request of this client's (reply|<request>|<part>|
+    // <parts>|<text>, the parts in order): the client's Lua waits for it the same way and reads the
+    // whole text - a world computation (the taskboard's offers) done where the world is.
+    struct SReply { u32 parts; u32 received; xr_string text; };
+    xr_map<u32, SReply> m_replies;
+    static LPCSTR WaitReply(u32 request, u32 timeout_ms); // NULL on timeout
     virtual void OnConnected();
     virtual void shedule_Update(u32 dt);
     // Per-player Lua state kept by the server (M_COOP_PLAYER_STORE): handed to coop_client_actor.on_player_store.

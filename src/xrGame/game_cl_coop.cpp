@@ -42,6 +42,17 @@ void game_cl_Coop::OnLuaMessage(NET_Packet& P)
 {
     shared_str text;
     P.r_stringZ(text);
+    if (text.c_str() && !strncmp(text.c_str(), "reply|", 6))
+    {
+        u32 request = 0, part = 0, parts = 0; int consumed = 0;
+        if (sscanf(text.c_str() + 6, "%u|%u|%u|%n", &request, &part, &parts, &consumed) >= 3 && parts && part >= 1 && part <= parts)
+        {
+            SReply& reply = m_replies[request];
+            if (part == 1) { reply.parts = parts; reply.received = 0; reply.text.clear(); }
+            if (part == reply.received + 1) { reply.text += text.c_str() + 6 + consumed; reply.received = part; }
+        }
+        return;
+    }
     if (text.c_str() && !strncmp(text.c_str(), "created|", 8))
     {
         // created|<request>|<id>|<section>|<parent>|x,y,z  (id -1: refused)
@@ -67,6 +78,34 @@ static game_cl_Coop* coop_client_game()
 {
     if (!IsGameTypeCoop() || OnServer() || !g_pGameLevel || !Level().game) return NULL;
     return static_cast<game_cl_Coop*>(Level().game);
+}
+
+LPCSTR game_cl_Coop::WaitReply(u32 request, u32 timeout_ms)
+{
+    static xr_string last;
+    game_cl_Coop* game = coop_client_game();
+    if (!game) return NULL;
+    const u32 started = GetTickCount();
+    xr_map<u32, SReply>::iterator it = game->m_replies.find(request);
+    while (it == game->m_replies.end() || it->second.received < it->second.parts)
+    {
+        if (GetTickCount() - started >= timeout_ms || Level().net_isDisconnected()) break;
+        Level().Flush_Send_Buffer();
+        Level().ClientReceive();
+        Sleep(1);
+        it = game->m_replies.find(request);
+    }
+    if (it == game->m_replies.end() || it->second.received < it->second.parts)
+    {
+        Msg("! [COOP_CLIENT] RPC request=%u: no answer in %u ms", request, timeout_ms);
+        if (it != game->m_replies.end()) game->m_replies.erase(it);
+        return NULL;
+    }
+    last = it->second.text;
+    game->m_replies.erase(it);
+    if (strstr(Core.Params, "-coop_damage_probe"))
+        Msg("[COOP_CLIENT] RPC request=%u bytes=%u waited=%u ms", request, u32(last.size()), GetTickCount() - started);
+    return last.c_str();
 }
 
 int game_cl_Coop::CreateWait(u32 request, u32 timeout_ms)
