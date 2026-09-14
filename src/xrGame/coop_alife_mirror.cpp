@@ -69,6 +69,22 @@ void CCoopAlifeMirror::remove(u16 id)
 	m_entities.erase(I);
 }
 
+void CCoopAlifeMirror::placeholder(u16 id, LPCSTR section, u16 parent, const Fvector& position)
+{
+	if (!section || !*section || !pSettings->section_exist(section)) return;
+	CSE_Abstract* entity = F_entity_Create(section);
+	if (!entity) return;
+	entity->ID = id;
+	entity->ID_Parent = parent;
+	entity->o_Position = position;
+	string256 name;
+	xr_sprintf(name, "%s%u", section, u32(id));
+	entity->set_name_replace(name);
+	CSE_ALifeDynamicObject* dynamic = smart_cast<CSE_ALifeDynamicObject*>(entity);
+	if (dynamic) dynamic->m_bOnline = false;
+	keep(entity);
+}
+
 CSE_Abstract* CCoopAlifeMirror::entity(u16 id) const
 {
 	xr_map<u16, CSE_Abstract*>::const_iterator I = m_entities.find(id);
@@ -151,12 +167,15 @@ bool CCoopAlifeMirror::has_info(const ALife::_OBJECT_ID& id, LPCSTR info_id)
 	return owner ? owner->HasInfo(info_id) : false;
 }
 
-static void lua_create(LPCSTR section, const Fvector& position, u32 level_vertex_id, GameGraph::_GRAPH_ID game_vertex_id, ALife::_OBJECT_ID id_parent)
+// coop_client_actor.alife_create_id asks the server and waits for the id (game_cl_Coop::CreateWait);
+// the mirror then holds the object, a stand-in until its spawn arrives.
+static CSE_Abstract* lua_create(CCoopAlifeMirror* mirror, LPCSTR section, const Fvector& position, u32 level_vertex_id, GameGraph::_GRAPH_ID game_vertex_id, ALife::_OBJECT_ID id_parent)
 {
-	::luabind::functor<void> create;
-	if (!ai().script_engine().functor("alife_create", create)) return;
-	if (id_parent != ALife::_OBJECT_ID(-1)) create(section, position, level_vertex_id, game_vertex_id, id_parent);
-	else create(section, position, level_vertex_id, game_vertex_id);
+	::luabind::functor<int> create;
+	if (!ai().script_engine().functor("coop_client_actor.alife_create_id", create)) return NULL;
+	const int id = create(section, position, level_vertex_id, game_vertex_id, int(id_parent == ALife::_OBJECT_ID(-1) ? -1 : id_parent));
+	if (id < 0) return NULL;
+	return mirror->entity(u16(id));
 }
 
 CSE_ALifeDynamicObject* CCoopAlifeMirror::create_by_spawn_id(ALife::_SPAWN_ID spawn_id)
@@ -167,26 +186,22 @@ CSE_ALifeDynamicObject* CCoopAlifeMirror::create_by_spawn_id(ALife::_SPAWN_ID sp
 
 CSE_Abstract* CCoopAlifeMirror::create(LPCSTR section, const Fvector& position, u32 level_vertex_id, GameGraph::_GRAPH_ID game_vertex_id)
 {
-	lua_create(section, position, level_vertex_id, game_vertex_id, ALife::_OBJECT_ID(-1));
-	return NULL;
+	return lua_create(this, section, position, level_vertex_id, game_vertex_id, ALife::_OBJECT_ID(-1));
 }
 
 CSE_Abstract* CCoopAlifeMirror::create2(LPCSTR section, const Fvector& position, u32 level_vertex_id, GameGraph::_GRAPH_ID game_vertex_id, ALife::_OBJECT_ID id_parent)
 {
-	lua_create(section, position, level_vertex_id, game_vertex_id, id_parent);
-	return NULL;
+	return lua_create(this, section, position, level_vertex_id, game_vertex_id, id_parent);
 }
 
 CSE_Abstract* CCoopAlifeMirror::create3(LPCSTR section, const Fvector& position, u32 level_vertex_id, GameGraph::_GRAPH_ID game_vertex_id, ALife::_OBJECT_ID id_parent, bool)
 {
-	lua_create(section, position, level_vertex_id, game_vertex_id, id_parent);
-	return NULL;
+	return lua_create(this, section, position, level_vertex_id, game_vertex_id, id_parent);
 }
 
 CSE_Abstract* CCoopAlifeMirror::create_ammo(LPCSTR section, const Fvector& position, u32 level_vertex_id, GameGraph::_GRAPH_ID game_vertex_id, ALife::_OBJECT_ID id_parent, int)
 {
-	lua_create(section, position, level_vertex_id, game_vertex_id, id_parent);
-	return NULL;
+	return lua_create(this, section, position, level_vertex_id, game_vertex_id, id_parent);
 }
 
 void CCoopAlifeMirror::release(CSE_Abstract* object, bool)

@@ -24,6 +24,7 @@
 #include "MainMenu.h"
 #include "CustomMonster.h"
 #include "sound_player.h"
+#include "coop_alife_mirror.h"
 
 void game_cl_Coop::OnPlayerStore(NET_Packet& P)
 {
@@ -41,6 +42,20 @@ void game_cl_Coop::OnLuaMessage(NET_Packet& P)
 {
     shared_str text;
     P.r_stringZ(text);
+    if (text.c_str() && !strncmp(text.c_str(), "created|", 8))
+    {
+        // created|<request>|<id>|<section>|<parent>|x,y,z  (id -1: refused)
+        u32 request = 0; int id = -1; string64 section = ""; int parent = -1; Fvector position = { 0, 0, 0 };
+        if (sscanf(text.c_str() + 8, "%u|%d|%63[^|]|%d|%f,%f,%f", &request, &id, section, &parent, &position.x, &position.y, &position.z) >= 2)
+        {
+            SCreateReply& reply = m_create_replies[request];
+            reply.id = id < 0 ? u16(-1) : u16(id);
+            reply.section = section;
+            reply.parent = parent < 0 ? u16(-1) : u16(parent);
+            reply.position = position;
+        }
+        return;
+    }
     ::luabind::functor<void> functor;
     if (ai().script_engine().functor("coop_client_actor.on_server_lua", functor))
         functor(text.c_str() ? text.c_str() : "");
@@ -52,6 +67,35 @@ static game_cl_Coop* coop_client_game()
 {
     if (!IsGameTypeCoop() || OnServer() || !g_pGameLevel || !Level().game) return NULL;
     return static_cast<game_cl_Coop*>(Level().game);
+}
+
+int game_cl_Coop::CreateWait(u32 request, u32 timeout_ms)
+{
+    game_cl_Coop* game = coop_client_game();
+    if (!game) return -1;
+    const u32 started = GetTickCount();
+    xr_map<u32, SCreateReply>::iterator it = game->m_create_replies.find(request);
+    while (it == game->m_create_replies.end())
+    {
+        if (GetTickCount() - started >= timeout_ms || Level().net_isDisconnected()) break;
+        Level().Flush_Send_Buffer(); // the request sits in the multipacket buffer until a frame flushes it
+        Level().ClientReceive(); // the reply and, with luck, the object's spawn; other messages run their Lua meanwhile
+        Sleep(1);
+        it = game->m_create_replies.find(request);
+    }
+    if (it == game->m_create_replies.end())
+    {
+        Msg("! [COOP_CLIENT] CREATE_WAIT request=%u: no answer in %u ms", request, timeout_ms);
+        return -1;
+    }
+    SCreateReply reply = it->second;
+    game->m_create_replies.erase(it);
+    if (reply.id == u16(-1)) return -1;
+    CCoopAlifeMirror* mirror = CCoopAlifeMirror::instance();
+    if (mirror && !mirror->entity(reply.id)) mirror->placeholder(reply.id, reply.section.c_str(), reply.parent, reply.position);
+    if (strstr(Core.Params, "-coop_damage_probe"))
+        Msg("[COOP_CLIENT] CREATE_WAIT request=%u id=%u section=%s parent=%u waited=%u ms", request, reply.id, reply.section.c_str(), reply.parent, GetTickCount() - started);
+    return int(reply.id);
 }
 
 u32 game_cl_Coop::TradePrice(u16 item_id)

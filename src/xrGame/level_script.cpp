@@ -2611,6 +2611,7 @@ void CLevel::script_register(lua_State* L)
 			def("send", &g_send), //allow the ability to send netpacket to level
 			def("coop_player_store", &g_coop_player_store), // coop: keep this player's Lua state on the server
 			def("coop_send_lua", &g_coop_send_lua), // coop: text between the coop-owned Lua of client and server
+			def("coop_create_wait", &game_cl_Coop::CreateWait), // coop client: wait for the server's answer to an item|create request
 			def("coop_travel", &g_coop_travel), // coop server: level change for a body through the changer at a point
 			def("coop_set_lua_owner", &g_coop_set_lua_owner), // coop server: an NPC's Lua runs for this player (companions)
 			def("coop_player_body", &g_coop_player_body), // coop server: the living body id of a connected player, 65535 if none

@@ -29,6 +29,10 @@ public:
 	static void on_destroy(u16 id);
 	void keep(CSE_Abstract* entity);
 	void remove(u16 id);
+	// The server's answer to a creation came before the object's spawn: a bare entity of the section
+	// with the id, parent and position stands in (alife():object(id) is valid at once, as in SP); the
+	// real M_SPAWN replaces it through keep().
+	void placeholder(u16 id, LPCSTR section, u16 parent, const Fvector& position);
 	u32 count() const { return u32(m_entities.size()); }
 	CSE_Abstract* entity(u16 id) const;
 

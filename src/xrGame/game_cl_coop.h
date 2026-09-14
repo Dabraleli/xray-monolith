@@ -16,7 +16,16 @@ class game_cl_Coop : public game_cl_Single
     bool m_item_probe_looted = false;
     u32 m_item_probe_last_report = 0;
     CCoopStoreAssembler m_store_parts;
+    // Replies to the client's ALife creations (created|<request>|<id>|<section>|<parent>|x,y,z from the
+    // server's coop Lua): CreateWait pumps the network until the one it waits for arrives.
+    struct SCreateReply { u16 id; shared_str section; u16 parent; Fvector position; };
+    xr_map<u32, SCreateReply> m_create_replies;
 public:
+    // Coop client: the Lua alife_create* shims send the request and wait here for the server's
+    // answer (SP returns the server object at once; mods read its id right away). Returns the
+    // object id, -1 on refusal or timeout; the mirror answers alife():object(id) with a stand-in
+    // entity until the real M_SPAWN arrives.
+    static int CreateWait(u32 request, u32 timeout_ms);
     virtual void OnConnected();
     virtual void shedule_Update(u32 dt);
     // Per-player Lua state kept by the server (M_COOP_PLAYER_STORE): handed to coop_client_actor.on_player_store.
