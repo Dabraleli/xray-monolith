@@ -226,6 +226,10 @@ void CScriptBinder::shedule_Update(u32 time_delta)
 		}
 		catch (...)
 		{
+			// A C++ exception (an access violation under /EHa included) ends the binder for good:
+			// say so, or the object silently stops running its Lua (a dedicated coop server lost
+			// its world actor to a HUD getter this way).
+			Msg("! script binder update of [%s][%u] raised an exception: the binder is dropped", owner ? owner->cName().c_str() : "?", owner ? owner->ID() : 0);
 			clear();
 		}
 	}

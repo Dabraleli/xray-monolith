@@ -577,12 +577,12 @@ void start_stop_menu(CUIDialogWnd* pDialog, bool bDoHideIndicators)
 
 void add_dialog_to_render(CUIDialogWnd* pDialog)
 {
-	CurrentGameUI()->AddDialogToRender(pDialog);
+	if (CurrentGameUI()) CurrentGameUI()->AddDialogToRender(pDialog);
 }
 
 void remove_dialog_to_render(CUIDialogWnd* pDialog)
 {
-	CurrentGameUI()->RemoveDialogToRender(pDialog);
+	if (CurrentGameUI()) CurrentGameUI()->RemoveDialogToRender(pDialog);
 }
 
 void hide_indicators()
@@ -2475,7 +2475,7 @@ void update_pda_news_from_uiwindow(CUIWindow* CUIWindowPItem) {
 		newsVectorRes->news_caption = pItem->UICaptionText.GetText();
 		newsVectorRes->news_text = pItem->UIMsgText.GetText();
 		newsVectorRes->texture_name = pItem->UIIcon.m_TextureName.c_str();
-		CurrentGameUI()->UpdatePda();
+		if (CurrentGameUI()) CurrentGameUI()->UpdatePda();
 	}
 	else {
 		Msg("![update_pda_news_from_uiwindow] cannot find news by text %s", news->news_text.c_str());

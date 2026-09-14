@@ -34,28 +34,36 @@
 
 using namespace luabind;
 
+// Without a game UI (a dedicated coop server) these answer nil instead of dereferencing NULL: an
+// access violation inside a script binder's update is swallowed by CScriptBinder::shedule_Update,
+// which then drops the binder without a word.
 CUIActorMenu* GetActorMenu()
 {
+	if (!CurrentGameUI()) return NULL;
 	return &CurrentGameUI()->GetActorMenu();
 }
 
 CUIPdaWnd* GetPDAMenu()
 {
+	if (!CurrentGameUI()) return NULL;
 	return &CurrentGameUI()->GetPdaMenu();
 }
 
 CUIMainIngameWnd* GetMainGameMenu()
 {
+	if (!CurrentGameUI()) return NULL;
 	return CurrentGameUI()->UIMainIngameWnd;
 }
 
 CUIMessagesWindow* GetMessagesMenu()
 {
+	if (!CurrentGameUI()) return NULL;
 	return CurrentGameUI()->m_pMessagesWnd;
 }
 
 u8 GrabMenuMode()
 {
+	if (!CurrentGameUI()) return 0;
 	return (u8)(CurrentGameUI()->GetActorMenu().GetMenuMode());
 }
 
