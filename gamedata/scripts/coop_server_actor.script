@@ -1619,27 +1619,67 @@ end
 -- player are the world's (task generation needs the NPCs' logic; the descriptions run dialog
 -- effects that write the fetch item into the actor's pstor), so the client asks and the board is
 -- refreshed here, for this body, and shipped as data; a task is accepted here as well.
-local taskboard_captured = {} -- body id -> its give_talk_message2 captures the details
+-- Engine (CScriptGameObject::AddIconedTalkMessage on the coop server): a talk message of the body the
+-- Lua runs for, before it is relayed to its client. GAMMA's taskboard collects the details of the
+-- offers it computes (its own catch is a property of the actor object; a body's calls pass it by).
+local taskboard_capture_until = {} -- body id -> time_global() until which its talk messages are the board's
+local taskboard_capture_task = nil -- the task whose deferred messages run right now (extra lines of its card)
+function on_talk_message(caption, text, texture, templ)
+    if not (pda_taskboard and pda_taskboard.get_tasks_details_capture_next) then return false end
+    if taskboard_capture_task then
+        local extra = taskboard_capture_task.coop_extra or {}
+        extra[#extra + 1] = { task_title = caption or '', task_details = text or '', task_icon = texture }
+        taskboard_capture_task.coop_extra = extra
+        return true
+    end
+    if pda_taskboard.get_tasks_details_capture_next() then
+        pda_taskboard.add_tasks_details({ task_title = caption, task_details = text, task_icon = texture })
+        return true
+    end
+    -- Whatever else a task script says while the board is being built stays off the feed.
+    local body = context_body()
+    return body ~= nil and (taskboard_capture_until[body:id()] or 0) > time_global()
+end
+
+-- The board steals the deferred messages of the task scripts it knows; a monkey patch (monkey_rioc:
+-- the location line) defers through the global CreateTimeEvent, and SP shows that line in the feed a
+-- frame later. Here every deferred zero-timer call made while a task is prepared runs right after
+-- it, and its messages become extra lines of that task's card.
+local function install_taskboard_prepare()
+    if not (pda_taskboard and pda_taskboard.prepare_task) or pda_taskboard.coop_prepare_wrapped then return end
+    pda_taskboard.coop_prepare_wrapped = true
+    local original = pda_taskboard.prepare_task
+    pda_taskboard.prepare_task = function(task_data)
+        local deferred = {}
+        local create = _G.CreateTimeEvent
+        _G.CreateTimeEvent = function(ev_id, act_id, timer, f, ...)
+            if timer == 0 and type(f) == 'function' then
+                deferred[#deferred + 1] = { f = f, p = { ... }, n = select('#', ...) }
+                return
+            end
+            return create(ev_id, act_id, timer, f, ...)
+        end
+        local ok, err = pcall(original, task_data)
+        _G.CreateTimeEvent = create
+        taskboard_capture_task = task_data
+        for _, d in ipairs(deferred) do
+            local ran, e = pcall(d.f, unpack(d.p, 1, d.n))
+            if not ran then printf('! [COOP_SERVER] TASKBOARD deferred call of %s failed: %s', tostring(task_data.task_id), tostring(e)) end
+        end
+        taskboard_capture_task = nil
+        if not ok then error(err) end
+    end
+end
+
 local function taskboard_request(body, verb, parts)
     if not (pda_taskboard and pda_taskboard.refresh_tasks) then return nil end
     if verb == 'refresh' then
         -- The board's own trick: the task scripts' time events are stolen during the refresh and
-        -- run afterwards with the details capture on; the SP override of give_talk_message2 sits on
-        -- the world actor object, so the body gets its own for the pass, and the stolen functions
-        -- run now (their queued run is cancelled) - the answer must carry the details.
-        -- The capture stays on the body (as SP keeps it on the actor): a task's details that come
-        -- through a nested time event arrive after the answer and must not reach the chat either.
-        if not taskboard_captured[body:id()] then
-            taskboard_captured[body:id()] = true
-            local original_message = body.give_talk_message2
-            body.give_talk_message2 = function(self, task_title, task_details, task_icon)
-                if pda_taskboard.get_tasks_details_capture_next() then
-                    pda_taskboard.add_tasks_details({ task_title = task_title, task_details = task_details, task_icon = task_icon })
-                else
-                    original_message(self, task_title, task_details, task_icon)
-                end
-            end
-        end
+        -- run afterwards with the details capture on (the engine asks on_talk_message below for
+        -- every talk message of a body); the stolen functions run now, their queued run is
+        -- cancelled - the answer must carry the details.
+        install_taskboard_prepare()
+        taskboard_capture_until[body:id()] = time_global() + 2000
         pda_taskboard.refresh_tasks()
         if z_taskboard_overrides and z_taskboard_overrides.ExecuteStolenFunctions then
             RemoveTimeEvent('z_list_programming_crimes', 'process_stolen_goods')
@@ -1654,6 +1694,14 @@ local function taskboard_request(body, verb, parts)
                                task_description = task.task_description, details_id = task.details_id }
                 local details = pda_taskboard.get_details(task)
                 if details then copy.details = { task_title = details.task_title, task_details = details.task_details, task_icon = details.task_icon } end
+                for _, extra in ipairs(task.coop_extra or {}) do
+                    local line = (extra.task_title ~= '' and (extra.task_title .. ' ') or '') .. extra.task_details
+                    if copy.details then
+                        copy.details.task_details = (copy.details.task_details or '') .. '\n' .. line
+                    else
+                        copy.details = { task_title = extra.task_title, task_details = extra.task_details, task_icon = extra.task_icon }
+                    end
+                end
                 out[effect][i] = copy
             end
         end

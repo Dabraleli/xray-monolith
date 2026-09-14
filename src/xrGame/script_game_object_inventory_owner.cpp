@@ -99,9 +99,14 @@ void CScriptGameObject::AddIconedTalkMessage(LPCSTR caption, LPCSTR text, LPCSTR
 
 void _AddIconedTalkMessage(LPCSTR caption, LPCSTR text, LPCSTR texture_name, LPCSTR templ_name)
 {
-	// Coop server: the dialog window is on the talking player's client.
+	// Coop server: the dialog window is on the talking player's client. The coop Lua may take the
+	// message instead (GAMMA's taskboard collects the details of the offers it computes here; its
+	// own catch sits on the actor object, which a body's calls pass by).
 	if (IsGameTypeCoop() && OnServer())
 	{
+		::luabind::functor<bool> taken;
+		if (ai().script_engine().functor("coop_server_actor.on_talk_message", taken) && taken(caption, text, texture_name, templ_name))
+			return;
 		game_sv_Coop::OnTalkMessage(caption, text, texture_name, templ_name);
 		return;
 	}
