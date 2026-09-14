@@ -732,8 +732,12 @@ BOOL CActor::net_Spawn(CSE_Abstract* DC)
 
 	if (IsGameTypeSingle() || IsGameTypeCoop())
 	{
-		Level().MapManager().AddMapLocation("actor_location", ID());
-		Level().MapManager().AddMapLocation("actor_location_p", ID());
+		// Coop: a body that arrives dead is a corpse; the marker is for players.
+		if (IsGameTypeSingle() || g_Alive())
+		{
+			Level().MapManager().AddMapLocation("actor_location", ID());
+			Level().MapManager().AddMapLocation("actor_location_p", ID());
+		}
 
 		m_statistic_manager = xr_new<CActorStatisticMgr>();
 	}

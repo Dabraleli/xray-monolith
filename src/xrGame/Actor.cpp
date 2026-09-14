@@ -880,6 +880,13 @@ void CActor::Die(CObject* who)
 #endif // #ifdef DEBUG
 	inherited::Die(who);
 
+	// Coop: a dead body is a corpse on the map, not a player marker (the player respawns in a new body).
+	if (IsGameTypeCoop())
+	{
+		Level().MapManager().RemoveMapLocation("actor_location", ID());
+		Level().MapManager().RemoveMapLocation("actor_location_p", ID());
+	}
+
 	if (OnServer())
 	{
 		u16 I = inventory().FirstSlot();
