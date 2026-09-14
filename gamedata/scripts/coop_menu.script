@@ -1,6 +1,6 @@
 -- Coop join screen. The engine calls install() before the main menu is built on a coop client
 -- started without -start (CMainMenu::ReloadUI): the main menu gets a "Network game" entry
--- (ui_coop_mm.xml through CUIMMShniaga:SetPage) that opens the join screen - server address, the
+-- (btn_coop, put into the game's own ui_mm_main.xml by modxml_coop_menu) that opens the join screen - server address, the
 -- persistent character name, and the SP character creation (ui_mm_faction_select: faction, icon,
 -- loadout, money) - whose result rides on the connection ("coop=" client option,
 -- game_sv_Coop::SpawnBody). The identity lives in axr_options.ltx [coop] on this machine.
@@ -194,7 +194,8 @@ function UICoopJoin:StartGame() -- UINewGame:OnStartGame after it wrote [charact
                                'new_game_economy_treasure', 'new_game_hardcore_mode', 'new_game_hardcore_mode_lives',
                                'new_game_hardcore_mode_regenerate', 'new_game_story_mode', 'new_game_azazel_mode',
                                'new_game_survival_mode', 'new_game_campfire_mode', 'new_game_conditions_mode',
-                               'new_game_opened_routes', 'new_game_warfare', 'new_game_timer_mode' }) do
+                               'new_game_opened_routes', 'new_game_warfare', 'new_game_timer_mode',
+                               'new_game_soulslike_mode' }) do
             cfg:w_value('character_creation', key)
         end
     end
@@ -278,15 +279,8 @@ function install()
         printf('! [COOP_CLIENT] MENU ui_main_menu.main_menu is not available')
         return
     end
-    -- the "Network game" entry on the main list (not in the in-game menu), its click opens the join screen
-    local init_controls = mm.InitControls
-    mm.InitControls = function(self)
-        init_controls(self)
-        if self.shniaga and not level.present() then
-            self.shniaga:SetPage(CUIMMShniaga.epi_main, 'ui_coop_mm.xml', 'menu_main')
-            self.shniaga:ShowPage(CUIMMShniaga.epi_main)
-        end
-    end
+    -- the "Network game" entry is on the main list already (modxml_coop_menu adds btn_coop to
+    -- ui_mm_main.xml as the engine reads it); its click opens the join screen
     mm.OnButton_coop = function(self) show(self) end
     local init_callbacks = mm.InitCallBacks
     mm.InitCallBacks = function(self)

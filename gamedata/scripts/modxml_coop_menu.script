@@ -1,0 +1,24 @@
+-- Coop: the "Network game" entry of the main menu. Instead of a copy of ui_mm_main.xml (which
+-- would drop what a modpack puts there - GAMMA adds btn_lastsave and btn_mcm), the game's own
+-- ui_mm_main(_16).xml gets <btn name="btn_coop"> after btn_newgame in the two main lists the engine
+-- builds when no level is loaded (CUIMMShniaga::InitShniaga: menu_main, menu_main_last_save).
+-- coop_menu.script answers the click. Gathered by dxml_core like every modxml_* script.
+local BUTTON = '<btn name="btn_coop" caption="ui_mm_coop" />'
+local FILES = { ['ui\\ui_mm_main.xml'] = true, ['ui\\ui_mm_main_16.xml'] = true }
+
+local function add_button(xml_obj, list)
+    if xml_obj:query(list .. ' > btn[name=btn_coop]')[1] then return end
+    local menu = xml_obj:query(list)[1]
+    if not menu then return end
+    local after = xml_obj:query(list .. ' > btn[name=btn_newgame]')[1]
+    local pos = after and xml_obj:getElementPosition(after)
+    xml_obj:insertFromXMLString(BUTTON, menu, pos and pos + 1 or 1)
+end
+
+function on_xml_read()
+    RegisterScriptCallback('on_xml_read', function(xml_file_name, xml_obj)
+        if not FILES[xml_file_name] then return end
+        add_button(xml_obj, 'menu_main')
+        add_button(xml_obj, 'menu_main_last_save')
+    end)
+end

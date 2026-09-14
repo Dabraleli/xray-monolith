@@ -239,8 +239,10 @@ local function send_world_callback(name, ...)
     local list = intercepts and intercepts[name]
     if not list then return original_send_callback(name, ...) end
     local listeners = {}
-    for listener in pairs(list) do listeners[#listeners + 1] = listener end -- some unregister themselves while running
-    for _, listener in ipairs(listeners) do
+    for listener, index in pairs(list) do listeners[#listeners + 1] = { listener, index } end -- some unregister themselves while running
+    table.sort(listeners, function(a, b) return (tonumber(a[2]) or 0) < (tonumber(b[2]) or 0) end) -- SP order: by registration
+    for _, entry in ipairs(listeners) do
+        local listener = entry[1]
         if list[listener] and not world_failed[listener] then
             local f, self_arg = listener, nil
             if type(listener) ~= 'function' then f, self_arg = listener[name], listener end
@@ -293,10 +295,46 @@ local function install_dynamic_anomalies()
     printf('[COOP_SERVER] DYNAMIC_ANOMALIES per-player distance')
 end
 
+-- The headless server has no HUD: get_hud() and the ActorMenu getters (get_maingame, get_actor_menu,
+-- get_pda_menu, get_messages_menu) are nil there, and a world listener that draws (Personal
+-- Adjustable Waypoint's server_entity_on_unregister: get_hud():RemoveDialogToRender(marker); Ammo
+-- Check moving HUD widgets in actor_on_first_update) would stop the server outside the pcall group
+-- or drop out of it. A stand-in answers every field with itself and every call with itself, so
+-- chains (get_maingame().m_ui_hud_states.m_ui_weapon_cur_ammo:GetWndPos()) are no-ops. Keys that
+-- start with "__" answer nil: luabind asks an argument for its class marker that way, and a table
+-- that answers everything would pass for a C++ object (its conversion then reads a null pointer).
+local hud_stub = setmetatable({}, {
+    __index = function(t, k) if type(k) == 'string' and string.sub(k, 1, 2) == '__' then return nil end return t end,
+    __call = function(t) return t end,
+})
+
+local function install_hud_stub()
+    local installed = {}
+    if get_hud() == nil then
+        _G.get_hud = function() return hud_stub end
+        installed[#installed + 1] = 'get_hud'
+    end
+    for _, name in ipairs({ 'get_maingame', 'get_actor_menu', 'get_pda_menu', 'get_messages_menu' }) do
+        if ActorMenu and ActorMenu[name] and ActorMenu[name]() == nil then
+            ActorMenu[name] = function() return hud_stub end
+            installed[#installed + 1] = name
+        end
+    end
+    if #installed > 0 then printf('[COOP_SERVER] HUD stand-in installed: %s', table.concat(installed, ', ')) end
+    -- The modded-exes Lua error window (callbacks_gameobject.COnLuaBindFatalError: a tempsave and a
+    -- message box) cannot be shown here; its ShowDialog is a C++ exception that ends the binder it
+    -- was raised in. The error itself still reaches the pcall of the listener (SERVICE_ERROR).
+    if get_hud() == hud_stub and _G.COnLuaBindFatalError then
+        _G.COnLuaBindFatalError = function(offender) printf('! [COOP_SERVER] LUA_ERROR_WINDOW suppressed: %s', tostring(offender)) end
+    end
+end
+
 function install_world_callbacks() -- module function: called from reinit above
     if original_send_callback then return end
     original_send_callback = _G.SendScriptCallback
     _G.SendScriptCallback = send_world_callback
+    install_hud_stub()
+    install_demonized_time_events()
     install_emissions()
     install_dynamic_anomalies()
     -- Meteorites and distant thunder are particles and sounds around the actor: presentation.
@@ -972,6 +1010,21 @@ local function mutant_loot_table(obj)
     return loot
 end
 
+-- Sets the upvalue `name` of f or, through the functions among f's upvalues (wrappers keep the
+-- original there), of the function that has it; depth-limited, the first match wins.
+function set_upvalue_deep(f, name, value, depth)
+    for i = 1, 60 do
+        local n, v = debug.getupvalue(f, i)
+        if not n then return false end
+        if n == name then
+            debug.setupvalue(f, i, value)
+            return true
+        end
+        if type(v) == 'function' and depth < 4 and set_upvalue_deep(v, name, value, depth + 1) then return true end
+    end
+    return false
+end
+
 local function mutant_loot_list(loot)
     local list = {}
     for sec, t in pairs(loot) do
@@ -985,7 +1038,7 @@ local function mutant_loot_offer(obj, kind)
     if not body or not obj then return end
     local loot = mutant_loot_table(obj)
     local list = mutant_loot_list(loot)
-    if load_var(obj, 'looted', nil) then list = {} end
+    if obj:clsid() ~= clsid.crow and load_var(obj, 'looted', nil) then list = {} end -- as UIMutantLoot:FillList (GAMMA: crows are lootable)
     if kind == 'mutant_loot' and #list == 0 then
         actor_menu.set_msg(1, 'st_body_useless', 3)
         return
@@ -1006,16 +1059,22 @@ local function mutant_loot_take(body, id, sections)
     local obj = level.object_by_id(id)
     if not obj or obj:alive() or body:position():distance_to(obj:position()) > 5 then return end
     local loot = mutant_loot_table(obj)
-    local huntkit = body:object('kit_hunt') ~= nil
+    -- Vanilla UIMutantLoot:Loot rolls a second part per section with the hunting kit; GAMMA's module
+    -- (Hunting Kit Rework, its option need_equipped_hkit) applies the kit inside loot_mutant instead
+    -- and rolls nothing here - the same roll twice would give more parts than its SP.
+    local known, option = pcall(ui_options.get, 'gameplay/general/need_equipped_hkit') -- errors on an unknown path
+    local rolls_here = not (known and option ~= nil)
+    local huntkit = rolls_here and body:object('kit_hunt') ~= nil
     local bonus = ini_sys:r_float_ex('kit_hunt', 'bonus_mutant_part_chance') or 0
+    local create = ui_mutant_loot and rawget(ui_mutant_loot, 'alife_create_item') or alife_create_item -- the module's own (GAMMA: condition by the knife)
     local looted = false
     for _, sec in ipairs(sections) do
         local t = loot[sec]
         if t and (t.count or 0) > 0 then
             looted = true
             if item_knife and item_knife.degradate then item_knife.degradate() end
-            alife_create_item(sec, body, mutant_part_props)
-            if huntkit and math.random(100) < bonus then alife_create_item(sec, body, mutant_part_props) end
+            create(sec, body, dup_table(mutant_part_props))
+            if huntkit and math.random(100) < bonus then create(sec, body, dup_table(mutant_part_props)) end
             t.count = t.count - 1
             if t.count <= 0 then loot[sec] = nil end
         end
@@ -1343,14 +1402,11 @@ function install_pda() -- module function: called from net_spawn above
         -- The interactions the world detects (smart terrains entered, dialog notes, emissions,
         -- mutants seen) unlock through create_interaction, behind a flag the SP actor update
         -- sets a few seconds in (a listener the world skips).
+        -- A mod may wrap create_interaction (Voiced Actor Refined): the flag is an upvalue of the
+        -- original, reached through the wrappers' function upvalues.
         if ui_pda_encyclopedia_tab.create_interaction then
-            for i = 1, 6 do
-                local name = debug.getupvalue(ui_pda_encyclopedia_tab.create_interaction, i)
-                if not name then break end
-                if name == 'interaction_enabled' then
-                    debug.setupvalue(ui_pda_encyclopedia_tab.create_interaction, i, true)
-                    break
-                end
+            if not set_upvalue_deep(ui_pda_encyclopedia_tab.create_interaction, 'interaction_enabled', true, 0) then
+                printf('! [COOP_SERVER] PDA interaction_enabled not found in create_interaction')
             end
         end
     end
@@ -1472,22 +1528,35 @@ local function item_verb(body, text, parts)
             ok, err = false, obj and 'not the body\'s item and not near' or 'no object'
         end
     elseif verb == 'create' then
-        -- item|create|<section>|body|<props>  or  item|create|<section>|world:x,y,z,lvid,gvid|<props>
+        -- item|create|<section>|body|<props>[|req:N]  or  item|create|<section>|world:x,y,z,lvid,gvid|<props>[|req:N]
+        -- With a request token the client waits for the answer (game_cl_Coop::CreateWait): SP
+        -- returns the server object at once and the mods read its id right away.
         local section, owner, props = parts[3], parts[4] or 'body', item_props(parts[5])
+        local request = parts[6] and string.match(parts[6], '^req:(%d+)$')
+        local created = nil
         if not section or not ini_sys:section_exist(section) then
             ok, err = false, 'no such section'
         elseif owner == 'body' then
-            alife_create_item(section, body, next(props) and props or nil)
+            created = alife_create_item(section, body, next(props) and props or nil)
         elseif string.sub(owner, 1, 6) == 'world:' then
             local w = str_explode(string.sub(owner, 7), ',')
             local pos = vector():set(tonumber(w[1]) or 0, tonumber(w[2]) or 0, tonumber(w[3]) or 0)
             if distance_between(body, { position = function() return pos end }) > 20 then
                 ok, err = false, 'too far'
             else
-                alife_create(section, pos, tonumber(w[4]) or body:level_vertex_id(), tonumber(w[5]) or body:game_vertex_id())
+                created = alife_create(section, pos, tonumber(w[4]) or body:level_vertex_id(), tonumber(w[5]) or body:game_vertex_id())
             end
         else
             ok, err = false, 'bad owner'
+        end
+        if request then
+            if created then
+                local p = created.position
+                level.coop_send_lua(body:id(), string.format('created|%s|%s|%s|%s|%s,%s,%s', request, created.id, created:section_name(),
+                    tostring(created.parent_id or 65535), p.x, p.y, p.z))
+            else
+                level.coop_send_lua(body:id(), string.format('created|%s|-1', request))
+            end
         end
     else
         ok, err = false, 'unknown verb'
@@ -1499,9 +1568,120 @@ local function item_verb(body, text, parts)
     end
 end
 
+
+-- Lua source of a value for the reply channel: tables (cycles cut), strings, finite numbers, booleans.
+local function encode_value(v, out, depth, seen)
+    local t = type(v)
+    if t == "table" then
+        if depth > 24 or seen[v] then out[#out + 1] = "nil" return end
+        seen[v] = true
+        out[#out + 1] = "{"
+        for k, val in pairs(v) do
+            local kt, vt = type(k), type(val)
+            if (kt == "string" or kt == "number") and (vt == "table" or vt == "string" or vt == "number" or vt == "boolean") then
+                out[#out + 1] = "["
+                encode_value(k, out, depth + 1, seen)
+                out[#out + 1] = "]="
+                encode_value(val, out, depth + 1, seen)
+                out[#out + 1] = ","
+            end
+        end
+        seen[v] = nil
+        out[#out + 1] = "}"
+    elseif t == "string" then
+        out[#out + 1] = (string.gsub(string.format("%q", v), "\\\n", "\\n"))
+    elseif t == "number" then
+        out[#out + 1] = (v ~= v or v == math.huge or v == -math.huge) and "nil" or string.format("%.17g", v)
+    elseif t == "boolean" then
+        out[#out + 1] = tostring(v)
+    else
+        out[#out + 1] = "nil"
+    end
+end
+
+local function encode(v)
+    local out = {}
+    encode_value(v, out, 0, {})
+    return table.concat(out)
+end
+
+-- The answer to a client's request (its last part is rpc:N): text in parts the Lua channel
+-- carries (game_cl_Coop::WaitReply puts them together and the client's Lua reads the whole).
+local function send_reply(body, request, text)
+    local size = 3500
+    local parts = math.max(1, math.ceil(#text / size))
+    for i = 1, parts do
+        level.coop_send_lua(body:id(), string.format('reply|%s|%s|%s|%s', request, i, parts, string.sub(text, (i - 1) * size + 1, i * size)))
+    end
+end
+
+-- GAMMA's PDA taskboard (pda_taskboard, ui_pda_taskboard_tab): the offers of the NPCs around the
+-- player are the world's (task generation needs the NPCs' logic; the descriptions run dialog
+-- effects that write the fetch item into the actor's pstor), so the client asks and the board is
+-- refreshed here, for this body, and shipped as data; a task is accepted here as well.
+local taskboard_captured = {} -- body id -> its give_talk_message2 captures the details
+local function taskboard_request(body, verb, parts)
+    if not (pda_taskboard and pda_taskboard.refresh_tasks) then return nil end
+    if verb == 'refresh' then
+        -- The board's own trick: the task scripts' time events are stolen during the refresh and
+        -- run afterwards with the details capture on; the SP override of give_talk_message2 sits on
+        -- the world actor object, so the body gets its own for the pass, and the stolen functions
+        -- run now (their queued run is cancelled) - the answer must carry the details.
+        -- The capture stays on the body (as SP keeps it on the actor): a task's details that come
+        -- through a nested time event arrive after the answer and must not reach the chat either.
+        if not taskboard_captured[body:id()] then
+            taskboard_captured[body:id()] = true
+            local original_message = body.give_talk_message2
+            body.give_talk_message2 = function(self, task_title, task_details, task_icon)
+                if pda_taskboard.get_tasks_details_capture_next() then
+                    pda_taskboard.add_tasks_details({ task_title = task_title, task_details = task_details, task_icon = task_icon })
+                else
+                    original_message(self, task_title, task_details, task_icon)
+                end
+            end
+        end
+        pda_taskboard.refresh_tasks()
+        if z_taskboard_overrides and z_taskboard_overrides.ExecuteStolenFunctions then
+            RemoveTimeEvent('z_list_programming_crimes', 'process_stolen_goods')
+            z_taskboard_overrides.ExecuteStolenFunctions()
+        end
+        local data = pda_taskboard.get_data()
+        local out = {}
+        for effect, list in pairs(data) do
+            out[effect] = {}
+            for i, task in ipairs(list) do
+                local copy = { npc_id = task.npc_id, task_id = task.task_id, has_details = task.has_details,
+                               task_description = task.task_description, details_id = task.details_id }
+                local details = pda_taskboard.get_details(task)
+                if details then copy.details = { task_title = details.task_title, task_details = details.task_details, task_icon = details.task_icon } end
+                out[effect][i] = copy
+            end
+        end
+        return out
+    elseif verb == 'accept' then
+        local task_id, npc_id = parts[3], tonumber(parts[4])
+        if task_id and npc_id then pda_taskboard.accept_task(task_id, npc_id) end
+        return { ok = true }
+    end
+    return nil
+end
+
 function on_client_lua(body, text)
     local parts = str_explode(text, '|')
     local kind = parts[1]
+    local request = parts[#parts] and string.match(parts[#parts], '^rpc:(%d+)$')
+    if request then
+        parts[#parts] = nil
+        local ok, result = pcall(function()
+            if kind == 'taskboard' then return taskboard_request(body, parts[2], parts) end
+            return nil
+        end)
+        if not ok then printf('! [COOP_SERVER] RPC %s failed: %s', text, tostring(result)) end
+        local payload = ok and result ~= nil and encode(result) or 'nil'
+        printf('[COOP_SERVER] RPC body=%s %s -> %s bytes', tostring(body:id()), text, tostring(#payload))
+        send_reply(body, request, payload)
+        return
+    end
     if kind == 'item' then
         item_verb(body, text, parts)
     elseif kind == 'mutant_loot_take' then
@@ -1560,10 +1740,11 @@ local task_completer = {}
 -- Deferred work of a body's Lua (CreateTimeEvent from a dialog line, a task reward, an item
 -- effect: tasks_fetch pays and takes the fetch item a second later) runs from the world actor's
 -- update, outside the body's scope. A timer created in a body's scope re-enters it when it fires.
-if _G.CreateTimeEvent and not _G.coop_time_event_wrapped then
-    _G.coop_time_event_wrapped = true
-    local create = _G.CreateTimeEvent
-    _G.CreateTimeEvent = function(ev_id, act_id, timer, f, ...)
+local function wrap_time_events(holder, label)
+    if type(holder) ~= 'table' or type(holder.CreateTimeEvent) ~= 'function' or holder.coop_time_event_wrapped then return end
+    holder.coop_time_event_wrapped = true
+    local create = holder.CreateTimeEvent
+    holder.CreateTimeEvent = function(ev_id, act_id, timer, f, ...)
         local body = context_body()
         if body and type(f) == 'function' then
             local body_id = body:id()
@@ -1572,7 +1753,7 @@ if _G.CreateTimeEvent and not _G.coop_time_event_wrapped then
                 local ok, result = pcall(f, ...)
                 level.coop_leave_body()
                 if not ok then
-                    printf('! [COOP_SERVER] TIME_EVENT body=%s %s/%s: %s', tostring(body_id), tostring(ev_id), tostring(act_id), tostring(result))
+                    printf('! [COOP_SERVER] TIME_EVENT body=%s %s/%s (%s): %s', tostring(body_id), tostring(ev_id), tostring(act_id), label, tostring(result))
                     return true
                 end
                 return result
@@ -1581,6 +1762,20 @@ if _G.CreateTimeEvent and not _G.coop_time_event_wrapped then
         end
         return create(ev_id, act_id, timer, f, ...)
     end
+end
+wrap_time_events(_G, '_g')
+
+-- GAMMA's demonized_time_events keeps its own queue behind the same signature; many of its scripts
+-- schedule their body work there. Loaded here on purpose when the file exists (a module referenced
+-- only from listeners is not loaded yet when the world starts).
+function install_demonized_time_events() -- module function: install_world_callbacks
+    if rawget(_G, 'demonized_time_events') == nil then
+        if not getFS():exist('$game_scripts$', 'demonized_time_events.script') then return end
+        local ok = pcall(function() return _G.demonized_time_events end)
+        if not ok then return end
+    end
+    wrap_time_events(rawget(_G, 'demonized_time_events'), 'demonized')
+    printf('[COOP_SERVER] TIME_EVENTS demonized_time_events wrapped')
 end
 
 -- A dialog line completes a task (xr_effects.set_task_completed and the story dialogs) in the

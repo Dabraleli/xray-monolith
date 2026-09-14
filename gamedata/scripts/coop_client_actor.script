@@ -75,8 +75,74 @@ end
 
 -- Anomaly helpers that index alife(). On the coop client alife() is nil: they read the mirrors, send
 -- the verbs or do nothing. Installed only when alife() is nil, so nothing changes where ALife exists.
+local client_globals_installed = false
+-- A request to the server's coop Lua answered as text (coop_server_actor.on_client_lua, rpc:N;
+-- game_cl_Coop::WaitReply pumps the network for the answer): the decoded value, or nil.
+local rpc_request = 0
+local function rpc(text, timeout)
+    if level.coop_wait_reply == nil then return nil end
+    rpc_request = rpc_request + 1
+    level.coop_send_lua(0, text .. '|rpc:' .. rpc_request)
+    local reply = level.coop_wait_reply(rpc_request, timeout or 3000)
+    if not reply then return nil end
+    local ok, value = pcall(function()
+        local chunk = loadstring('return ' .. reply)
+        return chunk and chunk() or nil
+    end)
+    if not ok then
+        printf('! [COOP_CLIENT] RPC reply unreadable: %s', tostring(value))
+        return nil
+    end
+    return value
+end
+
+-- GAMMA's PDA taskboard: the offers around the player are computed on the server for this body
+-- (pda_taskboard.refresh_tasks there) and shipped as data into the module's own tables, so
+-- ui_pda_taskboard_tab draws them unchanged; accepting gives the task on the server (the PDA
+-- mirror shows it). get_details answers from the shipped details.
+local taskboard_details = {}
+function install_taskboard()
+    if not getFS():exist('$game_scripts$', 'pda_taskboard.script') then return end -- GAMMA only
+    if not (pda_taskboard and pda_taskboard.refresh_tasks and pda_taskboard.get_data) or pda_taskboard.coop_installed then return end
+    pda_taskboard.coop_installed = true
+    local original_details = pda_taskboard.get_details
+    pda_taskboard.refresh_tasks = function()
+        local data = pda_taskboard.get_data()
+        for k in pairs(data) do data[k] = nil end
+        taskboard_details = {}
+        local board = rpc('taskboard|refresh', 5000)
+        if type(board) ~= 'table' then return end
+        local n = 0
+        for effect, list in pairs(board) do
+            data[effect] = {}
+            for i, task in ipairs(list) do
+                if task.details then
+                    taskboard_details[#taskboard_details + 1] = task.details
+                    task.details_id = #taskboard_details
+                    task.details = nil
+                else
+                    task.details_id = nil
+                end
+                data[effect][i] = task
+                n = n + 1
+            end
+        end
+        printf('[COOP_CLIENT] TASKBOARD offers=%s', tostring(n))
+    end
+    pda_taskboard.get_details = function(task_info)
+        if task_info and task_info.details_id and taskboard_details[task_info.details_id] then return taskboard_details[task_info.details_id] end
+        return original_details(task_info)
+    end
+    pda_taskboard.accept_task = function(task_id, npc_id)
+        local answer = rpc(string.format('taskboard|accept|%s|%s', tostring(task_id), tostring(npc_id)), 5000)
+        printf('[COOP_CLIENT] TASKBOARD accept %s from %s: %s', tostring(task_id), tostring(npc_id), answer and 'ok' or 'no answer')
+    end
+end
+
 local function install_client_globals()
+    if client_globals_installed then return end
     if level.coop_alife == nil or level.coop_alife() == nil then return end
+    client_globals_installed = true
     -- The ALife the SP scripts expect: the client mirror of the server entities seen here
     -- (CCoopAlifeMirror - alife():object/actor/story_object/level_name/has_info read from it,
     -- create/release turn into the item verbs below, the rest of the simulator is the server's).
@@ -84,6 +150,16 @@ local function install_client_globals()
     -- SP sets this in warfare.on_game_start (server only); an unset global auto-loads the script
     -- of that name as the module - a truthy WARFARE, and the contacts tab took the warfare page.
     _G.WARFARE = false
+    -- The world's task generation (a trader's or a sim stalker's offers) needs the NPC's logic
+    -- state, which lives on the server; GAMMA's taskboard tab asks for it from its own UI and read
+    -- nil db.storage (a fatal). The board goes through the server instead (install_taskboard).
+    if axr_task_manager then
+        axr_task_manager.generate_available_tasks = function(npc, is_sim)
+            local id = npc and npc:id()
+            if id then axr_task_manager.available_tasks[id] = {} end
+        end
+    end
+    install_taskboard()
     _G.has_alife_info = function(info_id)
         if world_infos[info_id] then return true end
         return db.actor ~= nil and db.actor:has_info(info_id) or false
@@ -94,21 +170,33 @@ local function install_client_globals()
     _G.gameobjects_registry = _G.gameobjects_registry or {}
     -- alife_create(section, position, level vertex, game vertex [, parent id]) - the Anomaly helper;
     -- with a parent the item goes into that owner (this body only), else into the world here.
+    local create_request = 0
+    -- A creation is the server's; the SP callers read the server object at once (its id for a
+    -- timer, its section), so the request carries a token and the client waits for the answer
+    -- (level.coop_create_wait, game_cl_Coop::CreateWait: the network is pumped for up to 1.5 s).
+    -- The answer puts a stand-in entity into the mirror until the real spawn arrives.
+    local function create_and_wait(text)
+        create_request = create_request + 1
+        item_verb(text .. '|req:' .. create_request)
+        local id = level.coop_create_wait and level.coop_create_wait(create_request, 1500) or -1
+        if id < 0 then return nil end
+        return alife():object(id)
+    end
     _G.alife_create = function(section, pos, lvid, gvid, parent_id)
         if type(pos) == 'userdata' and pos.id and type(pos.id) == 'function' then -- alife_create(sec, obj, with_id)
             local obj, with_id = pos, lvid
             if with_id and obj:id() ~= AC_ID then
-                printf('! [COOP_CLIENT] alife_create inside another owner is the server\'s: %s', section)
+                printf("! [COOP_CLIENT] alife_create inside another owner is the server's: %s", section)
             elseif with_id then
-                item_verb('item|create|' .. section .. '|body')
+                return create_and_wait('item|create|' .. section .. '|body|')
             else
                 local p = obj:position()
-                item_verb(string.format('item|create|%s|world:%f,%f,%f,%d,%d', section, p.x, p.y, p.z, obj:level_vertex_id(), obj:game_vertex_id()))
+                return create_and_wait(string.format('item|create|%s|world:%f,%f,%f,%d,%d|', section, p.x, p.y, p.z, obj:level_vertex_id(), obj:game_vertex_id()))
             end
         elseif parent_id and parent_id ~= 65535 then
-            if parent_id == AC_ID then item_verb('item|create|' .. section .. '|body') end
+            if parent_id == AC_ID then return create_and_wait('item|create|' .. section .. '|body|') end
         elseif pos then
-            item_verb(string.format('item|create|%s|world:%f,%f,%f,%d,%d', section, pos.x, pos.y, pos.z,
+            return create_and_wait(string.format('item|create|%s|world:%f,%f,%f,%d,%d|', section, pos.x, pos.y, pos.z,
                 tonumber(lvid) or db.actor:level_vertex_id(), tonumber(gvid) or db.actor:game_vertex_id()))
         end
         return nil
@@ -117,14 +205,26 @@ local function install_client_globals()
         if not section then return nil end
         local props = item_props_text(t)
         if type(obj) == 'table' and obj.pos then
-            item_verb(string.format('item|create|%s|world:%f,%f,%f,%d,%d|%s', section, obj.pos.x, obj.pos.y, obj.pos.z,
+            return create_and_wait(string.format('item|create|%s|world:%f,%f,%f,%d,%d|%s', section, obj.pos.x, obj.pos.y, obj.pos.z,
                 tonumber(obj.lvid) or db.actor:level_vertex_id(), tonumber(obj.gvid) or db.actor:game_vertex_id(), props))
         elseif obj == nil or (type(obj.id) == 'function' and obj:id() == AC_ID) or (type(obj.id) == 'number' and obj.id == AC_ID) then
-            item_verb('item|create|' .. section .. '|body|' .. props)
+            return create_and_wait('item|create|' .. section .. '|body|' .. props)
         else
             printf('! [COOP_CLIENT] alife_create_item for another owner is the server\'s: %s', section)
         end
         return nil
+    end
+    -- alife():create(...) of the mirror (CCoopAlifeMirror::create*): the id, -1 when refused
+    alife_create_id = function(section, pos, lvid, gvid, parent_id)
+        if not section then return -1 end
+        local se = nil
+        if parent_id and parent_id >= 0 and parent_id ~= 65535 then
+            se = _G.alife_create_item(section, { id = parent_id })
+        else
+            se = create_and_wait(string.format('item|create|%s|world:%f,%f,%f,%d,%d|', section, pos.x, pos.y, pos.z,
+                tonumber(lvid) or db.actor:level_vertex_id(), tonumber(gvid) or db.actor:game_vertex_id()))
+        end
+        return se and se.id or -1
     end
     _G.alife_release = function(obj)
         local id = obj and (type(obj.id) == 'function' and obj:id() or type(obj.id) == 'number' and obj.id)
@@ -277,6 +377,15 @@ local function store_send()
     if store_sent == 1 or store_probe() then
         printf("[COOP_CLIENT] PLAYER_STORE_SENT bytes=%s n=%s", tostring(#blob), tostring(store_sent))
     end
+end
+
+-- Called by the engine (game_cl_Coop::OnConnected) as soon as the client's game exists: the
+-- globals (alife() = the mirror, has_alife_info, the creation shims) must be in place before the
+-- engine's windows ask the scripts (the PDA ranking tab at its init), long before the body spawns.
+function on_client_level()
+    client_globals_installed = false -- a new world (level change, reconnect): the mirror is new
+    install_client_globals()
+    printf('[COOP_CLIENT] LEVEL globals installed')
 end
 
 -- Called by the engine (game_cl_Coop::OnPlayerStore) when the server returns the kept state:
@@ -1253,18 +1362,33 @@ local LOADER_OWN = {
     item_parts = true, item_weapon = true, item_device = true, ui_pda_encyclopedia_tab = true, ui_pda_radio_tab = true,
     itms_manager = true, sound_theme = true, axr_companions = true, ui_mutant_loot = true, ui_sleep_dialog = true,
     ui_sr_teleport = true, coop_client_actor = true, coop_server_actor = true, coop_menu = true, coop_spatial = true,
-    coop_activation_probe = true,
+    coop_activation_probe = true, modxml_coop_menu = true,
     -- SP starts these from the engine itself (script.ltx [common]), not from axr_main
     _G = true, _g_patches = true, dxml_core = true, class_registrator = true, game_registrator = true, ui_registrator = true,
     ce_new_attachable_item = true, ce_new_game_dm = true, sim_faction_brain_human = true, sim_faction_brain_mutant = true,
     ce_switcher = true, lua_help = true, rx_gl = true,
 }
 local LOADER_ALLOW = { xrs_dyn_music = true } -- presentation modules caught by a world prefix
+-- GAMMA (73 §4, side "server"): spawners, ZCP, level changes, NPC rules - world modules with an
+-- on_game_start whose client copy would spawn or move things it has no right to (the server
+-- refuses the creations as "too far", but the modules keep trying every update).
+local LOADER_WORLD_GAMMA = {
+    agroprom_drugkit_spawner_gamma = true, agroprom_underground_transition_randomizer = true,
+    grok_additional_storyline_npc_invincible = true, grok_artefact_despawner = true,
+    grok_artefacts_random_spawner = true, grok_no_north_faction_in_south = true, grok_no_npc_friendly_fire = true,
+    grok_sin_allied_to_mutants = true, grok_sniper_remover = true, grok_stashes_on_corpses = true,
+    grok_vehicles_spawner = true, guards_spawner = true, hxf_tough_important_npcs = true, lc_custom = true,
+    lc_extra_transitions = true, levelchangecars = true, night_mutants = true, safespawn = true,
+    schemes_ai_gamma = true, smr_civil_war = true, smr_pop = true, smr_config = true, smr_loot = true,
+    squads_filler = true, stealth_kill_detection = true, hidden_threat = true, xrs_facer = true,
+    z_gavrilenko_tasks_fix = true, z_nta_stashes_utils = true, z_ph_door_bar_arena_remover = true,
+}
 local loader_started = {} -- module -> true (started) | string (error)
 
 local function loader_skips(name)
+    name = string.lower(name) -- the archives list _g.script, the folders _G.script
     if LOADER_ALLOW[name] then return false end
-    if LOADER_WORLD[name] or LOADER_OWN[name] then return true end
+    if LOADER_WORLD[name] or LOADER_OWN[name] or LOADER_WORLD_GAMMA[name] or name == '_g' then return true end
     for _, prefix in ipairs(LOADER_WORLD_PREFIX) do
         if string.sub(name, 1, #prefix) == prefix then return true end
     end
@@ -1301,11 +1425,12 @@ local function start_script_modules()
             printf('! [COOP_LOADER] FAIL load %s: %s', name, tostring(module))
         end
     end
-    -- pass 2: on_game_start
+    -- pass 2: on_game_start - a module's own (rawget: a module table falls back to _G, and a
+    -- global on_game_start a mod leaked would be started once per module; it is started once below)
     local started, failed = 0, 0
     for _, name in ipairs(loaded) do
         local module = rawget(_G, name)
-        if module and type(module.on_game_start) == 'function' then
+        if module and type(rawget(module, 'on_game_start')) == 'function' then
             local ok, err = pcall(module.on_game_start)
             if ok then
                 started = started + 1
@@ -1317,6 +1442,12 @@ local function start_script_modules()
                 printf('! [COOP_LOADER] FAIL start %s: %s', name, tostring(err))
             end
         end
+    end
+    local leaked = rawget(_G, 'on_game_start')
+    if type(leaked) == 'function' then
+        local info = debug.getinfo(leaked, 'S')
+        local ok, err = pcall(leaked)
+        printf('%s[COOP_LOADER] global on_game_start (%s) started once: %s', ok and '' or '! ', tostring(info and info.short_src), ok and 'ok' or tostring(err))
     end
     _G.COnLuaBindFatalError = fatal_window
     printf('[COOP_LOADER] modules=%s loaded=%s started=%s failed=%s probe=%s', tostring(#names), tostring(#loaded),
