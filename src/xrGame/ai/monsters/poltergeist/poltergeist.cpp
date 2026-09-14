@@ -330,8 +330,10 @@ void CPoltergeist::UpdateCL()
 
 	ability()->update_frame();
 
-	if (Actor()->memory().visual().visible_now(this) &&
-		Actor()->Position().distance_to(Position()) < 85.f)
+	// No actor while a coop client changes level or respawns (its body is released first).
+	CActor* actor = Actor();
+	if (actor && actor->memory().visual().visible_now(this) &&
+		actor->Position().distance_to(Position()) < 85.f)
 	{
 		MakeMeCrow();
 	}
