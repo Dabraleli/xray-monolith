@@ -391,8 +391,11 @@ float CVisualMemoryManager::get_visible_value(const CGameObject* game_object, fl
 		return (current_state().m_visibility_threshold);
 
 	//Alundaio: hijack not_yet_visible_object to lua
+	// Coop client: the NPCs' memory is the server's; the replicas here keep the native estimate and
+	// do not run the script (it reads db.actor and the world - Stealth Overhaul's version stopped a
+	// client before its body spawned).
 	::luabind::functor<float> funct;
-	if (ai().script_engine().functor("visual_memory_manager.get_visible_value", funct))
+	if (!(IsGameTypeCoop() && OnClient()) && ai().script_engine().functor("visual_memory_manager.get_visible_value", funct))
 		return (funct(m_object ? m_object->lua_game_object() : 0, game_object ? game_object->lua_game_object() : 0,
 		              time_delta, current_state().m_time_quant, luminocity, current_state().m_velocity_factor,
 		              object_velocity, distance, object_distance, always_visible_distance)) * g_ai_vision_speed_boost * m_vision_speed;
