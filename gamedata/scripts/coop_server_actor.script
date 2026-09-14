@@ -697,6 +697,7 @@ function install_message_relay() -- module function: called from net_spawn above
             return original_hide()
         end
     end
+    install_sound_relay()
     if not actor_menu or not actor_menu.set_msg then return end
     local original = actor_menu.set_msg
     actor_menu.set_msg = function(typ, msg, tm, clr)
@@ -707,6 +708,25 @@ function install_message_relay() -- module function: called from net_spawn above
         end
         return original(typ, msg, tm, clr)
     end
+end
+
+-- A player's script sounds: xr_sound.set_sound_play(AC_ID, theme) by the world's Lua in a body's
+-- context (the PDA's task/tip/news beeps of news_manager and xr_effects, quest voice messages,
+-- the campfire's matches) plays on that player's client (sound|theme) - the server has no audio.
+-- The server still runs its copy: the themes' objects (a message delay reads snd_obj:length()).
+-- NPC and object sounds are 3D sounds of the world and are not the player's.
+function install_sound_relay() -- module function: called from install_message_relay above
+    if not (xr_sound and xr_sound.set_sound_play and sound_theme) or xr_sound.coop_relay then return end
+    xr_sound.coop_relay = true
+    local original = xr_sound.set_sound_play
+    xr_sound.set_sound_play = function(npc_id, sound, faction, point)
+        local theme = sound and sound_theme.theme and sound_theme.theme[sound]
+        if theme and theme.class_id == 'actor_sound' and db.actors and db.actors[npc_id] then
+            level.coop_send_lua(npc_id, 'sound|' .. tostring(sound))
+        end
+        return original(npc_id, sound, faction, point)
+    end
+    printf('[COOP_SERVER] SOUND relay installed')
 end
 
 -- Game tutorials (game.start_tutorial from zone logic: "press use to sleep" in sleep zones, campfire
@@ -1202,7 +1222,7 @@ end
 -- taken, dialogs, levels) and evaluate the achievement functors (the ranking window does that
 -- in SP too) and ask: item|note|sec, item|article|sec, item|achievement|name|message.
 local RELATION_FACTIONS = { 'stalker', 'dolg', 'freedom', 'csky', 'ecolog', 'killer', 'army', 'bandit', 'monolith', 'renegade', 'greh', 'isg' }
-local last_stats = nil
+local last_stats = {} -- body id -> the stats text last sent to its client
 local next_stats = 0
 local rankings_sent = {} -- body id -> { [index] = text last sent }
 
@@ -1257,7 +1277,9 @@ local function unlock_quiet(kind, section)
     return true
 end
 
-local function stats_text(world)
+-- The statistics, achievements and visited levels are the world's (shared); the rank and the
+-- reputation are the body's own - every player has a standing (standing_per_body).
+local function stats_text(body)
     local counts, ach, levels = {}, {}, {}
     for name, st in pairs(game_statistics.actor_statistics or {}) do
         if (st.count or 0) ~= 0 then table.insert(counts, name .. '=' .. tostring(st.count)) end
@@ -1269,25 +1291,61 @@ local function stats_text(world)
         if visited then table.insert(levels, name) end
     end
     table.sort(counts); table.sort(ach); table.sort(levels)
-    return string.format('stats|%d|%d|%s|%s|%s', world:character_rank(), world:character_reputation(),
+    return string.format('stats|%d|%d|%s|%s|%s', body:character_rank(), body:character_reputation(),
         table.concat(counts, ','), table.concat(ach, ','), table.concat(levels, ','))
 end
 
-send_stats = function(target) -- forward-declared near the top
+send_stats = function(target) -- forward-declared near the top; target: a body id
     if not (game_statistics and db.actor) then return end
-    local world = db.storage[alife():actor().id] and db.storage[alife():actor().id].object
-    if world then level.coop_send_lua(target, stats_text(world)) end
+    local body = db.actors and db.actors[target] or (db.storage[target] and db.storage[target].object)
+    if body then
+        local text = stats_text(body)
+        last_stats[target] = text
+        level.coop_send_lua(target, text)
+    end
 end
 
 local function update_stats(self)
     local now = time_global()
     if now < next_stats or not game_statistics then return end
     next_stats = now + 2000
-    local text = stats_text(self.object)
-    if text ~= last_stats then
-        last_stats = text
-        level.coop_send_lua(65535, text)
+    for id, body in pairs(db.actors or {}) do
+        local text = stats_text(body)
+        if text ~= last_stats[id] then
+            last_stats[id] = text
+            level.coop_send_lua(id, text)
+        end
     end
+end
+
+-- The SP "rank/reputation increased/decreased" tips compare the actor's standing with one
+-- remembered value (game_statistics.actor_miscellaneous); with a standing per body the memo is
+-- per body too, or every change of context would announce a change. A body's first check
+-- remembers what it has (no tip for the values it came with).
+local standing_memo = {} -- body id -> { actual_rank = , actual_rept = }
+local function install_standing()
+    if not (game_statistics and game_statistics.check_for_rank_change and game_statistics.check_for_reputation_change) then return end
+    if game_statistics.coop_standing then return end
+    game_statistics.coop_standing = true
+    local function per_body(original, key, getter)
+        return function(suppress)
+            local body = db.actor
+            local id = body and body:id()
+            local misc = game_statistics.actor_miscellaneous
+            if not (id and misc) then return original(suppress) end
+            local memo = standing_memo[id]
+            if not memo then
+                memo = { actual_rank = body:character_rank(), actual_rept = body:character_reputation() }
+                standing_memo[id] = memo
+            end
+            misc[key] = memo[key]
+            original(suppress)
+            memo[key] = misc[key]
+        end
+    end
+    game_statistics.check_for_rank_change = per_body(game_statistics.check_for_rank_change, 'actual_rank')
+    game_statistics.check_for_reputation_change = per_body(game_statistics.check_for_reputation_change, 'actual_rept')
+    printf('[COOP_SERVER] STANDING per body installed')
 end
 
 local function clean_text(text)
@@ -1389,7 +1447,39 @@ send_relations = function(body) -- forward-declared near the top
     level.coop_send_lua(body:id(), 'relations|done')
 end
 
+-- A task's news (news_manager.send_task: new, completed, failed, updated - the card in the feed and
+-- the pda_task sound) is every player's: the tasks are shared (the PDA mirror gives the task itself
+-- to everyone). SP tells its one actor; here the original tells the body of the context, then runs
+-- once more in the scope of every other living body (their news and sound relay to their clients).
+-- With no body in the context the news already went to everyone (a world-context news broadcasts).
+local task_news_relaying = false
+local function install_task_news()
+    if not (news_manager and news_manager.send_task) or news_manager.coop_task_news then return end
+    news_manager.coop_task_news = true
+    local original = news_manager.send_task
+    news_manager.send_task = function(actor, kind, tsk)
+        local result = original(actor, kind, tsk)
+        if task_news_relaying then return result end
+        local origin = context_body()
+        if not origin then return result end
+        local origin_id = origin:id()
+        task_news_relaying = true
+        for id, body in pairs(db.actors or {}) do
+            if id ~= origin_id and body:alive() and level.coop_enter_body(id) then
+                local ok, err = pcall(original, db.actor, kind, tsk)
+                level.coop_leave_body()
+                if not ok then printf('! [COOP_SERVER] TASK_NEWS body=%s: %s', tostring(id), tostring(err)) end
+            end
+        end
+        task_news_relaying = false
+        return result
+    end
+    printf('[COOP_SERVER] TASK_NEWS for every player installed')
+end
+
 function install_pda() -- module function: called from net_spawn above
+    install_standing()
+    install_task_news()
     if ui_pda_encyclopedia_tab then
         -- The categories and the locked tables come from on_game_load, a listener the world
         -- skips (WORLD_SKIP): without them nothing is locked and nothing can unlock.

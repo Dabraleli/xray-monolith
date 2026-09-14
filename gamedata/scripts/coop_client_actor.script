@@ -1258,6 +1258,11 @@ function on_server_lua(text)
         mutant_loot_show(tonumber(parts[2]), list, kind == 'mutant_loot_done')
     elseif kind == 'actor_msg' then
         actor_menu.set_msg(tonumber(parts[2]) or 1, game.translate_string(parts[3] or ''), tonumber(parts[4]) or 5)
+    elseif kind == 'sound' then
+        -- A script sound of this player played by the server's Lua (PDA beeps, quest voice messages).
+        if xr_sound and sound_theme and sound_theme.theme and parts[2] and sound_theme.theme[parts[2]] then
+            xr_sound.set_sound_play(AC_ID, parts[2])
+        end
     elseif kind == 'weather' then
         apply_weather(parts[2], parts[3], parts[4])
     elseif kind == 'surge' or kind == 'psi' then
