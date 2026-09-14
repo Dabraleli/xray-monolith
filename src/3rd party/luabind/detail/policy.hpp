@@ -684,6 +684,7 @@ namespace luabind { namespace detail
 			
 			object_rep* obj = static_cast<object_rep*>(lua_touserdata(L, index));
 			assert((obj != nullptr) && "internal error, please report"); // internal error
+			if (obj == nullptr) return 0; // not a userdata after all (a table that answered the class marker): a null pointer, not a read of one
 			const class_rep* crep = obj->crep();
 
 			T* ptr = reinterpret_cast<T*>(crep->convert_to(LUABIND_TYPEID(T), obj, target));
