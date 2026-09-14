@@ -329,6 +329,9 @@ void xrServer::OnBuildVersionRespond(IClient* CL, NET_Packet& P)
 
 	if (_our != _him)
 	{
+		// Coop: both sides log their file checksums with -coop_auth_debug; the codes name the mismatch.
+		if (game->Type() == eGameIDCoop)
+			Msg("! [COOP_SERVER] VERSION_MISMATCH client=%u ours=%llu theirs=%llu", CL->ID.value(), _our, _him);
 		SendConnectResult(CL, 0, ecr_data_verification_failed, "Data verification failed. Cheater?");
 	}
 	else
