@@ -1004,6 +1004,12 @@ bool CHudItem::ParentIsActor()
 	if (!EA)
 		return false;
 
+	// Coop client: the HUD, its sounds, effects and the second viewport are the local player's.
+	// Another player's body is an actor too, but its items are world objects here (its weapon
+	// showing attached itself to this HUD: "the animations break when there are two of us").
+	if (IsGameTypeCoop() && OnClient() && O != Level().CurrentControlEntity())
+		return false;
+
 	return !!EA->cast_actor();
 }
 
