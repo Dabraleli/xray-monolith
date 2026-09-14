@@ -6,6 +6,7 @@
 #include "../xrEngine/igame_persistent.h"
 
 #include "ai_space.h"
+#include "script_engine.h"
 #include "game_cl_base.h"
 #include "NET_Queue.h"
 #include "file_transfer.h"
@@ -251,6 +252,14 @@ bool CLevel::net_start_client6()
 		{
 			pApp->LoadEnd();
 			return true;
+		}
+		// Coop client: the coop Lua sets its globals (alife() = the mirror, has_alife_info, the
+		// creation shims) before the game UI is built - its windows ask the scripts at their init
+		// (the PDA ranking tab: pda.coc_rankings_can_show -> has_alife_info -> alife()).
+		if (IsGameTypeCoop() && !OnServer())
+		{
+			::luabind::functor<void> functor;
+			if (ai().script_engine().functor("coop_client_actor.on_client_level", functor)) functor();
 		}
 		if (!g_dedicated_server)
 		{
