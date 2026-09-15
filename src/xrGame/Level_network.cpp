@@ -33,6 +33,12 @@ void CLevel::remove_objects()
 {
 	if (!IsGameTypeSingle()) Msg("CLevel::remove_objects - Start");
 	BOOL b_stored = psDeviceFlags.test(rsDisableObjectsAsCrows);
+	// Coop client: the server destroyed this player's body before the disconnect (a level change
+	// teleports it offline), so the items it held are parentless here and their UpdateCL still
+	// expects Actor() (CCustomDevice::UpdateVisibility crashed). The teardown only needs the
+	// destroy queue: the objects still alive are not updated any more.
+	const bool destroy_only = IsGameTypeCoop() && OnClient();
+	if (destroy_only) Objects.destroy_only = true;
 
 	int loop = 5;
 	while (loop)
@@ -71,6 +77,8 @@ void CLevel::remove_objects()
 			Msg("Objects removal next loop. Active objects count=%d", Objects.o_count());
 		}
 	}
+
+	Objects.destroy_only = false;
 
 	BulletManager().Clear();
 	ph_commander().clear();

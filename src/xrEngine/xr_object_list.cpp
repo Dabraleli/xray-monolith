@@ -25,7 +25,8 @@ BOOL debug_destroy = TRUE;
 #endif
 
 CObjectList::CObjectList() :
-	m_owner_thread_id(GetCurrentThreadId())
+	m_owner_thread_id(GetCurrentThreadId()),
+	destroy_only(false)
 {
 	ZeroMemory(map_NETID, 0xffff * sizeof(CObject*));
 }
@@ -200,7 +201,7 @@ void CObjectList::Update(bool bForce)
 	if (!Device.Paused() || bForce)
 	{
 		// Clients
-		if (Device.fTimeDelta > EPS_S || bForce)
+		if ((Device.fTimeDelta > EPS_S || bForce) && !destroy_only)
 		{
 			// Select Crow-Mode
 			Device.Statistic->UpdateClient_updated = 0;

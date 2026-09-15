@@ -95,8 +95,12 @@ void CAI_Trader::BoneCallback(CBoneInstance* B)
 
 void CAI_Trader::LookAtActor(CBoneInstance* B)
 {
+	// Coop client: the bone callback still runs while the level is torn down after the server
+	// destroyed this player's body (a level change) - nobody to look at then.
+	CObject* entity = Level().CurrentEntity();
+	if (!entity) return;
 	Fvector dir;
-	dir.sub(Level().CurrentEntity()->Position(), Position());
+	dir.sub(entity->Position(), Position());
 
 	float yaw, pitch;
 	dir.getHP(yaw, pitch);

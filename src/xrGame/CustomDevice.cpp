@@ -339,7 +339,9 @@ bool CCustomDevice::IsWorking()
 
 void CCustomDevice::UpdateVisibility()
 {
-	bool bClimb = ((Actor()->MovingState() & mcClimb) != 0);
+	CActor* actor = Actor();
+	if (!actor) return; // coop client: the body may be gone while the detector still updates
+	bool bClimb = ((actor->MovingState() & mcClimb) != 0);
 
 	//check visibility
 	attachable_hud_item* i0 = g_player_hud->attached_item(0);
@@ -352,7 +354,7 @@ void CCustomDevice::UpdateVisibility()
 		}
 		else
 		{
-			CInventoryItem* itm = g_actor->inventory().ActiveItem();
+			CInventoryItem* itm = actor->inventory().ActiveItem();
 			CWeapon* wpn = smart_cast<CWeapon*>(itm);
 			CMissile* msl = smart_cast<CMissile*>(itm);
 			if (msl && m_bThrowAnm)

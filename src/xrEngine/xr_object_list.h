@@ -60,6 +60,9 @@ public:
 
 	void SingleUpdate(CObject* O);
 	void Update(bool bForce);
+	// Update() only destroys while set: the client-side updates of the objects still alive are
+	// skipped (a level teardown whose actor is already gone - items expect Actor() in UpdateCL).
+	bool destroy_only;
 
 	void net_Register(CObject* O);
 	void net_Unregister(CObject* O);
