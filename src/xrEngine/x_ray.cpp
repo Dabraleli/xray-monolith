@@ -669,18 +669,30 @@ void Startup()
             strconcat(sizeof(save_name), save_name, load, ".scop");
             FS.update_path(save_file, "$game_saves$", save_name);
         }
+        // -coop_port N: the listening port (default 1235). A test server on the host's PC takes
+        // another port so the players' clients never reach it by mistake. The internal client
+        // follows the port the server bound (CLevel::net_start3 appends it).
+        u32 port = 0;
+        if (LPCSTR port_arg = strstr(Core.Params, "-coop_port "))
+        {
+            const int asked = atoi(port_arg + xr_strlen("-coop_port "));
+            if (asked > 0 && asked < 65536) port = u32(asked);
+        }
+        string64 server_port = "";
+        if (port) xr_sprintf(server_port, "/portsv=%u", port);
+        string512 command;
         if (load && xr_strlen(load) && FS.exist(save_file))
         {
-            string512 command;
-            xr_sprintf(command, "start server(%s/coop/alife/load) client(localhost)", load);
+            xr_sprintf(command, "start server(%s/coop/alife/load%s) client(localhost)", load, server_port);
             Msg("[COOP_SERVER] START load=%s", load);
-            Console->Execute(command);
         }
         else
         {
             if (load && xr_strlen(load)) Msg("! [COOP_SERVER] START save not found: %s (new game)", load);
-            Console->Execute("start server(all/coop/alife/new) client(localhost)");
+            xr_sprintf(command, "start server(all/coop/alife/new%s) client(localhost)", server_port);
         }
+        Msg("[COOP_SERVER] START command=%s", command);
+        Console->Execute(command);
     }
 
 	// ...command line for auto start

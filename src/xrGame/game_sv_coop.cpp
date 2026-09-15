@@ -202,7 +202,21 @@ void game_sv_Coop::Create(shared_str& options)
     Msg("[COOP_BOOTSTRAP] creating world; admission=%s",
         strstr(Core.Params, "-coop_server_network_test") ?
         (strstr(Core.Params, "-coop_server_lan_test") ? "private LAN test (2 clients)" : "loopback test") : "disabled");
+    // CALifeSimulator rebuilds the options as <game>/<type>/alife (as in single player); the port
+    // token of -coop_port (portsv=N) must survive that for IPureServer::Connect, which binds after Create.
+    string64 port_token = "";
+    if (LPCSTR token = strstr(options.c_str(), "/portsv="))
+    {
+        LPCSTR token_end = strchr(token + 1, '/');
+        strncpy_s(port_token, token, token_end ? size_t(token_end - token) : xr_strlen(token));
+    }
     inherited::Create(options);
+    if (port_token[0] && !strstr(options.c_str(), "/portsv="))
+    {
+        string512 with_port;
+        strconcat(sizeof(with_port), with_port, options.c_str(), port_token);
+        options = with_port;
+    }
     R_ASSERT2(m_alife_simulator && alife().graph().actor(), "COOP_BOOTSTRAP world actor missing");
     alife().graph().actor()->CSE_ALifeObject::can_switch_offline(false);
     Msg("[COOP_BOOTSTRAP] ALife created; world_actor=%u level=%s",

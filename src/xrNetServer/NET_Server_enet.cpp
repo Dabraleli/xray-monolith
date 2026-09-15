@@ -176,7 +176,8 @@ IPureServer::EConnect IPureServer::Connect(LPCSTR options, GameDescriptionData& 
 	// has to name the port we actually bound, not the one we asked for.
 	psNET_Port = int(dwServerPort);
 
-	Msg("* ENet server listening on port %d, max players %d", dwServerPort, dwMaxPlayers);
+	Msg("* ENet server listening on port %d, max players %d (options: %s)", dwServerPort, dwMaxPlayers, options);
+	FlushLog();
 
 	m_enet_game_descr = game_descr;
 
