@@ -16,6 +16,7 @@
 #include "autosave_manager.h"
 #include "ai_object_location.h"
 #include "level_graph.h"
+#include "game_sv_coop.h"
 #include "level.h"
 #include "script_game_object.h"
 #include "ai_space.h"
@@ -96,9 +97,16 @@ bool CEnemyManager::useful(const CEntityAlive* entity_alive) const
 	)
 		return (false);
 
+    // Coop server: the Lua rule (xr_combat_ignore.is_enemy) tells "the actor" from other stalkers by
+    // AC_ID - the actor's memory, the "hit by the actor" and night/rain ranges, the condlists
+    // against db.actor. A player's body is the actor of its own evaluation; the NPC's update runs
+    // under the nearest body, which is not always the one being weighed (a swap per Lua call only).
     // Disable caching if time is negative for testing
     if (enemy_manager_useful_cache_time < 0)
+    {
+        CoopLuaActor coop_actor(game_sv_Coop::BodyOf(entity_alive), false);
         return (m_useful_callback ? m_useful_callback(m_object->lua_game_object(), entity_alive->lua_game_object()) : true);
+    }
 
     // demonized: Cache useful checks to avoid expensive Lua calls
     u32 current_time = Device.dwTimeGlobal;
@@ -106,7 +114,11 @@ bool CEnemyManager::useful(const CEntityAlive* entity_alive) const
     if (current_time < cache.check_time)
         return cache.result;
 
-    bool result = (m_useful_callback ? m_useful_callback(m_object->lua_game_object(), entity_alive->lua_game_object()) : true);
+    bool result = true;
+    {
+        CoopLuaActor coop_actor(game_sv_Coop::BodyOf(entity_alive), false);
+        result = (m_useful_callback ? m_useful_callback(m_object->lua_game_object(), entity_alive->lua_game_object()) : true);
+    }
 
     // Add id based jitter so that next updates will be spread between frames for different entities
     int jitter = (entity_alive->ID() % 97 + 1) * (entity_alive->ID() & 1 ? -1 : 1);
