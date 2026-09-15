@@ -384,7 +384,11 @@ void CActor::OnEvent(NET_Packet& P, u16 type)
 			P.r_vec3(reject_angles);
 			CUIGameSP* ui = smart_cast<CUIGameSP*>(CurrentGameUI());
 			if (ui && IsGameTypeCoop() && OnClient() && Level().CurrentViewEntity() == this)
+			{
+				Msg("[COOP_CLIENT] LEVEL_INVITE vertex=%u enabled=%u at=%f,%f,%f to=%f,%f,%f reject=%u", u32(game_vertex), enabled ? 1 : 0,
+				    VPUSH(Position()), VPUSH(position), has_reject ? 1 : 0);
 				ui->ChangeLevel(game_vertex, level_vertex, position, angles, reject_position, reject_angles, has_reject, invite, enabled);
+			}
 		}
 		break;
 	case GE_COOP_USE_OBJECT:

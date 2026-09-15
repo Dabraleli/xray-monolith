@@ -1827,6 +1827,34 @@ void CActor::shedule_Update(u32 DT)
 		}
 	}
 
+	// Coop client, own body: a movement key held for three seconds without the body moving is
+	// logged with the states that decide it (a player "behind an invisible wall" after a level
+	// change: the log says whether it is the input, the controller or the world).
+	if (IsGameTypeCoop() && OnClient() && this == Level().CurrentControlEntity())
+	{
+		static Fvector last_position = {0.f, 0.f, 0.f};
+		static u32 held_since = 0, reported = 0;
+		extern bool g_bDisableAllInput;
+		const bool key = pInput && (pInput->iGetAsyncKeyState(get_action_dik(kFWD)) || pInput->iGetAsyncKeyState(get_action_dik(kBACK)) ||
+			pInput->iGetAsyncKeyState(get_action_dik(kL_STRAFE)) || pInput->iGetAsyncKeyState(get_action_dik(kR_STRAFE))) ||
+			!!(mstate_wishful & mcAnyMove);
+		if (!key || Position().distance_to(last_position) > 0.05f)
+		{
+			held_since = 0;
+			last_position = Position();
+		}
+		else if (!held_since) held_since = Device.dwTimeGlobal;
+		else if (Device.dwTimeGlobal - held_since > 3000 && Device.dwTimeGlobal - reported > 5000)
+		{
+			reported = Device.dwTimeGlobal;
+			Msg("[COOP_CLIENT] NO_MOVE position=%f,%f,%f wishful=%x real=%x alive=%u input_off=%u handler=%u talking=%u holder=%u ui=%u character=%u environment=%d",
+			    VPUSH(Position()), mstate_wishful, mstate_real, g_Alive() ? 1 : 0, g_bDisableAllInput ? 1 : 0,
+			    m_input_external_handler ? 1 : 0, IsTalking() ? 1 : 0, m_holder ? 1 : 0,
+			    (CurrentGameUI() && CurrentGameUI()->TopInputReceiver()) ? 1 : 0,
+			    character_physics_support()->movement()->CharacterExist() ? 1 : 0, int(character_physics_support()->movement()->Environment()));
+		}
+	}
+
 	if (IsFocused())
 	{
 		BOOL bHudView = HUDview();
