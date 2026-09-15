@@ -508,15 +508,19 @@ void game_cl_Coop::OnTalkMessage(NET_Packet& P)
         else if (actor->IsTalking()) actor->StopTalk();
         break;
     }
-    case 5: // another player's conversation, shown in the chat log ("speaker: phrase")
+    case 5: // another player's conversation: a game news with the speaker's portrait and the phrase
     {
-        shared_str speaker, text;
+        shared_str speaker, text, icon;
         P.r_stringZ(speaker);
         P.r_stringZ(text);
-        string256 who;
-        xr_sprintf(who, "%s:", speaker.c_str() ? speaker.c_str() : "");
-        if (ui->m_pMessagesWnd)
-            ui->m_pMessagesWnd->AddChatMessage(CStringTable().translate(text), who);
+        P.r_stringZ(icon);
+        if (!g_actor) break;
+        GAME_NEWS_DATA news;
+        news.m_type = GAME_NEWS_DATA::eTalk;
+        news.news_caption = speaker;
+        news.news_text = CStringTable().translate(text);
+        news.texture_name = icon.size() ? icon : shared_str("ui_iconsTotal_grouping");
+        Actor()->AddGameNews(news);
         break;
     }
     }

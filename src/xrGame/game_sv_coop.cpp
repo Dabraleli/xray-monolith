@@ -665,19 +665,26 @@ void game_sv_Coop::TalkAnswer(xrClientData* client, bool ours, LPCSTR text)
     P.w_stringZ(text);
     coop_talk_send(client, P);
 
-    // The other players follow the conversation in their chat log: "speaker: phrase".
+    // The other players follow the conversation as game news: the speaker's name and portrait
+    // (the NPC's, or the talking player's body) with the phrase, like a dynamic news entry.
     xr_map<u32, SCoopTalk>::const_iterator talk = m_talks.find(client->ID.value());
     LPCSTR speaker = client->name.c_str();
+    LPCSTR icon = "";
+    CInventoryOwner* face = NULL;
     if (!ours && talk != m_talks.end())
     {
-        CInventoryOwner* npc = smart_cast<CInventoryOwner*>(Level().Objects.net_Find(talk->second.npc));
-        if (npc) speaker = npc->Name();
+        face = smart_cast<CInventoryOwner*>(Level().Objects.net_Find(talk->second.npc));
+        if (face) speaker = face->Name();
     }
+    else if (client->owner)
+        face = smart_cast<CInventoryOwner*>(Level().Objects.net_Find(client->owner->ID));
+    if (face && face->IconName()) icon = face->IconName();
     NET_Packet observe;
     observe.w_begin(M_COOP_TALK);
     observe.w_u8(5);
     observe.w_stringZ(speaker);
     observe.w_stringZ(text);
+    observe.w_stringZ(icon);
     IClient* internal = server().GetServerClient();
     xr_vector<ClientID> observers; // sent after the iteration: the client lock is not recursive
     auto visit = [&](IClient* connection)
