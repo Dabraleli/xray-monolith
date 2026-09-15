@@ -293,6 +293,9 @@ void CGamePersistent::WeathersUpdate()
 
 		CEnvDescriptor* const _env = Environment().Current[data_set];
 		VERIFY(_env);
+		// The frames are re-selected by Environment().OnFrame(); a blocking network wait inside the
+		// scheduler (coop_create_wait, coop_wait_reply) may have invalidated them in between.
+		if (!_env) return;
 
 		CEnvAmbient* env_amb = Environment().m_paused ? Environment().CurrentEnv->env_ambient : _env->env_ambient;
 		if (env_amb)

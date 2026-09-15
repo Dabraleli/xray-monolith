@@ -62,7 +62,12 @@ void game_cl_GameState::net_import_GameTime(NET_Packet& P)
 
 	u64 OldTime = Level().GetEnvironmentGameTime();
 	Level().SetEnvironmentGameTimeFactor(GameEnvironmentTime, EnvironmentTimeFactor);
-	if (OldTime > GameEnvironmentTime)
+	// Coop: the client runs the environment time ahead between the server's updates, so the
+	// server's value is often a few game seconds behind it - jitter, not a turned-back clock.
+	// Invalidate() restarts the rain and the lens flare (the rain sound stuttered); only a
+	// real step back re-selects the weather frames.
+	const u64 back = OldTime > GameEnvironmentTime ? OldTime - GameEnvironmentTime : 0;
+	if (back && (!IsGameTypeCoop() || back > 5000))
 		GamePersistent().Environment().Invalidate();
 }
 
