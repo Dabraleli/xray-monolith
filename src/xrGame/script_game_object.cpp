@@ -1101,6 +1101,15 @@ void CScriptGameObject::eat(CScriptGameObject* item)
 		return;
 	}
 
+	// Coop client, the player's own body: the Lua inventory (ui_inventory.script Action_Use) eats
+	// through here. The server owns the body, so the request goes there like the quick-use keys do
+	// (ClientEat); a local Eat only changed this client's copy and the server never consumed the item.
+	if (IsGameTypeCoop() && OnClient() && &object() == Level().CurrentControlEntity())
+	{
+		inventory_owner->inventory().ClientEat(inventory_item);
+		return;
+	}
+
 	inventory_owner->inventory().Eat(inventory_item);
 }
 
