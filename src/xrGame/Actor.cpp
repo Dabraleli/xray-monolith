@@ -155,6 +155,10 @@ CActor::CActor() : CEntityAlive(), current_ik_cam_shift(0)
 	fCurAVelocity = 0.0f;
 	fFPCamYawMagnitude = 0.0f; //--#SM+#--
 	fFPCamPitchMagnitude = 0.0f; //--#SM+#--
+	m_cam_prev_valid = false;
+	m_cam_freelook_last_frame = false;
+	m_cam_yaw_prev = 0.0f;
+	m_cam_pitch_prev = 0.0f;
 	// ýôôåêòîðû
 	pCamBobbing = 0;
 

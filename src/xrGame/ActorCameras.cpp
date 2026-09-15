@@ -602,7 +602,8 @@ void CActor::cam_Update(float dt, float fFOV)
 
     static bool firstPersonDeathDied = false;
 	if (cam_active == eacFirstEye) {
-        bool firstPersonDeathDiedNow = firstPersonDeath && !g_Alive() && m_FPCam;
+        // Coop client: the other player's body dies here too; the first-person death view is the own one's.
+        bool firstPersonDeathDiedNow = firstPersonDeath && !g_Alive() && m_FPCam && Level().CurrentEntity() == this;
 		if (firstPersonDeathDiedNow) {
             if (firstPersonDeathDied != firstPersonDeathDiedNow)
             {
@@ -676,16 +677,22 @@ void CActor::cam_Update(float dt, float fFOV)
 	float& cam_yaw_cur = cameras[eacFirstEye]->yaw;
 	float& cam_pitch_cur = cameras[eacFirstEye]->pitch;
 
-	static bool freelook_last_frame;
-	static float cam_yaw_prev = cam_yaw_cur;
-	static float cam_pitch_prev = cam_pitch_cur;
+	// Per actor, not static: on a coop client the other player's body runs cam_Update as well, and
+	// a shared previous angle turned its camera into this player's magnitudes - the HUD weapon's
+	// camera inertia (CHudItem::UpdateHudAdditional) then held the weapon tilted whenever two played.
+	if (!m_cam_prev_valid)
+	{
+		m_cam_prev_valid = true;
+		m_cam_yaw_prev = cam_yaw_cur;
+		m_cam_pitch_prev = cam_pitch_cur;
+	}
 
-	fFPCamYawMagnitude = freelook_last_frame ? 0.f : (1.f - freelook_cam_control) * (angle_difference_signed(cam_yaw_prev, cam_yaw_cur) / Device.fTimeDelta); // L+ / R-
-	fFPCamPitchMagnitude = freelook_last_frame ? 0.f : (1.f - freelook_cam_control) * (angle_difference_signed(cam_pitch_prev, cam_pitch_cur) / Device.fTimeDelta); //U+ / D-
+	fFPCamYawMagnitude = m_cam_freelook_last_frame ? 0.f : (1.f - freelook_cam_control) * (angle_difference_signed(m_cam_yaw_prev, cam_yaw_cur) / Device.fTimeDelta); // L+ / R-
+	fFPCamPitchMagnitude = m_cam_freelook_last_frame ? 0.f : (1.f - freelook_cam_control) * (angle_difference_signed(m_cam_pitch_prev, cam_pitch_cur) / Device.fTimeDelta); //U+ / D-
 
-	freelook_last_frame = cam_freelook == eflDisabling;
-	cam_yaw_prev = cam_yaw_cur;
-	cam_pitch_prev = cam_pitch_cur;
+	m_cam_freelook_last_frame = cam_freelook == eflDisabling;
+	m_cam_yaw_prev = cam_yaw_cur;
+	m_cam_pitch_prev = cam_pitch_cur;
 	//--#SM+ End#--
 
 #ifdef DEBUG

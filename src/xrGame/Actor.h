@@ -390,6 +390,12 @@ protected:
 public: //--#SM+#--
 	float fFPCamYawMagnitude;
 	float fFPCamPitchMagnitude;
+	// The previous first-eye angles the magnitudes are measured from - per actor: on a coop client
+	// another player's body runs cam_Update too, and shared statics fed its angles into this player's.
+	bool m_cam_prev_valid;
+	bool m_cam_freelook_last_frame;
+	float m_cam_yaw_prev;
+	float m_cam_pitch_prev;
 public:
 	virtual void feel_touch_new(CObject* O);
 	virtual void feel_touch_delete(CObject* O);
