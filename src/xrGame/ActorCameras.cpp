@@ -693,6 +693,16 @@ void CActor::cam_Update(float dt, float fFOV)
 	m_cam_freelook_last_frame = cam_freelook == eflDisabling;
 	m_cam_yaw_prev = cam_yaw_cur;
 	m_cam_pitch_prev = cam_pitch_cur;
+	if (IsGameTypeCoop() && this == Level().CurrentControlEntity() && strstr(Core.Params, "-coop_damage_probe") &&
+		(_abs(fFPCamYawMagnitude) > 20.f || _abs(fFPCamPitchMagnitude) > 20.f))
+	{
+		static u32 reported = 0;
+		if (Device.dwTimeGlobal - reported > 1000)
+		{
+			reported = Device.dwTimeGlobal;
+			Msg("[COOP_CAM] magnitude yaw=%f pitch=%f", fFPCamYawMagnitude, fFPCamPitchMagnitude);
+		}
+	}
 	//--#SM+ End#--
 
 #ifdef DEBUG
