@@ -503,7 +503,8 @@ void CAI_Crow::net_Import(NET_Packet& P)
 	P.r_u32();
 	P.r_u8();
 
-	P.r_vec3(Position());
+	Fvector position;
+	P.r_vec3(position);
 
 	float yaw, pitch, bank = 0, roll = 0;
 
@@ -516,7 +517,26 @@ void CAI_Crow::net_Import(NET_Packet& P)
 	id_Squad = P.r_u8();
 	id_Group = P.r_u8();
 
+	// Coop client: the crows fly on their own here (state_Flying runs for a remote crow too); the
+	// server's position is not applied - a flock is scenery, and ten steps a second in the sky
+	// would only make it jerk. Health and team still follow the server (a shot crow dies).
+	if (IsGameTypeCoop())
+	{
+		if (strstr(Core.Params, "-coop_damage_probe"))
+		{
+			static u32 reported = 0;
+			if (Device.dwTimeGlobal - reported > 10000)
+			{
+				reported = Device.dwTimeGlobal;
+				Msg("[COOP_CROW] id=%u local=%f,%f,%f server=%f,%f,%f health=%f", ID(), VPUSH(Position()), VPUSH(position), health);
+			}
+		}
+		return;
+	}
+
+	// setHPB resets the translation: keep the imported position (every remote crow sat at the origin).
 	XFORM().setHPB(yaw, pitch, bank);
+	XFORM().c = position;
 #ifdef DEBUG
 	VERIFY2(valid_pos( Position() ), dbg_valide_pos_string(Position(),this," CAI_Crow::net_Import	(NET_Packet& P)"));
 #endif
