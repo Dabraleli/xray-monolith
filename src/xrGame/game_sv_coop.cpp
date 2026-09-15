@@ -1182,32 +1182,68 @@ bool game_sv_Coop::change_level(NET_Packet& net_packet, ClientID sender)
     SendLua(u16(-1), (xr_string("levelchange|") + level_name).c_str());
     // The bodies' states before they leave the level (teleport_object switches them offline, which
     // clears an entity's client data), then the move: each body a step apart around the entrance.
+    // The items' states as well: the offline switch clears the children's client data too
+    // (CSE_ALifeTraderAbstract::add_offline), and an item without it spawns on the new level with
+    // no place - the weapons, outfit and PDA fell into the ruck by default_to_ruck. As ParkBody.
     xr_vector<std::pair<u16, xr_vector<u8>>> states;
+    xr_map<u16, xr_vector<u8>> item_states;
     for (u32 i = 0; i < bodies.size(); ++i)
     {
         xr_vector<u8> state;
         coop_body_state(bodies[i], state);
         states.push_back(std::make_pair(bodies[i]->ID(), state));
+        CSE_Abstract* entity = server().ID_to_entity(bodies[i]->ID());
+        if (!entity) continue;
+        for (u32 c = 0; c < entity->children.size(); ++c)
+        {
+            const u16 child = entity->children[c];
+            xr_vector<u8> item_state;
+            coop_body_state(smart_cast<CGameObject*>(Level().Objects.net_Find(child)), item_state);
+            if (!item_state.empty()) item_states[child] = item_state;
+        }
     }
     xr_vector<u16> ids;
     for (u32 i = 0; i < bodies.size(); ++i) ids.push_back(bodies[i]->ID());
     for (xr_map<shared_str, SParkedBody>::const_iterator it = m_parked.begin(); it != m_parked.end(); ++it) ids.push_back(it->second.id);
     const CALifeSimulator& simulator = alife();
+    // The bodies stand in a line from the entrance point into the level, a metre apart, along the
+    // direction the changer faces them (the actor's forward for its yaw, Actor_Movement.cpp:
+    // rotateY(-yaw)). A ring around the point put a body outside the level at the Cordon south
+    // entrance, behind its boundary; forward is the way the players are meant to walk.
+    Fmatrix facing;
+    facing.rotateY(-angles.y);
+    Fvector forward = facing.k;
+    forward.y = 0.f;
+    forward.normalize_safe();
     for (u32 i = 0; i < ids.size(); ++i)
     {
         Fvector where = position;
-        if (i)
-        {
-            const float angle = float(i) * (PI_MUL_2 / 8.f);
-            where.x += 1.5f * _cos(angle);
-            where.z += 1.5f * _sin(angle);
-        }
+        where.mad(forward, 1.f * float(i));
         alife().teleport_object(ids[i], game_vertex, level_vertex, where);
         CSE_ALifeDynamicObject* entity = simulator.objects().object(ids[i], true);
         if (!entity) continue;
         entity->o_Angle = angles;
+        // As CALifeUpdateManager::change_level does for the actor: the body arrives looking the
+        // changer's way instead of keeping the torso of the level it left.
+        CSE_ALifeCreatureAbstract* creature = smart_cast<CSE_ALifeCreatureAbstract*>(entity);
+        if (creature)
+        {
+            creature->o_torso.yaw = angles.y;
+            creature->o_torso.pitch = angles.x;
+            creature->o_torso.roll = 0.f;
+        }
+        Msg("[COOP_SERVER] LEVEL_CHANGE_PLACE body=%u position=%f,%f,%f", entity->ID, VPUSH(where));
         for (u32 s = 0; s < states.size(); ++s)
             if (states[s].first == ids[i]) entity->client_data = states[s].second;
+        u32 restored = 0;
+        for (xr_map<u16, xr_vector<u8>>::const_iterator item = item_states.begin(); item != item_states.end(); ++item)
+        {
+            CSE_ALifeDynamicObject* object = simulator.objects().object(item->first, true);
+            if (!object || object->ID_Parent != entity->ID) continue;
+            object->client_data = item->second;
+            ++restored;
+        }
+        if (restored) Msg("[COOP_SERVER] LEVEL_CHANGE_ITEMS body=%u items=%u", entity->ID, restored);
         for (xr_map<shared_str, SParkedBody>::const_iterator it = m_parked.begin(); it != m_parked.end(); ++it)
         {
             if (it->second.id != ids[i]) continue;
