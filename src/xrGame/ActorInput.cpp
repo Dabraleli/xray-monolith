@@ -661,9 +661,11 @@ void CActor::ActorUse()
 					{
 						if (!m_pPersonWeLookingAt->deadbody_closed_status())
 						{
+							// 99.9% dead. A coop client counts from the death it was told about (GE_DIE, after
+							// the shot's round trip) and the server already holds the corpse's loot: a second.
+							const u32 settle = IsGameTypeCoop() && OnClient() ? 1000 : 3000;
 							if (pEntityAliveWeLookingAt->AlreadyDie() &&
-								pEntityAliveWeLookingAt->GetLevelDeathTime() + 3000 < Device.dwTimeGlobal)
-								// 99.9% dead
+								pEntityAliveWeLookingAt->GetLevelDeathTime() + settle < Device.dwTimeGlobal)
 								pGameSP->StartCarBody(this, m_pPersonWeLookingAt);
 						}
 					}
