@@ -523,8 +523,50 @@ bool CCustomZone::AccumulateState()
 	return false;
 }
 
+// Coop: an object a zone touched can be gone from the level without the zone's net_Relcase and
+// feel_touch_relcase having run (build 35: a client crash in StopObjectIdleParticles on a freed
+// object, moments after an electra had killed the tushkanos inside it). Zones dereference their
+// touched objects every update, so entries the level no longer holds are dropped first, by pointer
+// only. The level's object set is gathered once per frame for all zones.
+static bool coop_level_holds(CObject* O)
+{
+	static u32 frame = u32(-1);
+	static u32 known = 0;
+	static xr_vector<CObject*> objects;
+	const u32 count = Level().Objects.o_count();
+	if (frame != Device.dwFrame || known != count) // a spawn inside a blocking wait changes the set mid-frame
+	{
+		frame = Device.dwFrame;
+		known = count;
+		objects.clear();
+		objects.reserve(count);
+		for (u32 i = 0; i < count; ++i)
+			objects.push_back(Level().Objects.o_get_by_iterator(i));
+		std::sort(objects.begin(), objects.end());
+	}
+	return std::binary_search(objects.begin(), objects.end(), O);
+}
+
+void CCustomZone::coop_drop_stale_objects()
+{
+	if (!IsGameTypeCoop() || (feel_touch.empty() && m_ObjectInfoMap.empty())) return;
+	for (u32 i = 0; i < feel_touch.size();)
+	{
+		if (coop_level_holds(feel_touch[i])) { ++i; continue; }
+		Msg("! [COOP_ZONE] STALE_TOUCH zone=%u object=%p frame=%u", ID(), feel_touch[i], Device.dwFrame);
+		feel_touch.erase(feel_touch.begin() + i);
+	}
+	for (OBJECT_INFO_VEC_IT it = m_ObjectInfoMap.begin(); it != m_ObjectInfoMap.end();)
+	{
+		if (coop_level_holds((*it).object)) { ++it; continue; }
+		Msg("! [COOP_ZONE] STALE_INFO zone=%u object=%p frame=%u", ID(), (*it).object, Device.dwFrame);
+		it = m_ObjectInfoMap.erase(it);
+	}
+}
+
 void CCustomZone::UpdateWorkload(u32 dt)
 {
+	coop_drop_stale_objects();
 	m_iPreviousStateTime = m_iStateTime;
 	m_iStateTime += (int)dt;
 
@@ -594,6 +636,7 @@ void CCustomZone::UpdateCL()
 // called as usual
 void CCustomZone::shedule_Update(u32 dt)
 {
+	coop_drop_stale_objects();
 	m_zone_flags.set(eZoneIsActive, FALSE);
 
 	if (IsEnabled())

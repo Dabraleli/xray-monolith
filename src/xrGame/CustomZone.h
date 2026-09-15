@@ -64,6 +64,8 @@ public:
 	virtual void exit_Zone(SZoneObjectInfo& io);
 	virtual void feel_touch_new(CObject* O);
 	virtual void feel_touch_delete(CObject* O);
+	// Coop: drop touched objects the level no longer holds before they are dereferenced.
+	void coop_drop_stale_objects();
 	virtual bool feel_touch_contact(CObject* O);
 	virtual bool feel_touch_on_contact(CObject* O);
 
