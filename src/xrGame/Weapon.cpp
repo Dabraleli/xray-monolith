@@ -354,13 +354,15 @@ void CWeapon::UpdateZoomParams() {
 	}
 
 	if (IsZoomed()) {
-		scope_radius = SDS_Radius(m_zoomtype == 1);
-		if (m_zoomtype == 0 && zoomFlags.test(SDS_SPEED) && (scope_radius > 0.0)) {
-			sens_multiple = scope_scrollpower;
-		} else {
-			sens_multiple = 1.0f;
+		if (ParentIsActor()) // the player's aim globals: the local player's weapon only (coop client)
+		{
+			scope_radius = SDS_Radius(m_zoomtype == 1);
+			if (m_zoomtype == 0 && zoomFlags.test(SDS_SPEED) && (scope_radius > 0.0)) {
+				sens_multiple = scope_scrollpower;
+			} else {
+				sens_multiple = 1.0f;
+			}
 		}
-
 
 		if (m_zoom_params.m_bUseDynamicZoom) {
 			SetZoomFactor(m_fRTZoomFactor / zoom_multiple);
@@ -2056,14 +2058,20 @@ float CWeapon::CurrentZoomFactor()
 
 void CWeapon::OnZoomIn()
 {
+	// Coop client: another player's weapon zooms too (the server replicates it for the aiming pose),
+	// but the player's aim globals, depth of field, scope visions and HUD layers are the local one's.
+	const bool local_player = ParentIsActor();
     //////////
-    scope_radius = SDS_Radius(m_zoomtype == 1);
+	if (local_player)
+	{
+		scope_radius = SDS_Radius(m_zoomtype == 1);
 
-	if ((scope_radius > 0.0) && zoomFlags.test(SDS_SPEED)) {
-		sens_multiple = scope_scrollpower;
-	}
-	else {
-		sens_multiple = 1.0f;
+		if ((scope_radius > 0.0) && zoomFlags.test(SDS_SPEED)) {
+			sens_multiple = scope_scrollpower;
+		}
+		else {
+			sens_multiple = 1.0f;
+		}
 	}
     //////////
     
@@ -2093,16 +2101,16 @@ void CWeapon::OnZoomIn()
 	else
 		SetZoomFactor(CurrentZoomFactor());
 
-	if (m_zoom_params.m_bZoomDofEnabled && !IsScopeAttached())
+	if (local_player && m_zoom_params.m_bZoomDofEnabled && !IsScopeAttached())
 		GamePersistent().SetEffectorDOF(m_zoom_params.m_ZoomDof);
 
 	if (GetHUDmode())
 		GamePersistent().SetPickableEffectorDOF(true);
 
-	if (m_zoom_params.m_sUseBinocularVision.size() && IsScopeAttached() && NULL == m_zoom_params.m_pVision)
+	if (local_player && m_zoom_params.m_sUseBinocularVision.size() && IsScopeAttached() && NULL == m_zoom_params.m_pVision)
 		m_zoom_params.m_pVision = xr_new<CBinocularsVision>(m_zoom_params.m_sUseBinocularVision);
 
-	if (m_zoom_params.m_sUseZoomPostprocess.size() && IsScopeAttached())
+	if (local_player && m_zoom_params.m_sUseZoomPostprocess.size() && IsScopeAttached())
 	{
 		CActor* pA = smart_cast<CActor *>(H_Parent());
 		if (pA)
@@ -2115,11 +2123,12 @@ void CWeapon::OnZoomIn()
 		}
 	}
 
-	g_player_hud->updateMovementLayerState();
+	if (local_player) g_player_hud->updateMovementLayerState();
 }
 
 void CWeapon::OnZoomOut()
 {
+	const bool local_player = ParentIsActor() || !H_Parent(); // see OnZoomIn; a parentless weapon resets as before
 	m_zoom_params.m_bIsZoomModeNow = false;
     if (m_zoom_params.m_bUseDynamicZoom)
     {
@@ -2128,7 +2137,7 @@ void CWeapon::OnZoomOut()
     
 	m_zoom_params.m_fCurrentZoomFactor = g_fov;
 
-	GamePersistent().RestoreEffectorDOF();
+	if (local_player) GamePersistent().RestoreEffectorDOF();
 
 	if (GetHUDmode())
 		GamePersistent().SetPickableEffectorDOF(false);
@@ -2142,12 +2151,14 @@ void CWeapon::OnZoomOut()
 		xr_delete(m_zoom_params.m_pNight_vision);
 	}
 
-	g_player_hud->updateMovementLayerState();
+	if (local_player)
+	{
+		g_player_hud->updateMovementLayerState();
     
-    scope_radius = 0.0;
-    scope_2dtexactive = 0;
-    sens_multiple = 1.0f;
-
+		scope_radius = 0.0;
+		scope_2dtexactive = 0;
+		sens_multiple = 1.0f;
+	}
 }
 
 CUIWindow* CWeapon::ZoomTexture()
