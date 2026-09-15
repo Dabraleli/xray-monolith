@@ -1760,6 +1760,42 @@ void game_sv_Coop::OnTalkMessage(LPCSTR caption, LPCSTR text, LPCSTR texture, LP
     coop_pda_send(P, client);
 }
 
+void game_sv_Coop::SendMapSpotTo(u16 body_id, bool add, LPCSTR spot, u16 object_id, LPCSTR hint)
+{
+    if (!coop_server_game() || !spot || !*spot) return;
+    xrClientData* client = coop_client_of(smart_cast<CActor*>(Level().Objects.net_Find(body_id)));
+    if (!client) return;
+    NET_Packet P;
+    P.w_begin(M_COOP_PDA);
+    P.w_u8(add ? 2 : 4);
+    P.w_stringZ(spot);
+    P.w_u16(object_id);
+    if (add)
+    {
+        P.w_stringZ(hint ? hint : "");
+        P.w_u8(0); // not serializable: the server sends the player's markers again on every join
+        coop_pda_write_where(P, object_id);
+    }
+    coop_pda_send(P, client);
+}
+
+bool game_sv_Coop::TravelTo(u16 body_id, u16 vertex, u32 level_vertex, const Fvector& position, const Fvector& angles)
+{
+    const GameGraph::_GRAPH_ID game_vertex = GameGraph::_GRAPH_ID(vertex);
+    CActor* body = smart_cast<CActor*>(Level().Objects.net_Find(body_id));
+    if (!body || !body->g_Alive() || !coop_server_game()) return false;
+    if (!ai().game_graph().valid_vertex_id(game_vertex)) return false;
+    NET_Packet change; // the M_CHANGE_LEVEL payload, as a changer's coop_request builds it
+    change.w_begin(M_CHANGE_LEVEL);
+    change.w(&game_vertex, sizeof(game_vertex));
+    change.w(&level_vertex, sizeof(level_vertex));
+    change.w_vec3(position);
+    change.w_vec3(angles);
+    Msg("[COOP_SERVER] TRAVEL_TO body=%u vertex=%u position=%f,%f,%f", body_id, u32(game_vertex), VPUSH(position));
+    LevelChangeRequest(body, change);
+    return true;
+}
+
 void game_sv_Coop::SendPda(xrClientData* client)
 {
     u32 tasks = 0, spots = 0;

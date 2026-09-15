@@ -1989,6 +1989,43 @@ bool g_coop_travel(u16 body_id, const Fvector& point)
 	return true;
 }
 
+// Coop server: the level change to a point for a body (fast travel to a smart terrain on another
+// level): everyone travels together, as through a changer (game_sv_Coop::TravelTo).
+bool g_coop_travel_to(u16 body_id, u32 game_vertex_id, u32 level_vertex_id, const Fvector& position, const Fvector& angles)
+{
+	if (!IsGameTypeCoop() || !OnServer()) return false;
+	return game_sv_Coop::TravelTo(body_id, u16(game_vertex_id), level_vertex_id, position, angles);
+}
+
+// Coop server: a map spot of one player's PDA (its client alone), drawn where the object is in
+// ALife - the fast travel markers of a player's faction and visits.
+void g_coop_map_spot(u16 body_id, bool add, LPCSTR spot, u16 object_id, LPCSTR hint)
+{
+	if (IsGameTypeCoop() && OnServer()) game_sv_Coop::SendMapSpotTo(body_id, add, spot, object_id, hint);
+}
+
+// Coop server: this server's coop_server.ltx ($app_data_root$) for the coop Lua's rules ([fast_travel]
+// ...), re-read on every call so a rule can change while the server runs; nil without the file.
+#include "../xrServerEntities/script_ini_file.h"
+CScriptIniFile* g_coop_server_ini()
+{
+	if (!IsGameTypeCoop() || !OnServer()) return NULL;
+	string_path path;
+	FS.update_path(path, "$app_data_root$", "coop_server.ltx");
+	if (!FS.exist(path)) return NULL;
+	IReader* reader = FS.r_open(path);
+	if (!reader) return NULL;
+	CScriptIniFile* ini = (CScriptIniFile*)xr_new<CInifile>(reader, FS.get_path("$app_data_root$")->m_Path);
+	FS.r_close(reader);
+	return ini;
+}
+
+// Coop server: a body that is down (game_sv_Coop::DownBody) - no fast travel out of a bleed-out.
+bool g_coop_body_downed(u16 body_id)
+{
+	return IsGameTypeCoop() && OnServer() && game_sv_Coop::IsDowned(body_id);
+}
+
 // Coop server: an NPC's Lua owner (companions), and player <-> body lookups by connection name.
 void g_coop_set_lua_owner(u16 object_id, LPCSTR player)
 {
@@ -2614,6 +2651,10 @@ void CLevel::script_register(lua_State* L)
 			def("coop_create_wait", &game_cl_Coop::CreateWait), // coop client: wait for the server's answer to an item|create request
 			def("coop_wait_reply", &game_cl_Coop::WaitReply), // coop client: wait for the server Lua's text answer to a request (rpc)
 			def("coop_travel", &g_coop_travel), // coop server: level change for a body through the changer at a point
+			def("coop_travel_to", &g_coop_travel_to), // coop server: level change for a body to a point of another level (fast travel)
+			def("coop_map_spot", &g_coop_map_spot), // coop server: add/remove a map spot in one player's PDA (fast travel markers)
+			def("coop_server_ini", &g_coop_server_ini, adopt<result>()), // coop server: coop_server.ltx as an ini_file, nil without it
+			def("coop_body_downed", &g_coop_body_downed), // coop server: the body is down (bleeding out)
 			def("coop_set_lua_owner", &g_coop_set_lua_owner), // coop server: an NPC's Lua runs for this player (companions)
 			def("coop_player_body", &g_coop_player_body), // coop server: the living body id of a connected player, 65535 if none
 			def("coop_body_player", &g_coop_body_player), // coop server: the player (connection name) of a body, "" if not a player's

@@ -129,6 +129,12 @@ public:
     static void OnGameNews(u8 type, LPCSTR caption, LPCSTR text, LPCSTR texture, int show_time);
     static void OnTalkMessage(LPCSTR caption, LPCSTR text, LPCSTR texture, LPCSTR templ);
     void SendPda(xrClientData* client);
+    // A map spot of one player only (fast travel markers: the player's faction and visits), as the
+    // mirror's add/remove but to the body's client alone; the server's own map does not hold it.
+    static void SendMapSpotTo(u16 body_id, bool add, LPCSTR spot, u16 object_id, LPCSTR hint);
+    // The level change to a point (fast travel to a smart terrain on another level): as a level
+    // changer's silent request on the body's behalf - everyone travels, change_level's radius rule.
+    static bool TravelTo(u16 body_id, u16 game_vertex, u32 level_vertex, const Fvector& position, const Fvector& angles);
     // The story book (the world actor's info portions, shared by the bodies) to a joining client:
     // "infos|a,b,c" over the Lua channel, in chunks; later transfers reach the clients as the
     // GE_INFO_TRANSFER broadcast (CLevel::cl_Process_Event mirrors them). has_alife_info there.
