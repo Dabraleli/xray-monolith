@@ -25,6 +25,7 @@
 #include "CustomMonster.h"
 #include "sound_player.h"
 #include "coop_alife_mirror.h"
+#include "../xrEngine/x_ray.h"
 
 void game_cl_Coop::OnPlayerStore(NET_Packet& P)
 {
@@ -39,6 +40,7 @@ void game_cl_Coop::OnPlayerStore(NET_Packet& P)
 }
 
 static bool coop_restart_pending = false;
+static shared_str coop_restart_level; // the level the server moves the world to (levelchange|<name>)
 
 bool game_cl_Coop::RestartPending()
 {
@@ -51,7 +53,10 @@ void game_cl_Coop::OnLuaMessage(NET_Packet& P)
     P.r_stringZ(text);
     // The world restarts on the server: from here on the level only waits for the disconnect.
     if (text.c_str() && (!strncmp(text.c_str(), "levelchange|", 12) || !strncmp(text.c_str(), "reload|", 7)))
+    {
         coop_restart_pending = true;
+        coop_restart_level = !strncmp(text.c_str(), "levelchange|", 12) ? text.c_str() + 12 : "";
+    }
     if (text.c_str() && !strncmp(text.c_str(), "reply|", 6))
     {
         u32 request = 0, part = 0, parts = 0; int consumed = 0;
@@ -180,17 +185,66 @@ static struct
     u32 next_attempt;
     u32 deadline;
     bool pending;
-} coop_reconnect = { "", 0, 0, false };
+    bool screen_set; // the wait screen's texts and picture are up
+} coop_reconnect = { "", 0, 0, false, false };
+
+extern ENGINE_API LOADING_EVENT g_disconnect_wait; // x_ray.cpp
+
+// The disconnect that follows shows the loading screen with ReconnectWaitEvent under it instead
+// of the main menu and its "connection closed" box.
+static void coop_arm_wait_screen()
+{
+    g_disconnect_wait.bind(&game_cl_Coop::ReconnectWaitEvent);
+    coop_reconnect.screen_set = false;
+}
 
 void game_cl_Coop::ScheduleReconnect()
 {
     if (!g_pGameLevel || !Level().m_caClientOptions.c_str()) return;
     coop_reconnect.client_options = Level().m_caClientOptions.c_str();
     coop_reconnect.pending = !coop_reconnect.client_options.empty();
-    coop_reconnect.next_attempt = Device.dwTimeGlobal + 20000; // the server reloads its world first
-    coop_reconnect.deadline = Device.dwTimeGlobal + 180000;
+    coop_reconnect.next_attempt = Device.TimerAsync() + 20000; // the server reloads its world first
+    coop_reconnect.deadline = Device.TimerAsync() + 180000;
     coop_restart_pending = true;
+    coop_arm_wait_screen();
     Msg("[COOP_CLIENT] RECONNECT scheduled options=%s", coop_reconnect.client_options.c_str());
+}
+
+// Runs once a frame from the loading-event queue while there is no level (CRenderDevice::on_idle
+// draws the loading screen meanwhile): the next connection attempt when it is due, the menu when
+// the reconnect is over. A failed attempt disconnects again and comes back here (re-armed).
+bool game_cl_Coop::ReconnectWaitEvent()
+{
+    if (!coop_reconnect.screen_set)
+    {
+        coop_reconnect.screen_set = true;
+        if (coop_restart_level.size()) pApp->LoadLevelLogo(coop_restart_level.c_str());
+        pApp->LoadTitleInt(CStringTable().translate("ls_header").c_str(),
+                           coop_restart_level.size() ? CStringTable().translate(coop_restart_level).c_str() : "",
+                           CStringTable().translate("st_coop_wait_server").c_str());
+    }
+    // Device.dwTimeGlobal stands still while loading events run (no FrameMove): the wall clock.
+    const u32 now = Device.TimerAsync();
+    if (coop_reconnect.pending && now > coop_reconnect.deadline)
+    {
+        coop_reconnect.pending = false;
+        Msg("! [COOP_CLIENT] RECONNECT gave up");
+    }
+    if (!coop_reconnect.pending)
+    {
+        pApp->LoadEnd();
+        Console->Execute("main_menu on");
+        return true;
+    }
+    if (now < coop_reconnect.next_attempt) return false;
+    coop_reconnect.next_attempt = now + 10000;
+    coop_arm_wait_screen();
+    pApp->LoadEnd(); // the start's own LoadBegin carries the screen on
+    string1024 command;
+    xr_sprintf(command, "start client(%s)", coop_reconnect.client_options.c_str());
+    Msg("[COOP_CLIENT] RECONNECT attempt: %s", command);
+    Console->Execute(command);
+    return true;
 }
 
 void game_cl_Coop::ReconnectUpdate()
@@ -202,18 +256,20 @@ void game_cl_Coop::ReconnectUpdate()
         if (g_pGameLevel->bReady && Level().game && !Level().net_isDisconnected())
         {
             coop_reconnect.pending = false;
+            g_disconnect_wait.clear(); // a later disconnect is a real one: the menu again
             Msg("[COOP_CLIENT] RECONNECTED");
         }
         return;
     }
-    if (Device.dwTimeGlobal > coop_reconnect.deadline)
+    if (!g_loading_events.empty() || !g_disconnect_wait.empty()) return; // the wait screen runs the attempts
+    if (Device.TimerAsync() > coop_reconnect.deadline)
     {
         coop_reconnect.pending = false;
         Msg("! [COOP_CLIENT] RECONNECT gave up");
         return;
     }
-    if (Device.dwTimeGlobal < coop_reconnect.next_attempt) return;
-    coop_reconnect.next_attempt = Device.dwTimeGlobal + 10000;
+    if (Device.TimerAsync() < coop_reconnect.next_attempt) return;
+    coop_reconnect.next_attempt = Device.TimerAsync() + 10000;
     string1024 command;
     xr_sprintf(command, "start client(%s)", coop_reconnect.client_options.c_str());
     Msg("[COOP_CLIENT] RECONNECT attempt: %s", command);

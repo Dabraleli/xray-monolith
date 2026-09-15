@@ -53,6 +53,7 @@ public:
     // and reconnects with its own client options until the server answers again (2 minutes).
     static void ScheduleReconnect();
     static void ReconnectUpdate(); // from CGamePersistent::OnFrame, level or no level
+    static bool ReconnectWaitEvent(); // the loading event under the loading screen while the server is away
     // The server announced the restart (levelchange|, reload| over the Lua channel, or M_CHANGE_LEVEL):
     // the bodies leave first, and the level's objects must not tick without an actor (CLevel::OnFrame).
     static bool RestartPending();

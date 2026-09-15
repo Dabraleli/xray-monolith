@@ -1,6 +1,7 @@
 #include "pch_script.h"
 #include "Level.h"
 #include "coop_alife_mirror.h"
+#include "game_cl_coop.h"
 #include "Level_Bullet_Manager.h"
 #include "xrserver.h"
 #include "xrmessages.h"
@@ -638,6 +639,7 @@ void CLevel::ClearAllObjects()
 void CLevel::OnInvalidHost()
 {
 	IPureClient::OnInvalidHost();
+	if (game_cl_Coop::RestartPending()) return; // a reconnect attempt before the server is back: the wait screen retries
 	if (MainMenu()->GetErrorDialogType() == CMainMenu::ErrNoError)
 		MainMenu()->SetErrorDialog(CMainMenu::ErrInvalidHost);
 };
@@ -651,6 +653,7 @@ void CLevel::OnInvalidPassword()
 void CLevel::OnSessionFull()
 {
 	IPureClient::OnSessionFull();
+	if (game_cl_Coop::RestartPending()) return;
 	if (MainMenu()->GetErrorDialogType() == CMainMenu::ErrNoError)
 		MainMenu()->SetErrorDialog(CMainMenu::ErrSessionFull);
 }

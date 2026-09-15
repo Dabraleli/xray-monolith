@@ -1871,6 +1871,13 @@ void CLevel::OnAlifeSimulatorLoaded()
 
 void CLevel::OnSessionTerminate(LPCSTR reason)
 {
+	// Coop client: the server restarts its world and drops the connection on purpose; the client
+	// waits under the loading screen (game_cl_Coop::ReconnectWaitEvent) - no "connection closed" box.
+	if (game_cl_Coop::RestartPending())
+	{
+		Msg("[COOP_CLIENT] SESSION_TERMINATE during the server restart: %s", reason ? reason : "");
+		return;
+	}
 	MainMenu()->OnSessionTerminate(reason);
 }
 

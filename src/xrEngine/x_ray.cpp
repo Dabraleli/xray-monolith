@@ -155,6 +155,10 @@ struct _SoundProcessor : public pureFrame
 //////////////////////////////////////////////////////////////////////////
 // global variables
 ENGINE_API CApplication* pApp = NULL;
+// Set by the game before it defers KERNEL:disconnect: the screen after the disconnect is this
+// loading event under the loading screen, not the main menu (a coop client waiting for its
+// server to come back with the next level); the event clears the reference LoadBegin took.
+ENGINE_API LOADING_EVENT g_disconnect_wait;
 static HWND logoWindow = NULL;
 
 int doLauncher();
@@ -1563,7 +1567,14 @@ void CApplication::OnEvent(EVENT E, u64 P1, u64 P2)
 			if ((FALSE == Engine.Event.Peek("KERNEL:quit")) && (FALSE == Engine.Event.Peek("KERNEL:start")))
 			{
 				Console->Execute("main_menu off");
-				Console->Execute("main_menu on");
+				if (!g_disconnect_wait.empty())
+				{
+					LoadBegin();
+					g_loading_events.push_back(g_disconnect_wait);
+					g_disconnect_wait.clear();
+				}
+				else
+					Console->Execute("main_menu on");
 			}
 		}
 		R_ASSERT(0 != g_pGamePersistent);
@@ -1776,6 +1787,27 @@ void gen_logo_name(string_path& dest, LPCSTR level_name, int num)
 	string16 buff;
 	xr_strcat(dest, sizeof(dest), "_");
 	xr_strcat(dest, sizeof(dest), itoa(num + 1, buff, 10));
+}
+
+void CApplication::LoadLevelLogo(LPCSTR level_folder)
+{
+	string_path path;
+	path[0] = 0;
+	int count = 0;
+	while (true)
+	{
+		string_path temp2;
+		gen_logo_name(path, level_folder, count);
+		if (FS.exist(temp2, "$game_textures$", path, ".dds"))
+			count++;
+		else
+			break;
+	}
+	if (count)
+	{
+		gen_logo_name(path, level_folder, ::Random.randI(count));
+		m_pRender->setLevelLogo(path);
+	}
 }
 
 void CApplication::Level_Set(u32 L)

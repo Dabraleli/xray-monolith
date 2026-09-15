@@ -61,6 +61,8 @@ public:
 	void LoadStage();
 	void LoadSwitch();
 	void LoadDraw();
+	// The loading screen's picture of a level (as Level_Set picks it), without touching $level$.
+	void LoadLevelLogo(LPCSTR level_folder);
 
 	virtual void OnEvent(EVENT E, u64 P1, u64 P2);
 
