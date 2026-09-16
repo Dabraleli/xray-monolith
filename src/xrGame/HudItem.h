@@ -171,6 +171,10 @@ public:
 
 	virtual void SwitchState(u32 S);
 	virtual void OnStateSwitch(u32 S, u32 oldState);
+	// Coop client: an item whose states are its own HUD's business (a device: CCustomDevice) switches
+	// them locally for the own body, as in single player; every other item waits for the server's
+	// GE_WPN_STATE_CHANGE.
+	virtual bool coop_client_local_state() const { return false; }
 
 	virtual void OnAnimationEnd(u32 state);
 

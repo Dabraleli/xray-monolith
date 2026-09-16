@@ -145,7 +145,14 @@ void CHudItem::renderable_Render()
 void CHudItem::SwitchState(u32 S)
 {
 	if (OnClient())
+	{
+		// Coop client: a device (detector) has no state machine on the server - CCustomDevice::UpdateVisibility
+		// drives it from the HUD's attached weapon, which only the owning client has; in single player the
+		// same call loops back through the local server. The own body's device switches here.
+		if (IsGameTypeCoop() && coop_client_local_state() && object().H_Parent() && object().H_Parent() == Level().CurrentControlEntity())
+			OnStateSwitch(S, GetState());
 		return;
+	}
 
 	SetNextState(S);
 

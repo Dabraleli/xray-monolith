@@ -5,6 +5,7 @@
 #include "player_hud.h"
 #include "weapon.h"
 #include "Missile.h"
+#include "xrmessages.h" // coop client: GEG_PLAYER_ACTIVATE_SLOT for the device-compatible slot
 
 CCustomDevice::CCustomDevice()
 {
@@ -114,6 +115,14 @@ void CCustomDevice::ToggleDevice(bool bFastMode)
 			if (slot_to_activate != NO_ACTIVE_SLOT)
 			{
 				m_pInventory->Activate(slot_to_activate);
+				if (IsGameTypeCoop() && OnClient() && H_Parent())
+				{
+					// the body's weapons switch on the server (as the slot keys do): ask it for the compatible slot
+					NET_Packet P;
+					CGameObject::u_EventGen(P, GEG_PLAYER_ACTIVATE_SLOT, H_Parent()->ID());
+					P.w_u16(slot_to_activate);
+					CGameObject::u_EventSend(P);
+				}
 				m_bNeedActivation = true;
 			}
 			else
@@ -132,6 +141,7 @@ void CCustomDevice::OnStateSwitch(u32 S, u32 oldState)
 	{
 	case eShowing:
 	{
+		if (!ParentIsActor()) break; // coop: another body's device (its client shows it) - not this HUD
 		g_player_hud->attach_item(this);
 
 		if (!IsUsingCondition() || (m_CustomDeviceEnabled && IsUsingCondition() && GetCondition() >= m_fLowestBatteryCharge))

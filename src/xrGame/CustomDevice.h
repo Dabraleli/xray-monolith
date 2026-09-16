@@ -36,6 +36,7 @@ public:
 	};
 
 	virtual bool IsWorking();
+	virtual bool coop_client_local_state() const { return true; } // coop client: the own device's states are local (CHudItem::SwitchState)
 
 	virtual void OnMoveToRuck(const SInvItemPlace& prev);
 	virtual void on_a_hud_attach();
