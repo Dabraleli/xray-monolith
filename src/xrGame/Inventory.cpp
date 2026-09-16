@@ -1577,7 +1577,9 @@ void CInventory::UnblockSlot(u16 slot_id)
 	VERIFY2(m_blocked_slots[slot_id] > 0,
 	        make_string("blocked slot [%d] underflow").c_str());
 
-	--m_blocked_slots[slot_id];
+	// An unblock without its block (coop: a client's restore_weapon reaching a body re-created by a
+	// world restart) wrapped the u8 to 255 - every slot blocked for good, no weapon could be drawn.
+	if (m_blocked_slots[slot_id] > 0) --m_blocked_slots[slot_id];
 }
 
 bool CInventory::IsSlotBlocked(u16 slot_id) const

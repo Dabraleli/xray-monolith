@@ -282,6 +282,8 @@ void game_cl_Coop::ReconnectUpdate()
 
 // ---- downed players -------------------------------------------------------------------------------
 
+bool game_cl_Coop::s_following_place = false;
+
 static xr_set<u16> coop_downed_bodies;
 static xr_string coop_revive_hint = "Revive";
 

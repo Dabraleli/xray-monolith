@@ -19,6 +19,7 @@
 #include "entity_alive.h"
 #include "Level.h"
 #include "game_cl_base.h"
+#include "game_cl_coop.h" // coop client: s_following_place
 #include "Actor.h"
 #include "string_table.h"
 #include "../Include/xrRender/Kinematics.h"
@@ -324,6 +325,9 @@ void CInventoryItem::OnEvent(NET_Packet& P, u16 type)
 			const bool differs = place.type != m_ItemCurrPlace.type ||
 				(place.type == eItemPlaceSlot && place.slot_id != m_ItemCurrPlace.slot_id);
 			if (!differs) break;
+			// The move is the server's, not the player's: the client Lua's slot callbacks run, but the
+			// item animations (actor_effects: putting the outfit on) stay quiet - as after a load in SP.
+			game_cl_Coop::s_following_place = true;
 			if (place.type == eItemPlaceSlot && place.slot_id != NO_ACTIVE_SLOT && place.slot_id <= LAST_SLOT)
 			{
 				// the slot's present holder (the client's default placement) goes to the ruck; its own state moves it on
@@ -335,6 +339,7 @@ void CInventoryItem::OnEvent(NET_Packet& P, u16 type)
 				m_pInventory->Belt(this, true);
 			else if (place.type == eItemPlaceRuck)
 				m_pInventory->Ruck(this, true);
+			game_cl_Coop::s_following_place = false;
 		}
 		break;
 	}

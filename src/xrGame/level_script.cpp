@@ -2020,6 +2020,14 @@ CScriptIniFile* g_coop_server_ini()
 	return ini;
 }
 
+#include "game_cl_coop.h"
+// Coop client: the item move being applied is the server's placement (GE_COOP_ITEM_STATE), not the
+// player's - the item animations of actor_effects stay quiet for it.
+bool g_coop_following_place()
+{
+	return IsGameTypeCoop() && !OnServer() && game_cl_Coop::s_following_place;
+}
+
 // Coop server: a body that is down (game_sv_Coop::DownBody) - no fast travel out of a bleed-out.
 bool g_coop_body_downed(u16 body_id)
 {
@@ -2655,6 +2663,7 @@ void CLevel::script_register(lua_State* L)
 			def("coop_map_spot", &g_coop_map_spot), // coop server: add/remove a map spot in one player's PDA (fast travel markers)
 			def("coop_server_ini", &g_coop_server_ini, adopt<result>()), // coop server: coop_server.ltx as an ini_file, nil without it
 			def("coop_body_downed", &g_coop_body_downed), // coop server: the body is down (bleeding out)
+			def("coop_following_place", &g_coop_following_place), // coop client: the current item move is the server's placement
 			def("coop_set_lua_owner", &g_coop_set_lua_owner), // coop server: an NPC's Lua runs for this player (companions)
 			def("coop_player_body", &g_coop_player_body), // coop server: the living body id of a connected player, 65535 if none
 			def("coop_body_player", &g_coop_body_player), // coop server: the player (connection name) of a body, "" if not a player's
