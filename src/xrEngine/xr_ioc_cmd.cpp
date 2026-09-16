@@ -356,13 +356,9 @@ class CCC_Start : public IConsole_Command
 			sscanf(strstr(args, name) + xr_strlen(name), "(%[^)])", dest);
 	}
 
-	void protect_Name_strlwr(LPSTR str)
+	// The value of one option (name=..., coop=...) keeps its case after strlwr of the whole string.
+	void protect_option_case(LPSTR str, LPCSTR out, LPCSTR name_str)
 	{
-		string4096 out;
-		xr_strcpy(out, sizeof(out), str);
-		strlwr(str);
-
-		LPCSTR name_str = "name=";
 		LPCSTR name1 = strstr(str, name_str);
 		if (!name1 || !xr_strlen(name1))
 		{
@@ -384,6 +380,17 @@ class CCC_Start : public IConsole_Command
 		{
 			str[i] = out[i];
 		}
+	}
+
+	void protect_Name_strlwr(LPSTR str)
+	{
+		string4096 out;
+		xr_strcpy(out, sizeof(out), str);
+		strlwr(str);
+		protect_option_case(str, out, "name=");
+		// Coop: the join menu's character (coop=faction:...;icon:ui_inGame2_...;...) - the portrait is a
+		// texture id, and texture ids are case-sensitive (the PDA and the talk news lost it).
+		protect_option_case(str, out, "coop=");
 	}
 
 public:
