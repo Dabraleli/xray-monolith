@@ -114,12 +114,15 @@ public:
 
 	shared_str m_owner_task_id;
 
-	// Coop client: where the server says the object is (level and position), used while the
-	// object itself is not on this client (another level, offline). A live object still wins.
+	// Coop client: where the server says the object is (level, position and game vertex), used
+	// while the object itself is not on this client (another level, offline). A live object
+	// still wins. The vertex stands in for m_owner_se_object->m_tGraphID when the pointer of a
+	// spot on another level is routed through the game graph.
 	bool m_coop_external;
 	shared_str m_coop_level;
 	Fvector m_coop_position;
-	void InitCoopExternal(LPCSTR level_name, const Fvector& position);
+	GameGraph::_GRAPH_ID m_coop_graph_id;
+	void InitCoopExternal(LPCSTR level_name, const Fvector& position, GameGraph::_GRAPH_ID graph_id = GameGraph::_GRAPH_ID(-1));
 
 	void LoadSpot(LPCSTR type, bool bReload);
 	LPCSTR spot_type;

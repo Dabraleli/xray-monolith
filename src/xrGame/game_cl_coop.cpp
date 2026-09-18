@@ -791,10 +791,12 @@ void game_cl_Coop::OnPdaMessage(NET_Packet& P)
         shared_str where_level;
         Fvector where_position;
         where_position.set(0.f, 0.f, 0.f);
+        GameGraph::_GRAPH_ID where_vertex = GameGraph::_GRAPH_ID(-1);
         if (has_where)
         {
             P.r_stringZ(where_level);
             P.r_vec3(where_position);
+            where_vertex = P.r_u16();
         }
         if (!id.size()) break;
         CGameTaskManager& manager = Level().GameTaskManager();
@@ -823,7 +825,7 @@ void game_cl_Coop::OnPdaMessage(NET_Packet& P)
             task->ChangeMapLocation(map_location.c_str() ? map_location.c_str() : "", map_object_id);
         // The target may live on another level: the server says where, the spot draws there.
         if (has_where && task->LinkedMapLocation())
-            task->LinkedMapLocation()->InitCoopExternal(where_level.c_str(), where_position);
+            task->LinkedMapLocation()->InitCoopExternal(where_level.c_str(), where_position, where_vertex);
         if (task->GetTaskState() != ETaskState(state) && state != eTaskStateInProgress)
             manager.SetTaskState(task, ETaskState(state));
         if (strstr(Core.Params, "-coop_damage_probe"))
@@ -842,17 +844,19 @@ void game_cl_Coop::OnPdaMessage(NET_Packet& P)
         shared_str where_level;
         Fvector where_position;
         where_position.set(0.f, 0.f, 0.f);
+        GameGraph::_GRAPH_ID where_vertex = GameGraph::_GRAPH_ID(-1);
         if (has_where)
         {
             P.r_stringZ(where_level);
             P.r_vec3(where_position);
+            where_vertex = P.r_u16();
         }
         if (!spot.size()) break;
         CMapLocation* ml = Level().MapManager().GetMapLocation(spot, id);
         if (!ml) ml = Level().MapManager().AddMapLocation(spot, id);
         if (hint.size()) ml->SetHint(hint);
         if (serializable) ml->SetSerializable(true);
-        if (has_where) ml->InitCoopExternal(where_level.c_str(), where_position);
+        if (has_where) ml->InitCoopExternal(where_level.c_str(), where_position, where_vertex);
         break;
     }
     case 3: // map spot hint

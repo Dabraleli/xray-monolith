@@ -69,14 +69,16 @@ CMapLocation::CMapLocation(LPCSTR type, u16 object_id)
 		m_cached.m_LevelName = Level().name();
 	m_coop_external = false;
 	m_coop_position.set(0.f, 0.f, 0.f);
+	m_coop_graph_id = GameGraph::_GRAPH_ID(-1);
 }
 
-void CMapLocation::InitCoopExternal(LPCSTR level_name, const Fvector& position)
+void CMapLocation::InitCoopExternal(LPCSTR level_name, const Fvector& position, GameGraph::_GRAPH_ID graph_id)
 {
 	if (!level_name || !*level_name) return;
 	m_coop_external = true;
 	m_coop_level = level_name;
 	m_coop_position = position;
+	m_coop_graph_id = graph_id;
 	m_cached.m_LevelName = m_coop_level;
 	m_position_global = position;
 	m_cached.m_Position.set(position.x, position.z);
@@ -472,9 +474,14 @@ void CMapLocation::UpdateSpot(CUICustomMap* map, CMapSpot* sp)
 	}
 	else if (Level().name() == map->MapName() && GetSpotPointer(sp))
 	{
-		GameGraph::_GRAPH_ID dest_graph_id;
-
-		dest_graph_id = m_owner_se_object->m_tGraphID;
+		// Coop client: no ALife object here, the server sent the target's game vertex with the
+		// spot (InitCoopExternal). Without it, or without a body to route from (spectating),
+		// the spot on the other level has no pointer.
+		GameGraph::_GRAPH_ID dest_graph_id = m_owner_se_object ? m_owner_se_object->m_tGraphID : m_coop_graph_id;
+		if (!ai().get_game_graph() || !ai().game_graph().valid_vertex_id(dest_graph_id))
+			return;
+		if (!Actor() || !ai().game_graph().valid_vertex_id(Actor()->ai_location().game_vertex_id()))
+			return;
 
 		map_point_path.clear();
 

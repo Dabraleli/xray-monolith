@@ -1661,6 +1661,7 @@ static void coop_pda_write_where(NET_Packet& P, u16 object_id)
     LPCSTR level_name = NULL;
     Fvector position;
     position.set(0.f, 0.f, 0.f);
+    GameGraph::_GRAPH_ID graph_id = GameGraph::_GRAPH_ID(-1);
     if (object_id != u16(-1) && ai().get_alife())
     {
         CSE_ALifeDynamicObject* se = ai().alife().objects().object(object_id, true);
@@ -1668,6 +1669,7 @@ static void coop_pda_write_where(NET_Packet& P, u16 object_id)
         {
             level_name = ai().game_graph().header().level(ai().game_graph().vertex(se->m_tGraphID)->level_id()).name().c_str();
             position = se->o_Position;
+            graph_id = se->m_tGraphID; // the client routes the pointer of a spot on another level from it
         }
     }
     P.w_u8(level_name ? 1 : 0);
@@ -1675,6 +1677,7 @@ static void coop_pda_write_where(NET_Packet& P, u16 object_id)
     {
         P.w_stringZ(level_name);
         P.w_vec3(position);
+        P.w_u16(graph_id);
     }
 }
 
