@@ -76,7 +76,15 @@ CActor* Actor()
 	if (!g_pGameLevel)
 		return (NULL);
 
-	return (smart_cast<CActor*>(Level().CurrentControlEntity()));
+	CActor* control = smart_cast<CActor*>(Level().CurrentControlEntity());
+	if (control)
+		return (control);
+
+	// No control entity: our own body between its net_Spawn and the control assignment, and
+	// inside its net_Destroy (CGameObject::net_Destroy drops the control entity before the
+	// Lua binder's net_destroy runs its actor_on_net_destroy listeners). g_actor is the last
+	// local player actor - this client's own body, as in single player; NULL while spectating.
+	return (g_actor);
 };
 
 //--------------------------------------------------------------------

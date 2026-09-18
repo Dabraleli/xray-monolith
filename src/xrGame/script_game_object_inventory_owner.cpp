@@ -1207,16 +1207,23 @@ void CScriptGameObject::RunTalkDialog(CScriptGameObject* pToWho, bool disable_br
 
 void CScriptGameObject::ActorLookAtPoint(Fvector point)
 {
+	// Coop client: no actor while spectating (a script's dialog camera outliving the body).
+	if (!Actor())
+		return;
 	CCameraBase* c = Actor()->cam_FirstEye();
 	CCameraFirstEye* cf = smart_cast<CCameraFirstEye*>(c);
-	cf->LookAtPoint(point);
+	if (cf)
+		cf->LookAtPoint(point);
 }
 
 void CScriptGameObject::ActorStopLookAtPoint()
 {
+	if (!Actor())
+		return;
 	CCameraBase* c = Actor()->cam_FirstEye();
 	CCameraFirstEye* cf = smart_cast<CCameraFirstEye*>(c);
-	cf->StopLookAtPoint();
+	if (cf)
+		cf->StopLookAtPoint();
 }
 
 //////////////////////////////////////////////////////////////////////////
