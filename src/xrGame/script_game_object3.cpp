@@ -1950,8 +1950,15 @@ float CScriptGameObject::GetLuminocityHemi()
 	return e->renderable_ROS()->get_luminocity_hemi();
 }
 
+extern float coop_estimated_luminocity(const CGameObject* game_object); // visual_memory_manager.cpp
+
 float CScriptGameObject::GetLuminocity()
 {
+	// Coop server: no renderer lights the objects (a headless server's ROS stays dark) - the light
+	// estimate the NPC memory uses (sky, ambient, the sun when unshadowed), so the Lua visibility
+	// formulas (GAMMA Stealth Overhaul reads who:get_luminocity()) see the bodies as the engine does.
+	if (IsGameTypeCoop() && OnServer() && !strstr(Core.Params, "-coop_server_native_luminocity"))
+		return coop_estimated_luminocity(&object());
 	CObject* e = smart_cast<CObject*>(&object());
 	if (!e || !e->renderable_ROS())
 	{

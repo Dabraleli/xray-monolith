@@ -324,6 +324,10 @@ float CVisualMemoryManager::object_visible_distance(const CGameObject* game_obje
 // any object and every target stays "dark" for AI vision. Estimate the renderer's average
 // lighting from the current weather: ambient, half of the sky hemisphere (the renderer's own
 // initial value) and the sun when a ray toward it is clear. Dynamic light sources are not included.
+// Coop server: the light on an object estimated without a renderer (below); the Lua of the
+// visibility formula (GAMMA Stealth Overhaul: who:get_luminocity()) reads it through
+// CScriptGameObject::GetLuminocity as the engine's memory does.
+float coop_estimated_luminocity(const CGameObject* game_object);
 static float coop_server_luminocity(const CGameObject* game_object)
 {
     struct SSample { u32 time; float value; };
@@ -345,6 +349,11 @@ static float coop_server_luminocity(const CGameObject* game_object)
     clamp(value, 0.f, 1.f);
     sample.time = Device.dwTimeGlobal; sample.value = value;
     return value;
+}
+
+float coop_estimated_luminocity(const CGameObject* game_object)
+{
+	return coop_server_luminocity(game_object);
 }
 
 float CVisualMemoryManager::object_luminocity(const CGameObject* game_object) const
