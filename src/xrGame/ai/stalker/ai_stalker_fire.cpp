@@ -55,6 +55,7 @@
 #include "../../trajectories.h"
 #include "script_hit.h"
 #include "../../xrServerEntities/script_engine.h"
+#include "../../game_sv_coop.h"
 
 using namespace StalkerSpace;
 
@@ -429,6 +430,10 @@ void CAI_Stalker::Hit(SHit* pHDS)
 	{
 		CScriptHit tLuaHit(&HDS);
 
+		// Coop server: a hit by a player body is a hit by "the actor" for the NPC damage model
+		// (npc_on_before_hit: GAMMA's grok_bo applies the player's damage itself, the no-friendly-fire
+		// and the story-NPC rules tell the actor's shots from the NPCs' by db.actor).
+		CoopLuaActor coop_actor(game_sv_Coop::BodyOf(HDS.who), false);
 		::luabind::functor<bool>	funct;
 		if (ai().script_engine().functor("_G.CAI_Stalker__BeforeHitCallback", funct))
 		{

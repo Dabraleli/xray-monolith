@@ -488,6 +488,8 @@ void CBaseMonster::Hit(SHit* pHDS)
 
 	CScriptHit tLuaHit(pHDS);
 
+	// Coop server: a hit by a player body is "the actor's" for monster_on_before_hit (GAMMA's grok_bo).
+	CoopLuaActor coop_actor(game_sv_Coop::BodyOf(pHDS->who), false);
 	::luabind::functor<bool>	funct;
 	if (ai().script_engine().functor("_G.CBaseMonster__BeforeHitCallback", funct))
 	{
