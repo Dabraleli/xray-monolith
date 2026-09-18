@@ -1848,6 +1848,14 @@ void CScriptGameObject::SwitchState(u32 state)
 	CWeapon* Weapon = object().cast_weapon();
 	if (Weapon)
 	{
+		// Coop client, a weapon of this body: the state is the server's to switch (the reload of
+		// GAMMA's magazines: weapon:switch_state(7) with the reload key withheld); it comes back
+		// with the weapon's state replication. CHudItem::SwitchState ignores it on a client.
+		if (IsGameTypeCoop() && OnClient() && Weapon->H_Parent() && Weapon->H_Parent() == Level().CurrentControlEntity())
+		{
+			game_cl_Coop::ItemVerb("item|state|%u|%u", object().ID(), state);
+			return;
+		}
 		Weapon->SwitchState(state);
 		return;
 	}

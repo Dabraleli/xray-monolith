@@ -887,6 +887,7 @@ void CScriptGameObject::SetAmmoType(u8 type)
 	CWeapon* weapon = smart_cast<CWeapon*>(&object());
 	if (!weapon) return;
 
+	game_cl_Coop::ItemVerb("item|ammo_type|%u|%u", object().ID(), u32(type)); // coop client: the server's weapon too
 	weapon->SetAmmoType(type);
 }
 
