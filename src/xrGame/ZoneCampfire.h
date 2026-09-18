@@ -23,6 +23,7 @@ public:
 	virtual void Load(LPCSTR section);
 	virtual void GoEnabledState();
 	virtual void GoDisabledState();
+	virtual void OnEvent(NET_Packet& P, u16 type); // coop client: is_on follows the server's zone state
 
 	void turn_on_script();
 	void turn_off_script();

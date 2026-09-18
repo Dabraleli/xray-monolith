@@ -2,6 +2,7 @@
 #include "ZoneCampfire.h"
 #include "ParticlesObject.h"
 #include "GamePersistent.h"
+#include "Level.h" // coop: IsGameTypeCoop, GE_ZONE_STATE_CHANGE
 #include "../xrEngine/LightAnimLibrary.h"
 
 /*
@@ -93,6 +94,24 @@ void CZoneCampfire::turn_off_script()
 bool CZoneCampfire::is_on()
 {
 	return m_turned_on;
+}
+
+// Coop client: a campfire is lit and put out on the server (bind_campfire's Lua there, a player's
+// matches through the server); the replica here gets the switches as the zone state only, and
+// the flag the scripts read (is_on: the ignite or extinguish hint of the coop client) followed
+// nothing. It follows the state now; a replica still starts on, the server lists the fires it
+// has out when the player joins.
+void CZoneCampfire::OnEvent(NET_Packet& P, u16 type)
+{
+	if (type == GE_ZONE_STATE_CHANGE && IsGameTypeCoop() && OnClient())
+	{
+		const u32 pos = P.r_pos;
+		u8 S;
+		P.r_u8(S);
+		P.r_pos = pos;
+		m_turned_on = EZoneState(S) != eZoneStateDisabled;
+	}
+	inherited::OnEvent(P, type);
 }
 
 void CZoneCampfire::shedule_Update(u32 dt)
