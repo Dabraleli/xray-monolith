@@ -1067,6 +1067,13 @@ void game_sv_Coop::save_game(NET_Packet& net_packet, ClientID sender)
             if (object && object->ID_Parent == body->ID && !object->m_bOnline) object->client_data = item->second;
         }
     }
+    // The world's Lua before its save_state pass (coop_server_actor.before_save): the listeners walk
+    // the game-object tables of the mods and call into what they hold - an entry of an object that is
+    // gone crashes the save (18.09, the GAMMA host, F6 after two bandits were killed and looted).
+    {
+        ::luabind::functor<void> before_save;
+        if (ai().script_engine().functor("coop_server_actor.before_save", before_save)) before_save();
+    }
     alife().save(name.c_str(), update_name); // header, time, spawns, objects, registries + the Lua state (.scoc)
     coop_store_save(m_store, name.c_str());
     {
