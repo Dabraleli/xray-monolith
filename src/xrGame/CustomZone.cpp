@@ -1341,6 +1341,8 @@ void CCustomZone::OnEvent(NET_Packet& P, u16 type)
 		{
 			u8 S;
 			P.r_u8(S);
+			if (IsGameTypeCoop() && strstr(Core.Params, "-coop_hit_trace"))
+				Msg("[COOP_ZONE_STATE] side=%s id=%u section=%s event state=%u", OnServer() ? "server" : "client", ID(), cNameSect().c_str(), S);
 			OnStateSwitch(EZoneState(S));
 			break;
 		}
@@ -1611,6 +1613,8 @@ void CCustomZone::UpdateOnOffState()
 void CCustomZone::GoDisabledState()
 {
 	//switch to disable	
+	if (IsGameTypeCoop() && strstr(Core.Params, "-coop_hit_trace"))
+		Msg("[COOP_ZONE_STATE] side=%s id=%u section=%s go=disabled", OnServer() ? "server" : "client", ID(), cNameSect().c_str());
 	NET_Packet P;
 	u_EventGen(P, GE_ZONE_STATE_CHANGE, ID());
 	P.w_u8(u8(eZoneStateDisabled));
@@ -1629,6 +1633,8 @@ void CCustomZone::GoDisabledState()
 void CCustomZone::GoEnabledState()
 {
 	//switch to idle	
+	if (IsGameTypeCoop() && strstr(Core.Params, "-coop_hit_trace"))
+		Msg("[COOP_ZONE_STATE] side=%s id=%u section=%s go=enabled", OnServer() ? "server" : "client", ID(), cNameSect().c_str());
 	NET_Packet P;
 	u_EventGen(P, GE_ZONE_STATE_CHANGE, ID());
 	P.w_u8(u8(eZoneStateIdle));
