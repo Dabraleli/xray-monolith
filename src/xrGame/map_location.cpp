@@ -108,6 +108,16 @@ void CMapLocation::destroy()
 
 CUIXml* g_uiSpotXml = NULL;
 
+bool CMapLocation::SpotTypeExists(LPCSTR type)
+{
+	if (!g_uiSpotXml)
+	{
+		g_uiSpotXml = xr_new<CUIXml>();
+		g_uiSpotXml->Load(CONFIG_PATH, UI_PATH, "map_spots.xml");
+	}
+	return type && g_uiSpotXml->NavigateToNode(type, 0) != NULL;
+}
+
 void CMapLocation::LoadSpot(LPCSTR type, bool bReload)
 {
 	if (!g_uiSpotXml)

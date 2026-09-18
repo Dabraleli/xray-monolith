@@ -924,6 +924,7 @@ void CActor::Die(CObject* who)
 	{
 		Level().MapManager().RemoveMapLocation("actor_location", ID());
 		Level().MapManager().RemoveMapLocation("actor_location_p", ID());
+		Level().MapManager().RemoveMapLocation("coop_player_location", ID());
 	}
 
 	if (OnServer())

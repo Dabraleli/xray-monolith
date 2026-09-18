@@ -35,6 +35,7 @@
 #include "ui/UITaskWnd.h"
 
 #include "map_manager.h"
+#include "map_location.h"
 #include "ui/UIMainIngameWnd.h"
 #include "gamepersistent.h"
 #include "game_object_space.h"
@@ -745,6 +746,12 @@ BOOL CActor::net_Spawn(CSE_Abstract* DC)
 		{
 			Level().MapManager().AddMapLocation("actor_location", ID());
 			Level().MapManager().AddMapLocation("actor_location_p", ID());
+			// The other players on a coop client's minimap: actor_location draws on the level map
+			// only (in SP the player is the minimap's centre), so the teammate showed on the PDA map
+			// and not on the minimap. coop_player_location is the mini spot the coop modxml adds to
+			// map_spots.xml (modxml_coop_map_spots); nothing where the XML lacks it.
+			if (IsGameTypeCoop() && OnClient() && !DC->s_flags.is(M_SPAWN_OBJECT_ASPLAYER) && CMapLocation::SpotTypeExists("coop_player_location"))
+				Level().MapManager().AddMapLocation("coop_player_location", ID());
 		}
 
 		m_statistic_manager = xr_new<CActorStatisticMgr>();

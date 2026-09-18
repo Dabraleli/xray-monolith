@@ -125,6 +125,9 @@ public:
 	void InitCoopExternal(LPCSTR level_name, const Fvector& position, GameGraph::_GRAPH_ID graph_id = GameGraph::_GRAPH_ID(-1));
 
 	void LoadSpot(LPCSTR type, bool bReload);
+	// Whether map_spots.xml defines the spot type (a coop client asks before it adds a spot that
+	// only its own modxml provides; LoadSpot asserts on an unknown type).
+	static bool SpotTypeExists(LPCSTR type);
 	LPCSTR spot_type;
 
 #ifdef DEBUG
