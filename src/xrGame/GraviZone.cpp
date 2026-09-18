@@ -9,6 +9,7 @@
 #include "PhysicsShellHolder.h"
 #include "Level.h"
 #include "CharacterPhysicsSupport.h"
+#include "Actor.h"
 
 CBaseGraviZone::CBaseGraviZone(void)
 {
@@ -146,6 +147,11 @@ void CBaseGraviZone::Affect(SZoneObjectInfo* O)
 
 	bool CanApplyPhisImpulse = GO->Local() == TRUE;
 
+	// -coop_hit_trace: the pull on a player's body (the client's own body is the one this zone can move)
+	if (IsGameTypeCoop() && strstr(Core.Params, "-coop_hit_trace") && smart_cast<CActor*>(GO))
+		Msg("[COOP_GRAVI] side=%s zone=%u body=%u state=%d dist=%f dist_to_radius=%f blowout_pct=%f local=%d field=%d", OnServer() ? "server" : "client", ID(), GO->ID(),
+			int(ZoneState()), dist, dist_to_radius, BlowoutRadiusPercent(GO), CanApplyPhisImpulse ? 1 : 0, CheckAffectField(GO, dist_to_radius) ? 1 : 0);
+
 	if (CheckAffectField(GO, dist_to_radius) && CanApplyPhisImpulse)
 	{
 		AffectPull(GO, throw_in_dir, dist);
@@ -192,6 +198,8 @@ void CBaseGraviZone::AffectPullAlife(CEntityAlive* EA, const Fvector& throw_in_d
 	Fvector vel;
 	vel.set(throw_in_dir);
 	vel.mul(throw_power);
+	if (IsGameTypeCoop() && strstr(Core.Params, "-coop_hit_trace") && smart_cast<CActor*>(EA))
+		Msg("[COOP_GRAVI] pull side=%s body=%u power=%f vel=%f,%f,%f", OnServer() ? "server" : "client", EA->ID(), throw_power, VPUSH(vel));
 	EA->character_physics_support()->movement()->AddControlVel(vel);
 }
 

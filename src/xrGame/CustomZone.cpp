@@ -779,6 +779,9 @@ void CCustomZone::feel_touch_new(CObject* O)
 		object_info.zone_ignore = false;
 	enter_Zone(object_info);
 	m_ObjectInfoMap.push_back(object_info);
+	if (IsGameTypeCoop() && strstr(Core.Params, "-coop_hit_trace") && smart_cast<CActor*>(pGameObject))
+		Msg("[COOP_ZONE_TOUCH] side=%s zone=%u section=%s body=%u ignore=%d state=%d enabled=%d", OnServer() ? "server" : "client", ID(), cNameSect().c_str(),
+			pGameObject->ID(), object_info.zone_ignore ? 1 : 0, int(m_eZoneState), IsEnabled() ? 1 : 0);
 
 	if (IsEnabled())
 	{
