@@ -188,12 +188,32 @@ void CActor::PickupModeUpdate_COD(pickup_result_t pickup_result)
 	float maxlen = 1000.0f;
 	CInventoryItem* pNearestItem = NULL;
 
+	// -coop_pickup_probe (coop client): once a second, every inventory item within 3 m and what the
+	// filters below make of it; the candidate of the frame follows as the last line.
+	static u32 coop_probe_report = 0;
+	const bool coop_probe = IsGameTypeCoop() && strstr(Core.Params, "-coop_pickup_probe") && Device.dwTimeGlobal - coop_probe_report >= 1000;
+	if (coop_probe) coop_probe_report = Device.dwTimeGlobal;
+
 	for (u32 o_it = 0; o_it < ISpatialResult.size(); o_it++)
 	{
 		ISpatial* spatial = ISpatialResult[o_it];
 		CInventoryItem* pIItem = smart_cast<CInventoryItem*>(spatial->dcast_CObject());
 
 		if (0 == pIItem) continue;
+		if (coop_probe)
+		{
+			Fvector c; pIItem->object().Center(c);
+			const float d2 = c.distance_to_sqr(Position());
+			if (d2 <= 9.f)
+			{
+				Fvector t; t.sub(c, cam_Active()->vPosition);
+				Fvector b; b.mad(cam_Active()->vPosition, cam_Active()->vDirection, t.dotproduct(cam_Active()->vDirection));
+				Msg("[COOP_PICKUP] item id=%u section=%s parent=%d can_take=%d distance=%f ray=%f visible=%d destroy=%d denied=%d ray_clear=%d",
+					pIItem->object().ID(), pIItem->object().cNameSect().c_str(), pIItem->object().H_Parent() ? 1 : 0, pIItem->CanTake() ? 1 : 0,
+					_sqrt(d2), _sqrt(b.distance_to_sqr(c)), pIItem->object().getVisible() ? 1 : 0, pIItem->object().getDestroy() ? 1 : 0,
+					Level().m_feel_deny.is_object_denied(&pIItem->object()) ? 1 : 0, CanPickItem(frustum, Device.vCameraPosition, &pIItem->object()) ? 1 : 0);
+			}
+		}
 		if (pIItem->object().H_Parent() != NULL) continue;
 		if (!pIItem->CanTake()) continue;
 		if (smart_cast<CExplosiveRocket*>(&pIItem->object())) continue;
@@ -237,6 +257,9 @@ void CActor::PickupModeUpdate_COD(pickup_result_t pickup_result)
 		if (!pNearestItem->cast_game_object()->getVisible())
 			pNearestItem = NULL;
 	}
+	if (coop_probe)
+		Msg("[COOP_PICKUP] candidate=%d pickup_mode=%d handled=%d allow=%d in_frustum=%u", pNearestItem ? int(pNearestItem->object().ID()) : -1,
+			m_bPickupMode ? 1 : 0, pickup_result.callback_handled ? 1 : 0, pickup_result.allow_pickup ? 1 : 0, u32(ISpatialResult.size()));
 
 	if (CurrentGameUI()) CurrentGameUI()->UIMainIngameWnd->SetPickUpItem(pNearestItem);
 
@@ -260,6 +283,8 @@ void CActor::PickupModeUpdate_COD(pickup_result_t pickup_result)
 				pickup_result = { allow_pickup, true };
 			}
 		}
+		if (IsGameTypeCoop() && strstr(Core.Params, "-coop_pickup_probe"))
+			Msg("[COOP_PICKUP] before_pickup item=%u allow=%d", pNearestItem->object().ID(), pickup_result.allow_pickup ? 1 : 0);
 
 		if (!pickup_result.allow_pickup)
 			return;
@@ -271,6 +296,8 @@ void CActor::PickupModeUpdate_COD(pickup_result_t pickup_result)
 		if (!psActorFlags.test(AF_MULTI_ITEM_PICKUP))
 			m_bPickupMode = false;
 
+		if (IsGameTypeCoop() && strstr(Core.Params, "-coop_pickup_probe"))
+			Msg("[COOP_PICKUP] take item=%u", pNearestItem->object().ID());
 		Game().SendPickUpEvent(ID(), pNearestItem->object().ID());
 	}
 };

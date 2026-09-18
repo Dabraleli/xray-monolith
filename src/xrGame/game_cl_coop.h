@@ -15,6 +15,10 @@ class game_cl_Coop : public game_cl_Single
     u32 m_item_probe_bucket = 0;
     bool m_item_probe_looted = false;
     u32 m_item_probe_last_report = 0;
+    u32 m_pickup_probe_report = 0;
+    // -coop_pickup_probe: the camera looks at the nearest free item in reach (the COD pickup path of
+    // CActor::PickupModeUpdate_COD and the Lua probe of coop_client_actor do the rest).
+    void PickupProbeUpdate(CActor* actor);
     CCoopStoreAssembler m_store_parts;
     // Replies to the client's ALife creations (created|<request>|<id>|<section>|<parent>|x,y,z from the
     // server's coop Lua): CreateWait pumps the network until the one it waits for arrives.

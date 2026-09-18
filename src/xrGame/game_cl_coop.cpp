@@ -603,9 +603,43 @@ void game_cl_Coop::OnConnected()
 }
 
 
+void game_cl_Coop::PickupProbeUpdate(CActor* actor)
+{
+    if (!actor || !actor->g_Alive() || !actor->cam_Active()) return;
+    // The nearest free inventory item within 3 m, whatever the pickup filters make of it.
+    CInventoryItem* nearest = NULL;
+    float best = 3.f;
+    for (u32 n = 0; n < Level().Objects.o_count(); ++n)
+    {
+        CGameObject* object = smart_cast<CGameObject*>(Level().Objects.o_get_by_iterator(n));
+        CInventoryItem* item = object ? object->cast_inventory_item() : NULL;
+        if (!item || object->H_Parent() || object->getDestroy()) continue;
+        const float distance = object->Position().distance_to(actor->Position());
+        if (distance < best) { best = distance; nearest = item; }
+    }
+    if (!nearest) return;
+    // Same look-at math as CCameraFirstEye::UpdateLookat.
+    Fvector to; nearest->object().Center(to);
+    Fvector dir; dir.sub(to, actor->cam_Active()->Position());
+    Fmatrix m; m.identity(); m.k.normalize_safe(dir);
+    Fvector::generate_orthonormal_basis(m.k, m.j, m.i);
+    Fvector xyz; m.getXYZi(xyz);
+    actor->cam_Active()->yaw = xyz.y;
+    actor->cam_Active()->pitch = xyz.x;
+    if (Device.dwTimeGlobal - m_pickup_probe_report >= 1000)
+    {
+        m_pickup_probe_report = Device.dwTimeGlobal;
+        Msg("[COOP_PICKUP_PROBE] aim id=%u section=%s distance=%f visible=%d can_take=%d position=%f,%f,%f eye=%f,%f,%f",
+            nearest->object().ID(), nearest->object().cNameSect().c_str(), best, nearest->object().getVisible() ? 1 : 0,
+            nearest->CanTake() ? 1 : 0, VPUSH(to), VPUSH(actor->cam_Active()->Position()));
+    }
+}
+
 void game_cl_Coop::shedule_Update(u32 dt)
 {
     inherited::shedule_Update(dt);
+    if (!OnServer() && m_probe_started && strstr(Core.Params, "-coop_pickup_probe"))
+        PickupProbeUpdate(smart_cast<CActor*>(Level().CurrentControlEntity()));
     if (OnServer() || !m_probe_started || m_probe_stopped || !strstr(Core.Params, "-coop_client_probe")) return;
     const u32 elapsed = Device.dwTimeGlobal - m_probe_started;
     CActor* actor = smart_cast<CActor*>(Level().CurrentControlEntity());
