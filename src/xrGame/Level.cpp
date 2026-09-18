@@ -255,6 +255,32 @@ namespace crash_saving {
     }
 }
 
+// The crash handler of the game (Debug.set_crashhandler; the engine's own dumps the console
+// variables, which is kept). Coop: the log on disk is the last periodic flush, complete up to a
+// second before the crash - the crash filter rewrites it from the first line and, when that write
+// is cut short, the file ends in the startup lines (18.09: the GAMMA host's crash in a save kept
+// 23 000 of its 60 000 lines). A copy is taken first. Then the Lua stack: a game_object userdata
+// whose object is gone is an access violation inside a Lua listener, and the C++ stack alone
+// names no script.
+static void coop_crash_handler()
+{
+	if (Console) Console->Execute("dump_cvar");
+	if (!g_pGameLevel || !IsGameTypeCoop()) return;
+	string_path log, keep, name;
+	strconcat(sizeof(name), name, Core.ApplicationName, "_", Core.UserName, ".log"); // CreateLog's name
+	FS.update_path(log, "$logs$", name);
+	strconcat(sizeof(keep), keep, log, ".crash");
+	FS.file_copy(log, keep);
+	__try
+	{
+		Msg("[COOP] crash: the log before this flush is kept as %s; Lua stack:", keep);
+		ai().script_engine().print_stack();
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		Msg("! [COOP] crash: the Lua stack could not be printed");
+	}
+}
 CLevel::CLevel() :
     IPureClient(Device.GetTimerGlobal())
 #ifdef PROFILE_CRITICAL_SECTIONS
@@ -262,6 +288,7 @@ CLevel::CLevel() :
 #endif
 {
 	g_bDebugEvents = strstr(Core.Params, "-debug_ge") != nullptr;
+	Debug.set_crashhandler(&coop_crash_handler);
 	game_events = xr_new<NET_Queue_Event>();
 
     eChangeRP = Engine.Event.Handler_Attach("LEVEL:ChangeRP", this);
