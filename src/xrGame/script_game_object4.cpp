@@ -455,6 +455,8 @@ void CScriptGameObject::SetHealthEx(float hp)
 	CEntity* obj = smart_cast<CEntity*>(&object());
 	if (!obj) return;
 	clamp(hp, -0.01f, 1.0f);
+	if (coop_forward_health_delta(hp - obj->GetfHealth())) // coop client: the body's, on the server
+		return;
 	obj->SetfHealth(hp);
 }
 

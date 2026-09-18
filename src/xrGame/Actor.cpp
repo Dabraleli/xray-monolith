@@ -36,6 +36,7 @@
 #include "HudItem.h"
 #include "ai_sounds.h"
 #include "ai_space.h"
+#include "game_sv_coop.h"
 #include "trade.h"
 #include "inventory.h"
 //#include "Physics.h"
@@ -565,6 +566,9 @@ void CActor::Hit(SHit* pHDS)
 	// Coop server: the world actor is an identity, not a body. Anomaly's world Lua still hits "the
 	// actor" (emissions, psi-storms, script hits); the players' bodies get theirs separately.
 	if (IsGameTypeCoop() && OnServer() && this == Level().CurrentControlEntity()) return;
+	if (IsGameTypeCoop() && strstr(Core.Params, "-coop_hit_trace"))
+		Msg("[COOP_ACTOR_HIT] side=%s id=%u who=%u type=%u power=%f bone=%d alive=%u", OnServer() ? "server" : "client", ID(), pHDS->whoID,
+		    u32(pHDS->hit_type), pHDS->power, int(pHDS->boneID), g_Alive() ? 1 : 0);
 
 	SHit& HDS = *pHDS;
 	if (HDS.hit_type < ALife::eHitTypeBurn || HDS.hit_type >= ALife::eHitTypeMax)
@@ -677,12 +681,34 @@ void CActor::Hit(SHit* pHDS)
 			HitMark(HDS.damage(), HDS.dir, HDS.who, HDS.bone(), HDS.p_in_bone_space, HDS.impulse, HDS.hit_type);
 	}
 
-	if (IsGameTypeSingle())
+	// Coop server: a player body takes its hit as the single-player actor does - the Lua damage
+	// model (actor_on_before_hit: GAMMA's balancer computes the damage itself and zeroes the
+	// engine's, the friendly-fire rule, the perks) runs in the body's context, then the actor's
+	// hit callback; the MP path below (immunities only, the knife backstab kill) is for the other
+	// game types. The owning client is told what landed (hit|...) for its presentation modules.
+	const bool coop_body = IsGameTypeCoop() && OnServer();
+	const float coop_power = HDS.power;
+	const float coop_health = GetfHealth();
+	// What the hit cost the body, to its client: the Lua model's part is on the health already (GAMMA's
+	// balancer applies the damage itself and refuses the engine hit), the engine's waits for the
+	// condition update (m_fHealthLost of this hit).
+	auto coop_report = [&]()
 	{
+		if (!coop_body) return;
+		const float lost = (coop_health - GetfHealth()) + (conditions().CanBeHarmed() ? conditions().GetHealthLost() : 0.f);
+		string256 text;
+		xr_sprintf(text, "hit|%u|%d|%u|%f|%f|%f,%f,%f", u32(HDS.hit_type), int(HDS.boneID), u32(HDS.whoID), coop_power, lost,
+		           HDS.dir.x, HDS.dir.y, HDS.dir.z);
+		game_sv_Coop::SendLua(ID(), text);
+	};
+	if (IsGameTypeSingle() || coop_body)
+	{
+		CoopLuaActor coop_actor(coop_body ? this : NULL, false); // the condition's Lua (CBeforeHitAfterCalcs) too
 		if (GodMode())
 		{
 			HDS.power = 0.0f;
 			inherited::Hit(&HDS);
+			coop_report();
 			return;
 		}
 		else
@@ -694,8 +720,15 @@ void CActor::Hit(SHit* pHDS)
 				::luabind::functor<bool> funct;
 				if (ai().script_engine().functor("_G.CActor__BeforeHitCallback", funct))
 				{
-					if (!funct(this->lua_game_object(), &tLuaHit, HDS.boneID))
+					const bool allowed = funct(this->lua_game_object(), &tLuaHit, HDS.boneID);
+					if (coop_body && strstr(Core.Params, "-coop_hit_trace"))
+						Msg("[COOP_ACTOR_HIT_LUA] id=%u allowed=%u power=%f -> %f health=%f -> %f", ID(), allowed ? 1 : 0, coop_power,
+						    tLuaHit.m_fPower, coop_health, GetfHealth());
+					if (!allowed)
+					{
+						coop_report(); // refused by the Lua model - which may have applied its own damage
 						return;
+					}
 				}
 
 				HDS.ApplyScriptHit(&tLuaHit);
@@ -703,16 +736,18 @@ void CActor::Hit(SHit* pHDS)
 				HDS.add_wound = true;
 
 				/* AVO: send script callback*/
+				const CGameObject* who_object = smart_cast<const CGameObject*>(HDS.who);
 				callback(GameObject::eHit)(
 					this->lua_game_object(),
 					HDS.damage(),
 					HDS.direction(),
-					smart_cast<const CGameObject*>(HDS.who)->lua_game_object(),
+					who_object ? who_object->lua_game_object() : 0,
 					HDS.boneID
 				);
 			}
 			inherited::Hit(&HDS);
 		}
+		coop_report();
 
 		/* AVO: rewritten above and added hit callback*/
 		/*float hit_power = HitArtefactsOnBelt(HDS.damage(), HDS.hit_type);

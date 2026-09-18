@@ -131,7 +131,37 @@ BIND_FUNCTION10(&object(), CScriptGameObject::GetFOV, CEntityAlive, ffGetFov, fl
 BIND_FUNCTION10(&object(), CScriptGameObject::GetRange, CEntityAlive, ffGetRange, float, -1);
 
 BIND_FUNCTION10(&object(), CScriptGameObject::GetHealth, CEntityAlive, conditions().GetHealth, float, -1);
-BIND_FUNCTION01(&object(), CScriptGameObject::SetHealth, CEntityAlive, conditions().SetHealth, float, float);
+
+// Coop client: the health of this body is the server's. The player's own Lua (the psy, radiation,
+// burn and injury models, the thirst and sleep penalties) changes it through a delta the body
+// applies there (GE_COOP_HEALTH_CHANGE); nothing is written here, the next actor update brings the
+// result. True when the write was the server's to make.
+bool CScriptGameObject::coop_forward_health_delta(float delta)
+{
+	if (!IsGameTypeCoop() || !OnClient() || &object() != Level().CurrentControlEntity())
+		return false;
+	if (_valid(delta) && !fis_zero(delta))
+	{
+		NET_Packet P;
+		CGameObject::u_EventGen(P, GE_COOP_HEALTH_CHANGE, object().ID());
+		P.w_float(delta);
+		CGameObject::u_EventSend(P);
+	}
+	return true;
+}
+
+void CScriptGameObject::SetHealth(float value)
+{
+	CEntityAlive* entity = smart_cast<CEntityAlive*>(&object());
+	if (!entity)
+	{
+		ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError, "CEntityAlive : cannot access class member SetHealth!");
+		return;
+	}
+	if (coop_forward_health_delta(value - entity->conditions().GetHealth()))
+		return;
+	entity->conditions().SetHealth(value);
+}
 
 void CScriptGameObject::ChangeHealth(float value)
 {
@@ -141,16 +171,8 @@ void CScriptGameObject::ChangeHealth(float value)
 		ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError, "CEntityAlive : cannot access class member ChangeHealth!");
 		return;
 	}
-	// Coop client: health belongs to the server body. The client's presentation Lua (thirst and
-	// sleep penalties) asks the body to change it; anything else is applied locally as before.
-	if (IsGameTypeCoop() && OnClient() && &object() == Level().CurrentControlEntity())
-	{
-		NET_Packet P;
-		CGameObject::u_EventGen(P, GE_COOP_HEALTH_CHANGE, object().ID());
-		P.w_float(value);
-		CGameObject::u_EventSend(P);
+	if (coop_forward_health_delta(value))
 		return;
-	}
 	entity->conditions().ChangeHealth(value);
 }
 

@@ -241,8 +241,9 @@ public:
 	_DECLARE_FUNCTION10(GetRange, float);
 
 	_DECLARE_FUNCTION10(GetHealth, float);
-	_DECLARE_FUNCTION11(SetHealth, void, float);
-	_DECLARE_FUNCTION11(ChangeHealth, void, float);
+	void SetHealth(float value);
+	void ChangeHealth(float value);
+	bool coop_forward_health_delta(float delta); // coop client, own body: the delta goes to the server
 
 	_DECLARE_FUNCTION10(GetPsyHealth, float);
 	_DECLARE_FUNCTION11(SetPsyHealth, void, float);

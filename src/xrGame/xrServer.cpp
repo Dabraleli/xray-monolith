@@ -633,10 +633,11 @@ bool xrServer::CoopAdmitClientEvent(xrClientData* CL, NET_Packet& P, u16 type, u
         return P.B.count >= P.r_tell() + sizeof(u16) + sizeof(u8);
     case GE_COOP_HEALTH_CHANGE:
     {
-        // Small health deltas from the client's own presentation Lua (thirst/sleep penalties).
+        // Health deltas from the client's own Lua: the thirst and sleep penalties, the player's psy,
+        // radiation, burn and injury models (a psy death or a broken torso is a delta to zero).
         if (P.B.count < P.r_tell() + sizeof(float)) return false;
         const float delta = P.r_float();
-        return _valid(delta) && _abs(delta) <= 0.05f;
+        return _valid(delta) && _abs(delta) <= 1.02f;
     }
     case GE_COOP_USE_OBJECT:
     {

@@ -186,6 +186,9 @@ void CScriptGameObject::Hit(CScriptHit* tpLuaHit)
 	HS.p_in_bone_space = Fvector().set(0, 0, 0);
 	HS.Write_Packet(P);
 
+	if (IsGameTypeCoop() && strstr(Core.Params, "-coop_hit_trace"))
+		Msg("[COOP_LUA_HIT] side=%s target=%u who=%u weapon=%u type=%u power=%f bone=%d", OnServer() ? "server" : "client", object().ID(),
+		    HS.whoID, HS.weaponID, u32(HS.hit_type), HS.power, int(HS.boneID));
 	object().u_EventSend(P);
 }
 

@@ -852,6 +852,8 @@ void game_sv_GameState::OnEvent(NET_Packet& tNetPacket, u16 type, u32 time, Clie
 			u16 id_src = tNetPacket.r_u16();
 			CSE_Abstract* e_src = get_entity_from_eid(id_src);
 
+			if (Type() == eGameIDCoop && strstr(Core.Params, "-coop_hit_trace"))
+				Msg("[COOP_SV_HIT] dest=%u src=%u src_found=%u sender=%u", id_dest, id_src, e_src ? 1 : 0, sender.value());
 			if (!e_src) // && !IsGameTypeSingle() added by andy because of Phantom does not have server entity
 			{
 				if (IsGameTypeSingle()) break;
