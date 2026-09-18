@@ -2351,6 +2351,7 @@ CSE_ALifeCreatureActor* game_sv_Coop::SpawnBody(xrClientData* client, bool with_
     if (with_loadout)
     {
         coop_spawn_loadout(alife(), body, loadout);
+        m_fresh_bodies.insert(body->ID);
         Msg("[COOP_SERVER] LOADOUT_MONEY body=%u money=%u source=%s", body->ID, money, profile_loadout_given ? "menu" : "server");
     }
     if (faction.size() || icon.size())
@@ -2403,11 +2404,12 @@ void game_sv_Coop::OnPlayerConnectFinished(ClientID id)
             SendWorldInfos(client);
             // The server Lua hands this player's client what the world already decided (weather...).
             CGameObject* body = smart_cast<CGameObject*>(Level().Objects.net_Find(client->owner->ID));
+            const bool fresh = m_fresh_bodies.erase(client->owner->ID) > 0; // its loadout just spawned
             ::luabind::functor<void> functor;
             if (body && ai().script_engine().functor("coop_server_actor.on_client_ready", functor))
             {
                 CoopLuaActor coop_actor(body, false);
-                functor(body->lua_game_object());
+                functor(body->lua_game_object(), fresh);
             }
         }
         return;

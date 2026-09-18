@@ -245,6 +245,9 @@ public:
     };
     xr_map<u16, SBodyProfile> m_profiles; // by body id, pending
     void UpdateProfiles();
+    // Bodies created with their loadout (a player's first body): the server Lua runs the SP
+    // new-game equipment hooks for them once their client is ready (on_client_ready(body, true)).
+    xr_set<u16> m_fresh_bodies;
     // Carried items get no regular updates (CInventoryItem::net_Export): the holder's client learns
     // the condition, remaining uses and loaded ammo of its body's items here (GE_COOP_ITEM_STATE)
     // whenever the server's value changes - repairs, workshop verbs, wear, use.
