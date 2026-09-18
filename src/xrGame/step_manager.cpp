@@ -8,6 +8,7 @@
 #include "profiler.h"
 #include "IKLimbsController.h"
 #include "GameObject.h"
+#include "Actor.h"
 #include "../../xrServerEntities/script_engine.h"
 
 #ifdef	DEBUG
@@ -200,7 +201,10 @@ void CStepManager::update(bool b_hud_view)
 				CGameObject* object = smart_cast<CGameObject*>(m_object);
 				if (b_play && is_on_ground() && object)
 				{
-					if (object->ID() == 0)
+					// The player's own steps go to Lua (actor_on_footstep: the footstep sound mods, the camera
+					// motion, GAMMA's endurance and strength skill gains). In SP the actor is object 0; the
+					// body of a coop client has an id of its own and took the NPC path, so none of that ran.
+					if (object->ID() == 0 || (IsGameTypeCoop() && object == Actor()))
 					{
 						SGameMtl* mt = GMLib.GetMaterialByID(mtl_pair->GetMtl1());
 						if (mt)
