@@ -124,6 +124,9 @@ BOOL IPureClient::Connect(LPCSTR options)
 		m_enet_host = NULL;
 		return FALSE;
 	}
+	// The server's silence tolerance, mirrored (see NET_Server_enet.cpp): a server saving the world
+	// or loading a level for seconds must not look dead to this client.
+	enet_peer_timeout(m_enet_peer, 32, 30000, 120000);
 
 	// -- wait for the link --------------------------------------------------
 	ENetEvent e;

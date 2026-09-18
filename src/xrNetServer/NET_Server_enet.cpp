@@ -267,6 +267,12 @@ void IPureServer::Poll()
 					break;
 				}
 
+				// ENet's defaults drop a peer after 5 s of silence once the retry limit is spent - on a
+				// LAN the retries are spent within milliseconds, so any 5 s hitch of a client (a modded
+				// game loading its inventory icons, a shader compile) or of this server (a save) ended
+				// the session (17.09: both players dropped at once). Hitches of up to 30 s are tolerated;
+				// a peer that really left is gone after 30-120 s.
+				enet_peer_timeout(e.peer, 32, 30000, 120000);
 				peer_state* st = static_cast<peer_state*>(xr_malloc(sizeof(peer_state)));
 				st->announced = false;
 				st->client_id = xr_enet::client_id_of(e.peer);
