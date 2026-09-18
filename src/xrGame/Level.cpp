@@ -266,9 +266,8 @@ static void coop_crash_handler()
 {
 	if (Console) Console->Execute("dump_cvar");
 	if (!g_pGameLevel || !IsGameTypeCoop()) return;
-	string_path log, keep, name;
-	strconcat(sizeof(name), name, Core.ApplicationName, "_", Core.UserName, ".log"); // CreateLog's name
-	FS.update_path(log, "$logs$", name);
+	string_path keep;
+	LPCSTR log = log_file_path(); // the file CreateLog opened: Core.UserName is the player's name by now
 	strconcat(sizeof(keep), keep, log, ".crash");
 	FS.file_copy(log, keep);
 	__try
@@ -281,6 +280,7 @@ static void coop_crash_handler()
 		Msg("! [COOP] crash: the Lua stack could not be printed");
 	}
 }
+
 CLevel::CLevel() :
     IPureClient(Device.GetTimerGlobal())
 #ifdef PROFILE_CRITICAL_SECTIONS

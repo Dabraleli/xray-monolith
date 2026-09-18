@@ -282,6 +282,11 @@ LPCSTR log_name()
 	return (log_file_name);
 }
 
+LPCSTR XRCORE_API log_file_path()
+{
+	return logFName;
+}
+
 void InitLog()
 {
 	LogFile.reserve(10000);

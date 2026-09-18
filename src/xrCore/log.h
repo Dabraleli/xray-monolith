@@ -20,6 +20,7 @@ void XRCORE_API CreateLog(BOOL no_log = FALSE);
 void InitLog();
 void CloseLog();
 void XRCORE_API FlushLog();
+LPCSTR XRCORE_API log_file_path(); // the full path of the file CreateLog opened (Core.UserName may change afterwards)
 u32 XRCORE_API CopyLogTail(xr_vector<xr_string>& out, u32 limit);
 
 extern XRCORE_API xr_vector<xr_string> LogFile;
