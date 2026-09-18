@@ -146,6 +146,18 @@ bool CLevel::net_start1()
 	else
 	{
 		g_allow_heap_min = false;
+		// Coop client: every world it joins - the first, the server's level change, its load - is a
+		// fresh Lua state, as in SP where CALifeSimulator's restart_all makes one per world. A client
+		// has no simulator, and its state lived on across the reconnect of a level change: the
+		// modules' init flags, HUD windows and timers of the level before stayed (18.09: the body
+		// part bars of Player Injuries were empty after a transition), the coop layer did not start
+		// its modules again. The main menu, the object factory and the weapon params go with it.
+		if (strstr(Core.Params, "-coop_client"))
+		{
+			extern void restart_all();
+			restart_all();
+			Msg("[COOP_CLIENT] LUA_RESTART world=%s", m_caClientOptions.c_str() ? m_caClientOptions.c_str() : "");
+		}
 	}
 	return true;
 }
