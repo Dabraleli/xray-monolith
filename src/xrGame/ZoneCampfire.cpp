@@ -110,6 +110,13 @@ void CZoneCampfire::OnEvent(NET_Packet& P, u16 type)
 		P.r_u8(S);
 		P.r_pos = pos;
 		m_turned_on = EZoneState(S) != eZoneStateDisabled;
+		if (m_turned_on && m_pDisabledParticles) // the smoke of a fire this client put out on join
+		{
+			m_pDisabledParticles->Stop(FALSE);
+			CParticlesObject::Destroy(m_pDisabledParticles);
+			m_disabled_sound.stop();
+			m_disabled_sound.destroy();
+		}
 	}
 	inherited::OnEvent(P, type);
 }

@@ -1615,10 +1615,20 @@ void CCustomZone::GoDisabledState()
 	//switch to disable	
 	if (IsGameTypeCoop() && strstr(Core.Params, "-coop_hit_trace"))
 		Msg("[COOP_ZONE_STATE] side=%s id=%u section=%s go=disabled", OnServer() ? "server" : "client", ID(), cNameSect().c_str());
-	NET_Packet P;
-	u_EventGen(P, GE_ZONE_STATE_CHANGE, ID());
-	P.w_u8(u8(eZoneStateDisabled));
-	u_EventSend(P);
+	// Coop client: a zone's state is the server's, and a switch made here (a campfire the coop scripts
+	// put out on join, turn_off) applies at once - the event a client would send is rejected by the
+	// server and the state never came back: the fire looked out while the zone stayed idle and burned.
+	if (IsGameTypeCoop() && OnClient())
+	{
+		OnStateSwitch(eZoneStateDisabled);
+	}
+	else
+	{
+		NET_Packet P;
+		u_EventGen(P, GE_ZONE_STATE_CHANGE, ID());
+		P.w_u8(u8(eZoneStateDisabled));
+		u_EventSend(P);
+	}
 
 	OBJECT_INFO_VEC_IT it = m_ObjectInfoMap.begin();
 	OBJECT_INFO_VEC_IT it_e = m_ObjectInfoMap.end();
@@ -1635,10 +1645,17 @@ void CCustomZone::GoEnabledState()
 	//switch to idle	
 	if (IsGameTypeCoop() && strstr(Core.Params, "-coop_hit_trace"))
 		Msg("[COOP_ZONE_STATE] side=%s id=%u section=%s go=enabled", OnServer() ? "server" : "client", ID(), cNameSect().c_str());
-	NET_Packet P;
-	u_EventGen(P, GE_ZONE_STATE_CHANGE, ID());
-	P.w_u8(u8(eZoneStateIdle));
-	u_EventSend(P);
+	if (IsGameTypeCoop() && OnClient()) // as GoDisabledState
+	{
+		OnStateSwitch(eZoneStateIdle);
+	}
+	else
+	{
+		NET_Packet P;
+		u_EventGen(P, GE_ZONE_STATE_CHANGE, ID());
+		P.w_u8(u8(eZoneStateIdle));
+		u_EventSend(P);
+	}
 }
 
 bool CCustomZone::feel_touch_on_contact(CObject* O)
