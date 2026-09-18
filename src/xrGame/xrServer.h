@@ -200,6 +200,7 @@ public:
 		~CoopHideClientData();
 	};
 	bool CoopAdmitClientEvent(xrClientData* CL, NET_Packet& P, u16 type, u16 destination);
+	void CoopClientBulletImpact(NET_Packet& P, u16 who, u16 weapon, u16 destination); // a client bullet's hit: the world's Lua bullet_on_impact
 	void TestCoopSpawnRouting(CSE_Abstract* body, CSE_Abstract* world);
 	void Perform_transfer(NET_Packet& PR, NET_Packet& PT, CSE_Abstract* what, CSE_Abstract* from, CSE_Abstract* to);
 	void Perform_reject(CSE_Abstract* what, CSE_Abstract* from, int delta);

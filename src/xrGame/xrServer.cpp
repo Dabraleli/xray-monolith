@@ -540,6 +540,46 @@ xrClientData* xrServer::CoopControllerOf(CSE_Abstract* body)
     return found;
 }
 
+// A player's bullets fly on its client and reach the world as GE_HIT: the server's bullet manager
+// never sees them, so the Lua bullet_on_impact of the world (GAMMA momo_multihit_fix counts hits per
+// bullet id and refuses a repeat - with no impacts here every hit after the first on an NPC was
+// "the same bullet" and NPCs could not be killed) gets one impact per admitted bullet hit, with an
+// id of its own. P stands after who/weapon; the layout is SHit::Write_Packet_Cont.
+void xrServer::CoopClientBulletImpact(NET_Packet& P, u16 who, u16 weapon, u16 destination)
+{
+    const u32 cursor = P.r_tell();
+    if (P.B.count < cursor + sizeof(u16) + sizeof(float) + sizeof(u16) + 3 * sizeof(float) + sizeof(float) + sizeof(u16)) return; // dir is a u16
+    Fvector dir;
+    P.r_dir(dir);
+    const float power = P.r_float();
+    const u16 bone = P.r_u16();
+    Fvector in_bone;
+    P.r_vec3(in_bone);
+    P.r_float(); // impulse
+    const u16 hit_type = P.r_u16();
+    P.r_seek(cursor);
+    if (hit_type != ALife::eHitTypeFireWound) return;
+    ::luabind::functor<void> funct;
+    if (!ai().script_engine().functor("_G.CBulletOnImpact", funct)) return;
+    static u32 s_client_bullet_id = 0x40000000; // apart from the server bullets' ids
+    CObject* target = Level().Objects.net_Find(destination);
+    ::luabind::object table = ::luabind::newtable(ai().script_engine().lua());
+    table["position"] = target ? target->Position() : Fvector().set(0.f, 0.f, 0.f);
+    table["direction"] = dir;
+    table["speed"] = 0.f;
+    table["distance"] = 0.f;
+    table["section"] = (LPCSTR)NULL;
+    table["bullet_id"] = ++s_client_bullet_id;
+    table["weapon_id"] = weapon;
+    table["parent_id"] = who;
+    table["target_id"] = destination;
+    table["material"] = (LPCSTR)NULL;
+    table["life_time"] = 0.f;
+    table["element"] = int(bone);
+    table["power"] = power;
+    funct(table);
+}
+
 // P is positioned right after the event header (timestamp, type, destination).
 bool xrServer::CoopAdmitClientEvent(xrClientData* CL, NET_Packet& P, u16 type, u16 destination)
 {
@@ -567,7 +607,9 @@ bool xrServer::CoopAdmitClientEvent(xrClientData* CL, NET_Packet& P, u16 type, u
         CSE_Abstract* target = ID_to_entity(destination);
         if (!target || target->s_flags.is(M_SPAWN_OBJECT_ASPLAYER)) return false;
         CSE_Abstract* item = ID_to_entity(weapon);
-        return weapon == body->ID || (item && item->ID_Parent == body->ID);
+        if (!(weapon == body->ID || (item && item->ID_Parent == body->ID))) return false;
+        CoopClientBulletImpact(P, who, weapon, destination);
+        return true;
     }
     case GE_INSTALL_UPGRADE:
     {
