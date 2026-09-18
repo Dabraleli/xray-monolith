@@ -1939,7 +1939,7 @@ void g_coop_player_store(LPCSTR blob)
 // with the sender's body as db.actor.
 void g_coop_send_lua(u16 target, LPCSTR text)
 {
-	if (!IsGameTypeCoop() || !text) return;
+	if (!IsGameTypeCoop() || !text || !g_pGameLevel) return; // no level: the main menu after a session
 	if (xr_strlen(text) >= 4096)
 	{
 		Msg("! [COOP] coop_send_lua too large: %u bytes", xr_strlen(text));

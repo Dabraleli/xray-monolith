@@ -963,7 +963,11 @@ void game_sv_Coop::SendPlayerStore(xrClientData* client)
 
 static game_sv_Coop* coop_server_game()
 {
-    if (!IsGameTypeCoop() || !OnServer() || !Level().Server || Level().Server->game->Type() != eGameIDCoop) return NULL;
+    // No level: the main menu after a coop session (its Lua plays the menu music through
+    // sound_object, which relays through here); the game type stays coop until the next game.
+    if (!g_pGameLevel || !IsGameTypeCoop() || !OnServer() || !Level().Server || !Level().Server->game ||
+        Level().Server->game->Type() != eGameIDCoop)
+        return NULL;
     return static_cast<game_sv_Coop*>(Level().Server->game);
 }
 
