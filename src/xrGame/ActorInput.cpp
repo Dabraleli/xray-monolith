@@ -649,6 +649,13 @@ void CActor::ActorUse()
 					u_EventSend(P);
 					Msg("[COOP_CLIENT] REVIVE_USE body=%u", pEntityAliveWeLookingAt->ID());
 				}
+				else if (IsGameTypeCoop() && OnClient() && pEntityAliveWeLookingAt->g_Alive() && smart_cast<CActor*>(pEntityAliveWeLookingAt))
+				{
+					// A standing teammate: no dialog; the coop scripts open their action menu (money...).
+					::luabind::functor<void> functor;
+					if (ai().script_engine().functor("coop_client_actor.on_teammate_use", functor))
+						functor(pEntityAliveWeLookingAt->ID());
+				}
 				else if (pEntityAliveWeLookingAt->g_Alive())
 				{
 					TryToTalk();

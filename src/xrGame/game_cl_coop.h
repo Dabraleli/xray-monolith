@@ -69,6 +69,8 @@ public:
     static bool SelfDowned(); // the control entity is down
     static void SetReviveHint(LPCSTR text);
     static LPCSTR ReviveHint();
+    static void SetTeammateHint(LPCSTR text); // the "use" hint on a standing teammate (Lua: level.coop_teammate_hint)
+    static LPCSTR TeammateHint();
     // True while a server item state moves an item of the own body (GE_COOP_ITEM_STATE, CInventoryItem::OnEvent):
     // the client Lua tells such a move from the player's own (no item animations; level.coop_following_place).
     static bool s_following_place;

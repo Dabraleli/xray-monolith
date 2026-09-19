@@ -2107,6 +2107,11 @@ void g_coop_revive_hint(LPCSTR text)
 	game_cl_Coop::SetReviveHint(text);
 }
 
+void g_coop_teammate_hint(LPCSTR text)
+{
+	game_cl_Coop::SetTeammateHint(text);
+}
+
 //can spawn entities like bolts, phantoms, ammo, etc. which normally crash when using alife():create()
 void spawn_section(LPCSTR sSection, Fvector3 vPosition, u32 LevelVertexID, u16 ParentID, bool bReturnItem = false)
 {
@@ -2673,6 +2678,7 @@ void CLevel::script_register(lua_State* L)
 			def("coop_set_downed", &g_coop_set_downed), // coop client: a player's body is down / up again
 			def("coop_self_downed", &g_coop_self_downed), // coop client: this player's body is down
 			def("coop_revive_hint", &g_coop_revive_hint), // coop client: the "use" hint shown on a downed body
+			def("coop_teammate_hint", &g_coop_teammate_hint), // coop client: the "use" hint shown on a standing teammate ("" - none)
 
 			def("get_target_obj", ((CScriptGameObject * (*)()) & g_get_target_obj)), //intentionally named to what is in xray extensions
 			def("get_target_obj", ((CScriptGameObject* (*)(ETraceTarget)) & g_get_target_obj)), //intentionally named to what is in xray extensions

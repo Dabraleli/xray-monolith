@@ -2156,6 +2156,11 @@ void CActor::shedule_Update(u32 DT)
 				{
 					m_sDefaultObjAction = game_cl_Coop::ReviveHint(); // a downed teammate: "use" revives
 				}
+				else if (IsGameTypeCoop() && OnClient() && pEntityAlive && pEntityAlive->g_Alive() && smart_cast<CActor*>(game_object))
+				{
+					// A standing teammate: the coop scripts' action menu (money...), hint from Lua; NULL - none.
+					m_sDefaultObjAction = game_cl_Coop::TeammateHint();
+				}
 				else if (m_pPersonWeLookingAt && pEntityAlive && pEntityAlive->g_Alive() && m_pPersonWeLookingAt->IsTalkEnabled())
 				{
 					// Coop: other players are actors too, but there is no player-to-player dialog.

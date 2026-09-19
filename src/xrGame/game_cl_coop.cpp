@@ -314,6 +314,20 @@ LPCSTR game_cl_Coop::ReviveHint()
     return coop_revive_hint.c_str();
 }
 
+// The "use" hint on a standing teammate and the use itself (ActorInput: coop_client_actor.on_teammate_use)
+// are the coop scripts' - a player-to-player action menu (money, later items); no text, no hint.
+static xr_string coop_teammate_hint = "";
+
+void game_cl_Coop::SetTeammateHint(LPCSTR text)
+{
+    coop_teammate_hint = text ? text : "";
+}
+
+LPCSTR game_cl_Coop::TeammateHint()
+{
+    return coop_teammate_hint.empty() ? NULL : coop_teammate_hint.c_str();
+}
+
 void g_coop_send_lua(u16 target, LPCSTR text); // level_script.cpp
 
 game_cl_Coop::~game_cl_Coop()
