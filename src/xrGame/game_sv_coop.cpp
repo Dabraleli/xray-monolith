@@ -407,7 +407,7 @@ bool game_sv_Coop::ParkBody(xrClientData* client, CSE_ALifeCreatureActor* body)
 // AskQuestion / SayPhrase) on the server with the body as "our" side and streams the result.
 // Anomaly's dialog scripts use db.actor for the player; for a body's dialog it is swapped to the
 // body while the scripts may run, and restored afterwards (CoopLuaActor, see game_sv_coop.h).
-CoopLuaActor::CoopLuaActor(CGameObject* body, bool scope) : saved_context(game_sv_Coop::s_context_body), active(false), dialog_scope(scope)
+CoopLuaActor::CoopLuaActor(CGameObject* body, bool scope) : saved_context(game_sv_Coop::s_context_body), saved_id(u16(-1)), active(false), dialog_scope(scope)
 {
     if (dialog_scope) ++game_sv_Coop::s_dialog_scope;
     if (!body) return;
@@ -423,6 +423,11 @@ CoopLuaActor::CoopLuaActor(CGameObject* body, bool scope) : saved_context(game_s
     }
     db = table;
     saved = table["actor"];
+    if (saved.is_valid() && saved.type() == LUA_TUSERDATA)
+    {
+        CScriptGameObject* previous = luabind::object_cast<CScriptGameObject*>(saved);
+        if (previous) saved_id = previous->ID();
+    }
     table["actor"] = body->lua_game_object();
     // `who:id() == AC_ID` is how Anomaly asks "is this the actor"; the constant follows db.actor.
     saved_ac_id = globals["AC_ID"];
@@ -446,11 +451,36 @@ CoopLuaActor::~CoopLuaActor()
 {
     if (active)
     {
-        db["actor"] = saved;
+        // The saved actor may have been destroyed inside the scope (a level change or a shutdown tearing
+        // the objects down from within a body's Lua): its wrapper is gone with it, so nil is restored.
+        const bool saved_alive = saved_id == u16(-1) || (Level().Objects.net_Find(saved_id) && !Level().Objects.net_Find(saved_id)->getDestroy());
+        if (saved_alive) db["actor"] = saved; else db["actor"] = luabind::object();
         globals["AC_ID"] = saved_ac_id;
     }
-    game_sv_Coop::s_context_body = saved_context;
+    game_sv_Coop::s_context_body = saved_context && saved_context->getDestroy() ? NULL : saved_context;
     if (dialog_scope) --game_sv_Coop::s_dialog_scope;
+}
+
+// A game object is going (CGameObject::net_Destroy, before its Lua wrapper is deleted): if the Lua
+// db.actor is that wrapper, it is cleared here - the coop scripts must never hold a dead actor -
+// and the body context of the running scopes drops it.
+void game_sv_Coop::OnLuaObjectGone(CGameObject* object)
+{
+    if (!object || !IsGameTypeCoop() || !OnServer()) return;
+    if (s_context_body == object) s_context_body = NULL;
+    lua_State* L = ai().script_engine().lua();
+    if (!L) return;
+    luabind::object globals = luabind::get_globals(L);
+    luabind::object table = globals["db"];
+    if (!table.is_valid() || table.type() != LUA_TTABLE) return;
+    luabind::object actor = table["actor"];
+    if (!actor.is_valid() || actor.type() != LUA_TUSERDATA) return;
+    CScriptGameObject* current = luabind::object_cast<CScriptGameObject*>(actor);
+    if (current && current == object->lua_game_object())
+    {
+        table["actor"] = luabind::object();
+        Msg("[COOP_SERVER] LUA_ACTOR_GONE id=%u", object->ID());
+    }
 }
 
 u32 game_sv_Coop::s_dialog_scope = 0;

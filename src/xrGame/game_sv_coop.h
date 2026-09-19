@@ -22,6 +22,7 @@ struct CoopLuaActor
     luabind::object globals;
     luabind::object saved_ac_id;
     CGameObject* saved_context;
+    u16 saved_id; // the object the saved db.actor wraps (u16(-1): none) - restored only while it still exists
     bool active;
     bool dialog_scope;
     CoopLuaActor(CGameObject* body, bool dialog_scope = true);
@@ -96,6 +97,7 @@ public:
     // Engine bindings that resolve "the actor" by id (level.object_by_id(0) behind
     // get_story_object("actor")) hand out this body instead of the world actor.
     static CGameObject* s_context_body;
+    static void OnLuaObjectGone(CGameObject* object); // CGameObject::net_Destroy: db.actor / the context never outlive the object
     static CGameObject* ContextActor(u16 requested_id);
     // "Where is the actor?" for the world actor's Lua-visible position (se_actor.position,
     // db.actor:position()) on the coop server: the body Lua runs for; else the living body nearest

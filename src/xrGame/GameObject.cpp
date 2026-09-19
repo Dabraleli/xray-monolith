@@ -39,6 +39,7 @@ extern MagicBox3 MagicMinBox(int iQuantity, const Fvector* akPoint);
 #pragma warning(push)
 #pragma warning(disable:4995)
 #include <malloc.h>
+#include "game_sv_coop.h" // coop: OnLuaObjectGone
 #pragma warning(pop)
 
 #ifdef DEBUG
@@ -162,6 +163,7 @@ void CGameObject::net_Destroy()
 
 	CScriptBinder::net_Destroy();
 
+	if (m_lua_game_object) game_sv_Coop::OnLuaObjectGone(this); // coop server: Lua's db.actor never outlives its object
 	xr_delete(m_lua_game_object);
 	m_spawned = false;
 }
