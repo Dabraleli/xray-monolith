@@ -3,6 +3,7 @@
 #include "Level_Bullet_Manager.h"
 #include "xrserver.h"
 #include "game_cl_base.h"
+#include "game_cl_coop.h" // coop: RestartPending
 #include "xrmessages.h"
 #include "xrGameSpyServer.h"
 #include "../xrEngine/x_ray.h"
@@ -280,6 +281,21 @@ bool CLevel::net_start6()
 	else
 	{
 		Msg("! Failed to start client. Check the connection or level existance.");
+
+		// Coop: an attempt of the reconnect after the server's level change failed - the server was not
+		// back yet, or dropped the peer while still loading its world. Back to the wait screen
+		// (game_cl_Coop::ReconnectWaitEvent), which tries again in ten seconds; the menus below are for
+		// real failures. Without this the client sat in the main menu with the reconnect still pending.
+		extern ENGINE_API LOADING_EVENT g_disconnect_wait;
+		if (game_cl_Coop::RestartPending() && !g_disconnect_wait.empty())
+		{
+			Msg("[COOP_CLIENT] RECONNECT attempt failed: waiting for the server again");
+			DEL_INSTANCE(g_pGameLevel);
+			pApp->LoadBegin();
+			g_loading_events.push_back(g_disconnect_wait);
+			g_disconnect_wait.clear();
+			return true;
+		}
 
 		if (m_connect_server_err == xrServer::ErrConnect && !psNET_direct_connect && !g_dedicated_server)
 		{

@@ -228,6 +228,7 @@ bool game_cl_Coop::ReconnectWaitEvent()
     if (coop_reconnect.pending && now > coop_reconnect.deadline)
     {
         coop_reconnect.pending = false;
+        coop_restart_pending = false; // the menus and their boxes work as usual again
         Msg("! [COOP_CLIENT] RECONNECT gave up");
     }
     if (!coop_reconnect.pending)
@@ -265,6 +266,7 @@ void game_cl_Coop::ReconnectUpdate()
     if (Device.TimerAsync() > coop_reconnect.deadline)
     {
         coop_reconnect.pending = false;
+        coop_restart_pending = false;
         Msg("! [COOP_CLIENT] RECONNECT gave up");
         return;
     }

@@ -510,8 +510,13 @@ void CLevel::OnConnectResult(NET_Packet* P)
 		{
 		case ecr_data_verification_failed: //Standart error
 			{
+				// Coop: no "different version" box while the reconnect after a level change retries
+				// (the connect timeout arrives as this result; a real mismatch keeps failing until it gives up).
 				if (strstr(ResultStr, "Data verification failed. Cheater?"))
-					MainMenu()->SetErrorDialog(CMainMenu::ErrDifferentVersion);
+				{
+					if (game_cl_Coop::RestartPending()) Msg("[COOP_CLIENT] CONNECT_RESULT verification failed during the reconnect: retrying");
+					else MainMenu()->SetErrorDialog(CMainMenu::ErrDifferentVersion);
+				}
 			}
 			break;
 		case ecr_cdkey_validation_failed: //GameSpy CDKey
