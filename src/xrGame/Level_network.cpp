@@ -389,6 +389,17 @@ bool CLevel::Connect2Server(const char* options)
 		Sleep(5);
 		if (Server)
 			Server->Update();
+		// Coop: the server dropped the peer before answering (it is still loading its world after a
+		// level change and admits nobody yet). Waiting the minute out ended as the "Different version"
+		// box (the timeout's synthetic verification failure); the attempt fails at once instead and the
+		// reconnect wait screen tries again in ten seconds.
+		if ((IsGameTypeCoop() || strstr(Core.Params, "-coop_client")) && net_isDisconnected()) // the game type follows the server's options, known later
+		{
+			Msg("[COOP_CLIENT] CONNECT_DROPPED: the server closed the connection before answering; retrying");
+			OnConnectRejected();
+			Disconnect();
+			return FALSE;
+		}
 		//-----------------------------------------
 		u32 CurTime = GetTickCount();
 		if (CurTime > EndTime)

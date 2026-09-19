@@ -300,8 +300,10 @@ void game_sv_Coop::OnEvent(NET_Packet& packet, u16 type, u32 time, ClientID send
             if (!m_bootstrap_reported || !strstr(Core.Params, "-coop_server_network_test") ||
                 !allowed_peer || server().GetClientsCount() > 3)
             {
-                Msg("[COOP_SERVER] JOIN_REJECT client=%u peer=%s", sender.value(), has_address ? address.to_string().c_str() : "?");
-                server().DisconnectClient(client, "Coop test: peer restricted or two-player limit reached");
+                // Before the internal client is ready the world is still loading (a level change: the
+                // players reconnect at once); such a peer is dropped and its client retries.
+                Msg("[COOP_SERVER] JOIN_REJECT client=%u peer=%s ready=%d", sender.value(), has_address ? address.to_string().c_str() : "?", m_bootstrap_reported ? 1 : 0);
+                server().DisconnectClient(client, m_bootstrap_reported ? "Coop test: peer restricted or two-player limit reached" : "Coop: the server is still loading its world, retry");
                 return;
             }
             Msg("[COOP_SERVER] JOIN_ACCEPT client=%u peer=%s pid=%u", sender.value(), address.to_string().c_str(), client->process_id);
