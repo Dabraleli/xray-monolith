@@ -228,9 +228,12 @@ void CScriptBinder::shedule_Update(u32 time_delta)
 		{
 			// A C++ exception (an access violation under /EHa included) ends the binder for good:
 			// say so, or the object silently stops running its Lua (a dedicated coop server lost
-			// its world actor to a HUD getter this way).
-			Msg("! script binder update of [%s][%u] raised an exception: the binder is dropped", owner ? owner->cName().c_str() : "?", owner ? owner->ID() : 0);
-			clear();
+			// its world actor to a HUD getter this way). The coop server's actor binders (the world
+			// actor: every world service; the bodies) stay: the tick that threw is lost, the next
+			// runs - a dropped world actor is a dead server (18.09: a mod's packet parser on a body).
+			const bool keep = IsGameTypeCoop() && OnServer() && owner && owner->cast_actor();
+			Msg("! script binder update of [%s][%u] raised an exception: the binder is %s", owner ? owner->cName().c_str() : "?", owner ? owner->ID() : 0, keep ? "kept (coop actor)" : "dropped");
+			if (!keep) clear();
 		}
 	}
 }
