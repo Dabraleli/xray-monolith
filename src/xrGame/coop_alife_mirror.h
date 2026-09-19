@@ -53,6 +53,7 @@ public:
 	CSE_Abstract* create3(LPCSTR section, const Fvector& position, u32 level_vertex_id, GameGraph::_GRAPH_ID game_vertex_id, ALife::_OBJECT_ID id_parent, bool reg);
 	CSE_Abstract* create_ammo(LPCSTR section, const Fvector& position, u32 level_vertex_id, GameGraph::_GRAPH_ID game_vertex_id, ALife::_OBJECT_ID id_parent, int ammo_to_spawn);
 	void release(CSE_Abstract* object, bool);
+	CSE_Abstract* register_object(CSE_Abstract* object); // alife():register of the modded exes: the stand-in is already the server's
 	void set_switch_online(ALife::_OBJECT_ID id, bool value) { unsupported("set_switch_online"); }
 	void set_switch_offline(ALife::_OBJECT_ID id, bool value) { unsupported("set_switch_offline"); }
 	void set_interactive(ALife::_OBJECT_ID id, bool value) { unsupported("set_interactive"); }

@@ -211,6 +211,16 @@ void CCoopAlifeMirror::release(CSE_Abstract* object, bool)
 	if (ai().script_engine().functor("alife_release_id", release_id)) release_id(u32(object->ID));
 }
 
+// The modded exes' alife():register(se) registers an entity made with alife():create(..., false) and
+// returns it (respawned). Here every creation is the server's at once (coop_client_actor's
+// create_and_wait): the stand-in comes back as it is. Without it the GAMMA flows that create,
+// adjust and then register (a weapon part taken off: arti_jamming_repairs.remove_part) stopped at
+// the call - the part was made, the weapon kept it.
+CSE_Abstract* CCoopAlifeMirror::register_object(CSE_Abstract* object)
+{
+	return object;
+}
+
 void CCoopAlifeMirror::iterate_objects(const luabind::functor<bool>& functor)
 {
 	xr_vector<u16> ids;
@@ -260,6 +270,7 @@ void CCoopAlifeMirror::script_register(lua_State* L)
 		.def("create", &CCoopAlifeMirror::create3)
 		.def("create_ammo", &CCoopAlifeMirror::create_ammo)
 		.def("release", &CCoopAlifeMirror::release)
+		.def("register", &CCoopAlifeMirror::register_object)
 		.def("set_switch_online", &CCoopAlifeMirror::set_switch_online)
 		.def("set_switch_offline", &CCoopAlifeMirror::set_switch_offline)
 		.def("set_interactive", &CCoopAlifeMirror::set_interactive)
