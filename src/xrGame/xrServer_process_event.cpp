@@ -181,6 +181,7 @@ void xrServer::Process_event(NET_Packet& P, ClientID sender)
 		{
 			CSE_Visual* visual = smart_cast<CSE_Visual*>(receiver);
 			VERIFY(visual);
+			if (!visual) break; // the entity is gone (a client's late event, the teardown)
 			string256 tmp;
 			P.r_stringZ(tmp);
 			visual->set_visual(tmp);

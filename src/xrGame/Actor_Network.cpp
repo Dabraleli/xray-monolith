@@ -973,8 +973,11 @@ void CActor::ChangeVisual(shared_str NewVisual)
 	// change and a load start from it - and to every client's replica (GE_CHANGE_VISUAL, the
 	// server's case broadcasts it; CActor::OnEvent applies it). The replicas never dress themselves
 	// (CCustomOutfit::ApplySkinModel): a client's default placement of another player's outfit
-	// showed the model now, the novice jacket a moment later (19.09).
-	if (IsGameTypeCoop() && OnServer() && game_sv_Coop::BodyOf(this))
+	// showed the model now, the novice jacket a moment later (19.09). Not at the teardown: the
+	// server's entities are cleared first (SLS_Clear) and the client's ClearAllObjects then drops
+	// every item, the outfit's undress included - the event would reach a record that is gone
+	// (the console close with a player on, 19.09 evening: set_visual on a null receiver).
+	if (IsGameTypeCoop() && OnServer() && game_sv_Coop::BodyOf(this) && Level().Server && Level().Server->ID_to_entity(ID()))
 	{
 		NET_Packet P;
 		u_EventGen(P, GE_CHANGE_VISUAL, ID());
