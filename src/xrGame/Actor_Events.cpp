@@ -36,6 +36,15 @@ void CActor::OnEvent(NET_Packet& P, u16 type)
 	u16 id;
 	switch (type)
 	{
+	case GE_CHANGE_VISUAL:
+		{
+			// Coop client: the server's visual of a player body (its outfit put on or taken off there,
+			// CActor::ChangeVisual on the server); the own body's local dressing gave the same name.
+			string256 visual;
+			P.r_stringZ(visual);
+			if (IsGameTypeCoop() && OnClient()) ChangeVisual(visual);
+		}
+		break;
 	case GE_TRADE_BUY:
 	case GE_OWNERSHIP_TAKE:
 		{

@@ -298,9 +298,13 @@ void CCustomOutfit::OnMoveToSlot(const SInvItemPlace& prev)
 
 void CCustomOutfit::ApplySkinModel(CActor* pActor, bool bDress, bool bHUDOnly)
 {
+	// Coop client: another player's body wears what the server says (GE_CHANGE_VISUAL from its
+	// ChangeVisual there); the placement of that player's outfit here is this client's default, not
+	// the player's, so the replica must not dress or undress by it. The own body dresses as in SP.
+	const bool coop_replica = IsGameTypeCoop() && OnClient() && pActor != Level().CurrentControlEntity();
 	if (bDress)
 	{
-		if (!bHUDOnly && m_ActorVisual.size())
+		if (!bHUDOnly && m_ActorVisual.size() && !coop_replica)
 		{
 			shared_str NewVisual = NULL;
 			char* TeamSection = Game().getTeamSection(pActor->g_Team());
@@ -329,7 +333,7 @@ void CCustomOutfit::ApplySkinModel(CActor* pActor, bool bDress, bool bHUDOnly)
 	}
 	else
 	{
-		if (!bHUDOnly && m_ActorVisual.size())
+		if (!bHUDOnly && m_ActorVisual.size() && !coop_replica)
 		{
 			shared_str DefVisual = pActor->GetDefaultVisualOutfit();
 			if (DefVisual.size())

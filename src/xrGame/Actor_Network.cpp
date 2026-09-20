@@ -14,6 +14,7 @@
 #include "../xrphysics/iPHWorld.h"
 #include "../xrphysics/actorcameracollision.h"
 #include "level.h"
+#include "game_sv_coop.h" // coop: a body's visual change goes to its record and the replicas
 #include "xr_level_controller.h"
 #include "game_cl_base.h"
 #include "infoportion.h"
@@ -953,6 +954,9 @@ void CActor::OnChangeVisual()
 void CActor::ChangeVisual(shared_str NewVisual)
 {
 	if (!NewVisual.size()) return;
+	if (IsGameTypeCoop() && strstr(Core.Params, "-coop_damage_probe"))
+		Msg("[COOP_VISUAL] side=%s id=%u visual=%s same=%d", OnServer() ? "server" : "client", ID(), NewVisual.c_str(),
+			cNameVisual().size() && cNameVisual() == NewVisual ? 1 : 0);
 	if (cNameVisual().size())
 	{
 		if (cNameVisual() == NewVisual) return;
@@ -963,6 +967,20 @@ void CActor::ChangeVisual(shared_str NewVisual)
 	g_SetAnimation(mstate_real);
 	Visual()->dcast_PKinematics()->CalculateBones_Invalidate();
 	Visual()->dcast_PKinematics()->CalculateBones(TRUE);
+
+	// Coop server: a player body's visual (the outfit's actor_visual put on or taken off here, where
+	// the inventory is authoritative) goes to its ALife record - a later joiner's spawn, a level
+	// change and a load start from it - and to every client's replica (GE_CHANGE_VISUAL, the
+	// server's case broadcasts it; CActor::OnEvent applies it). The replicas never dress themselves
+	// (CCustomOutfit::ApplySkinModel): a client's default placement of another player's outfit
+	// showed the model now, the novice jacket a moment later (19.09).
+	if (IsGameTypeCoop() && OnServer() && game_sv_Coop::BodyOf(this))
+	{
+		NET_Packet P;
+		u_EventGen(P, GE_CHANGE_VISUAL, ID());
+		P.w_stringZ(NewVisual.c_str());
+		u_EventSend(P);
+	}
 };
 
 void ACTOR_DEFS::net_update::lerp(ACTOR_DEFS::net_update& A, ACTOR_DEFS::net_update& B, float f)

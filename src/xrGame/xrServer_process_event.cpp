@@ -184,6 +184,10 @@ void xrServer::Process_event(NET_Packet& P, ClientID sender)
 			string256 tmp;
 			P.r_stringZ(tmp);
 			visual->set_visual(tmp);
+			// Coop: a player body's visual (CActor::ChangeVisual on the server) reaches the clients'
+			// replicas as well; in SP the object changed itself and only the record needed the name.
+			if (game->Type() == eGameIDCoop && smart_cast<CSE_ALifeCreatureActor*>(receiver))
+				SendBroadcast(BroadcastCID, P, MODE);
 		}
 		break;
 	case GE_DIE:
