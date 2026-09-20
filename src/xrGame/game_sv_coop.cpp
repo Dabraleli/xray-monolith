@@ -1755,6 +1755,33 @@ static void coop_pda_write_task(NET_Packet& P, CGameTask* task)
     coop_pda_write_where(P, task->m_map_object_id);
 }
 
+// A task's marker on a client follows the target object only while the object is online there;
+// for one that is not (an NPC offline, or on another level) the client draws the position the
+// server last reported (InitCoopExternal) - the spot of a wandering target went stale between the
+// task messages ("the marker is there, the NPC is not", 19.09). Every few seconds the in-progress
+// tasks whose target moved are sent again; the clients update the spot in place.
+void game_sv_Coop::UpdateTaskSpots()
+{
+    const u32 now = Device.dwTimeGlobal;
+    if (now - m_task_spots_at < 4000) return;
+    m_task_spots_at = now;
+    if (!ai().get_alife()) return;
+    vGameTasks& list = Level().GameTaskManager().GetGameTasks();
+    for (u32 i = 0; i < list.size(); ++i)
+    {
+        CGameTask* task = list[i].game_task;
+        if (!task || task->GetTaskState() != eTaskStateInProgress || task->m_map_object_id == u16(-1)) continue;
+        CSE_ALifeDynamicObject* se = ai().alife().objects().object(task->m_map_object_id, true);
+        if (!se) continue;
+        xr_map<u16, Fvector>::iterator it = m_task_spot_sent.find(task->m_map_object_id);
+        if (it != m_task_spot_sent.end() && it->second.distance_to(se->o_Position) < 2.f) continue;
+        m_task_spot_sent[task->m_map_object_id] = se->o_Position;
+        NET_Packet P;
+        coop_pda_write_task(P, task);
+        coop_pda_send(P, NULL);
+    }
+}
+
 void game_sv_Coop::OnTaskChanged(CGameTask* task)
 {
     if (!coop_server_game() || !task) return;
@@ -2507,6 +2534,7 @@ void game_sv_Coop::Update()
     UpdateDowned();
     UpdateProfiles();
     UpdateItemStates();
+    UpdateTaskSpots();
     u32 now = Device.dwTimeGlobal;
     // Autosave ([server] autosave_minutes, 0 = off) while anyone plays: the server's own "save"
     // console command, the same path as a player's.

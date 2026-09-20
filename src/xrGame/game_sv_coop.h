@@ -263,5 +263,8 @@ public:
     xr_map<u16, SItemState> m_item_states; // by item id, the last state sent
     u32 m_item_states_checked;
     void UpdateItemStates();
+    void UpdateTaskSpots(); // the markers of task targets that are not online on the clients follow their ALife position
+    u32 m_task_spots_at = 0;
+    xr_map<u16, Fvector> m_task_spot_sent; // task target id -> the position last sent
     virtual void reload_game(NET_Packet&, ClientID) {}
 };
