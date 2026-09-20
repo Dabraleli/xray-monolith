@@ -220,7 +220,7 @@ void CActorCondition::UpdateCondition()
         static xr_map<u16,u32> reports; u32& last=reports[object().ID()];
         if (Device.dwTimeGlobal-last>=1000) {
             last=Device.dwTimeGlobal;
-            Msg("[COOP_CONDITION] side=%s id=%u local=%u health=%f bleed=%f dt=%f bleed_v=%f restore=%f can_harm=%u",OnServer()?"server":"client",object().ID(),object().Local(),GetHealth(),BleedingSpeed(),m_fDeltaTime,change_v().m_fV_Bleeding,change_v().m_fV_HealthRestore,CanBeHarmed());
+            Msg("[COOP_CONDITION] side=%s id=%u local=%u health=%f bleed=%f dt=%f bleed_v=%f restore=%f can_harm=%u power=%f max_power=%f satiety=%f",OnServer()?"server":"client",object().ID(),object().Local(),GetHealth(),BleedingSpeed(),m_fDeltaTime,change_v().m_fV_Bleeding,change_v().m_fV_HealthRestore,CanBeHarmed(),GetPower(),GetMaxPower(),GetSatiety());
             CWeapon* weapon = smart_cast<CWeapon*>(object().inventory().ActiveItem());
             Msg("[COOP_WEAPON] side=%s id=%u slot=%u item=%s weapon=%u ammo=%d state=%u items=%u",OnServer()?"server":"client",object().ID(),object().inventory().GetActiveSlot(),
                 object().inventory().ActiveItem()?object().inventory().ActiveItem()->object().cNameSect().c_str():"none",weapon?weapon->ID():0,weapon?weapon->GetAmmoElapsed():-1,weapon?weapon->GetState():0,u32(object().inventory().m_all.size()));
@@ -557,11 +557,16 @@ void CActorCondition::UpdateSatiety()
 	float satiety_health_koef = (m_fSatiety - m_fSatietyCritical) / (m_fSatiety >= m_fSatietyCritical
 		                                                                 ? 1 - m_fSatietyCritical
 		                                                                 : m_fSatietyCritical);
-	if (CanBeHarmed() && !psActorFlags.test(AF_GODMODE_RT))
+	// Coop client: CanBeHarmed() is false off the server (the hunger's health effect is the
+	// server's, GE_COOP_CONDITION brings the satiety), but the stamina is this client's own power
+	// model - the restore ran only on the server, and here nothing but standing still brought the
+	// stamina back (19.09: "drains even walking, must stand to recover").
+	const bool restore_power = CanBeHarmed() || (IsGameTypeCoop() && OnClient() && m_bCanBeHarmed);
+	if (!psActorFlags.test(AF_GODMODE_RT))
 	{
 		float v_satiety_health = IsSleeping() ? m_fV_SatietyHealthSleep : m_fV_SatietyHealth;
-		m_fDeltaHealth += v_satiety_health * satiety_health_koef * m_fDeltaTime;
-		m_fDeltaPower += v_satiety_power * m_fSatiety * m_fDeltaTime;
+		if (CanBeHarmed()) m_fDeltaHealth += v_satiety_health * satiety_health_koef * m_fDeltaTime;
+		if (restore_power) m_fDeltaPower += v_satiety_power * m_fSatiety * m_fDeltaTime;
 	}
 }
 
