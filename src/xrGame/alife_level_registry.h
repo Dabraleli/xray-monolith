@@ -33,6 +33,9 @@ public:
 	IC void update(const _update_predicate& predicate, bool const iterate_as_first_time_next_time);
 	IC GameGraph::_LEVEL_ID level_id() const;
 	IC CSE_ALifeDynamicObject* object(const ALife::_OBJECT_ID& id, bool no_assert = false) const;
+	// Coop: the next switch pass runs to the end, as the first one after a load (a player body has
+	// just become an anchor: the objects around it switch before the scheduled Lua measures against it).
+	IC void iterate_as_first_time() { m_first_update = true; }
 };
 
 #include "alife_level_registry_inline.h"

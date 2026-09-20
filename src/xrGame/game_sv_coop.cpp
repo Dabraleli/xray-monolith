@@ -359,6 +359,9 @@ bool game_sv_Coop::ReclaimBody(xrClientData* client)
     body->CSE_ALifeObject::can_switch_offline(false);
     client->owner = body;
     client->ps->GameID = body->ID;
+    // The body anchors the world from here: everything around it switches in the next pass, before
+    // the scheduled Lua measures the spawn exclusion against a body that has just appeared.
+    alife().coop_switch_all_next();
     Msg("[COOP_SERVER] PLAYER_RECLAIM client=%u name=%s body=%u children=%u state=%u items=%u parked_ms=%u",
         client->ID.value(), client->name.c_str(), body->ID, u32(body->children.size()), u32(parked.state.size()),
         u32(parked.items.size()), Device.dwTimeGlobal - parked.parked_at);
@@ -469,7 +472,12 @@ CoopLuaActor::~CoopLuaActor()
     {
         // The saved actor may have been destroyed inside the scope (a level change or a shutdown tearing
         // the objects down from within a body's Lua): its wrapper is gone with it, so nil is restored.
-        const bool saved_alive = saved_id == u16(-1) || (Level().Objects.net_Find(saved_id) && !Level().Objects.net_Find(saved_id)->getDestroy());
+        // Registered means not destroyed yet: an object on the destroy queue keeps its wrapper until its
+        // net_Destroy. The teardown of a console `load` (CLevel::remove_objects) queues the world actor
+        // first and destroys it last; the monsters' net_Relcase memory updates open body scopes on the
+        // way, and a scope that dropped db.actor for the doomed world actor left the bodies' binders
+        // without it (19.09, the host: "body cleanup cleared world actor" on `load`).
+        const bool saved_alive = saved_id == u16(-1) || Level().Objects.net_Find(saved_id) != NULL;
         if (saved_alive) db["actor"] = saved; else lua_table_set_nil(db, "actor");
         globals["AC_ID"] = saved_ac_id;
     }
@@ -1015,6 +1023,21 @@ static game_sv_Coop* coop_server_game()
         Level().Server->game->Type() != eGameIDCoop)
         return NULL;
     return static_cast<game_sv_Coop*>(Level().Server->game);
+}
+
+void game_sv_Coop::WaitingBodies(xr_vector<CSE_ALifeCreatureActor*>& bodies)
+{
+    bodies.clear();
+    game_sv_Coop* game = coop_server_game();
+    if (!game || !ai().get_alife()) return;
+    // Through the AI space: the game's own pointer is set after the simulator's constructor returns.
+    const CALifeSimulator& simulator = ai().alife(); // the const accessors are the public ones
+    const CSE_ALifeCreatureActor* world = ai().alife().graph().actor();
+    for (xr_map<shared_str, SParkedBody>::const_iterator it = game->m_parked.begin(); it != game->m_parked.end(); ++it)
+    {
+        CSE_ALifeCreatureActor* body = smart_cast<CSE_ALifeCreatureActor*>(simulator.objects().object(it->second.id, true));
+        if (body && body != world && body->g_Alive()) bodies.push_back(body);
+    }
 }
 
 // The per-connection store next to the ALife save: one "name\nblob\n" pair per player (the blobs
@@ -2430,6 +2453,7 @@ CSE_ALifeCreatureActor* game_sv_Coop::SpawnBody(xrClientData* client, bool with_
         body->m_reputation = standing_from->Reputation();
     }
     if (!body->m_bOnline) alife().switch_online(body);
+    alife().coop_switch_all_next(); // as ReclaimBody: the world around the new body switches before its Lua sees it
     Msg("[COOP_TRACE] CSE_ONLINE id=%u health=%f position=%f,%f,%f", body->ID, body->get_health(), VPUSH(body->o_Position));
     R_ASSERT(body->owner == server().GetServerClient());
     if (with_loadout)

@@ -59,6 +59,11 @@ class game_sv_Coop : public game_sv_Single
     xr_map<shared_str, SParkedBody> m_parked;
     bool ReclaimBody(xrClientData* client);
     bool ParkBody(xrClientData* client, CSE_ALifeCreatureActor* body);
+public:
+    // The living bodies waiting for their players - parked, or saved with the world (Create) - as
+    // ALife records: the world's anchors until a connected body is (CALifeSimulator::activation_distance).
+    static void WaitingBodies(xr_vector<CSE_ALifeCreatureActor*>& bodies);
+private:
     // Per-player Lua state the client's presentation modules keep (thirst, sleep): the client
     // sends it as a text blob (M_COOP_PLAYER_STORE), the server keeps it under the connection
     // name and hands it back when the same name is ready in the world again.

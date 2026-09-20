@@ -18,6 +18,7 @@
 #include "level_graph.h"
 #include "alife_monster_movement_manager.h"
 #include "alife_monster_detail_path_manager.h"
+#include "level.h" // coop: IsGameTypeCoop, OnServer
 
 #pragma warning(push)
 #pragma warning(disable:4995)
@@ -198,6 +199,22 @@ bool CSE_ALifeOnlineOfflineGroup::synchronize_location()
 	return (true);
 }
 
+// Coop server: a squad within the online distance of a player that its script keeps offline
+// (sim_squad_scripted:can_switch_online - the spawn exclusion, a locked squad, a story rule) is
+// logged once in five minutes, so a "marker on the map, no NPC" report reads from the host log.
+static void coop_log_refused_switch(CSE_ALifeOnlineOfflineGroup* group)
+{
+	if (!IsGameTypeCoop() || !OnServer()) return;
+	const float distance = ai().alife().activation_distance(group->o_Position, group->m_tGraphID);
+	if (distance > ai().alife().online_distance()) return;
+	static xr_map<u16, u32> reported;
+	xr_map<u16, u32>::iterator it = reported.find(group->ID);
+	if (it != reported.end() && Device.dwTimeGlobal - it->second < 300000) return;
+	reported[group->ID] = Device.dwTimeGlobal;
+	Msg("[COOP_SERVER] SWITCH_REFUSED squad=%u name=%s members=%u distance=%.1f", group->ID, group->name_replace(),
+		u32(group->npc_count()), distance);
+}
+
 void CSE_ALifeOnlineOfflineGroup::try_switch_online()
 {
 	CoopSpatialScope scope(this); // coop: see CSE_ALifeDynamicObject::try_switch_online
@@ -205,7 +222,10 @@ void CSE_ALifeOnlineOfflineGroup::try_switch_online()
 		return;
 
 	if (!can_switch_online())
+	{
+		coop_log_refused_switch(this);
 		return;
+	}
 
 	if (!can_switch_offline())
 	{

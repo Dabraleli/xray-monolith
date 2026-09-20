@@ -21,6 +21,7 @@
 #include "level.h"
 #include "game_graph.h"
 #include "../xrEngine/xr_ioconsole.h"
+#include "game_sv_coop.h"
 
 #ifdef DEBUG
 #	include "moving_objects.h"
@@ -38,11 +39,17 @@ float CALifeSimulator::activation_distance(const Fvector& position, u32 game_ver
     if (!uses_player_anchors())
         return graph().actor()->o_Position.distance_to(position);
 
-    // No connected body means no spatial anchor. The world actor is identity only.
+    // The connected bodies are the spatial anchors; the world actor is identity only, except below.
     float nearest = flt_max;
     if (!ai().game_graph().valid_vertex_id(game_vertex_id)) return nearest;
     const auto level_id = ai().game_graph().vertex(game_vertex_id)->level_id();
+    auto on_level = [&](const CSE_ALifeCreatureActor* body)
+    {
+        return ai().game_graph().valid_vertex_id(body->m_tGraphID) &&
+            ai().game_graph().vertex(body->m_tGraphID)->level_id() == level_id;
+    };
     IClient* internal = server().GetServerClient();
+    bool connected = false;
     auto visit = [&](IClient* connection)
     {
         if (connection == internal || !connection->flags.bConnected) return;
@@ -51,13 +58,40 @@ float CALifeSimulator::activation_distance(const Fvector& position, u32 game_ver
         CSE_Abstract* record = server().ID_to_entity(client->ps->GameID);
         if (record != client->owner) return;
         CSE_ALifeCreatureActor* body = smart_cast<CSE_ALifeCreatureActor*>(record);
-        if (!body || body == graph().actor() || body->owner != internal ||
-            !ai().game_graph().valid_vertex_id(body->m_tGraphID) ||
-            ai().game_graph().vertex(body->m_tGraphID)->level_id() != level_id) return;
+        if (!body || body == graph().actor() || body->owner != internal) return;
+        connected = true;
+        if (!on_level(body)) return;
         nearest = _min(nearest, body->o_Position.distance_to(position));
     };
     server().ForEachClientDo(visit);
+    if (connected) m_coop_world_anchors = false;
+    if (connected || !m_coop_world_anchors) return nearest;
+    // No connected body yet: the clients still load after a new game, a load or a level change.
+    // Until the first one anchors the world, the bodies waiting for their players (parked: the saved
+    // ones, put by the level change where the players appear) anchor it, and the world actor when
+    // none is on the level - as the SP actor anchors its level from the first switch pass. Without
+    // that nothing was online while the clients loaded, and the squads' scheduled Lua
+    // (sim_squad_scripted:check_online_status, the spawn exclusion excl_dist = 75 m) measured against
+    // the world actor standing on the arrival point: an offline squad within 75 m of it was kept
+    // offline by its can_switch_online for as long as a player stayed near (19.09: the Marsh quest
+    // NPC 60 m from the Cordon entrance - the marker on the map, no NPC on the spot).
+    xr_vector<CSE_ALifeCreatureActor*> waiting;
+    game_sv_Coop::WaitingBodies(waiting);
+    bool any = false;
+    for (u32 i = 0; i < waiting.size(); ++i)
+    {
+        if (!on_level(waiting[i])) continue;
+        any = true;
+        nearest = _min(nearest, waiting[i]->o_Position.distance_to(position));
+    }
+    if (!any && on_level(graph().actor())) nearest = graph().actor()->o_Position.distance_to(position);
     return nearest;
+}
+
+void CALifeSimulator::coop_switch_all_next()
+{
+    if (!uses_player_anchors()) return;
+    graph().level().iterate_as_first_time();
 }
 
 extern void destroy_lua_wpn_params();
@@ -82,6 +116,7 @@ CALifeSimulator::CALifeSimulator(xrServer* server, shared_str* command_line) :
 	CALifeInteractionManager(server, alife_section),
 	CALifeSimulatorBase(server, alife_section)
 {
+	m_coop_world_anchors = true;
 	restart_all();
 
 	ai().set_alife(this);
