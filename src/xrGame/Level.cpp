@@ -1253,10 +1253,16 @@ void CLevel::OnFrame()
 #endif
 	g_pGamePersistent->Environment().SetGameTime(GetEnvironmentGameDayTimeSec(),
 	                                             game->GetEnvironmentGameTimeFactor());
-	if (!g_dedicated_server)
+	// Coop client: the actor may have gone in this very frame (Objects.Update above ran its
+	// net_Destroy: the Lua actor released) while the world restart is pending; the level's script
+	// calls (GAMMA's time-event pump, level.add_call) would run against a nil db.actor - a fatal
+	// (lower_weapon_sprint's sprint loop at a level change, 19.09). The frame guard above saw the
+	// actor still alive; this one does not.
+	const bool coop_teardown = IsGameTypeCoop() && OnClient() && game_cl_Coop::RestartPending() && !Actor();
+	if (!g_dedicated_server && !coop_teardown)
 		ai().script_engine().script_process(ScriptEngine::eScriptProcessorLevel)->update();
 	m_ph_commander->update();
-	m_ph_commander_scripts->update();
+	if (!coop_teardown) m_ph_commander_scripts->update();
 	Device.Statistic->TEST0.Begin();
 	BulletManager().CommitRenderSet();
 	Device.Statistic->TEST0.End();
