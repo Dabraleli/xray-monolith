@@ -81,8 +81,11 @@ void CAI_Stalker::OnEvent(NET_Packet& P, u16 type)
 			if (!O)
 				break;
 
+			const u32 rest = P.r_elapsed(); // coop probe (-coop_drop_trace): what follows the id
 			bool just_before_destroy = !P.r_eof() && P.r_u8();
 			bool dont_create_shell = (type == GE_TRADE_SELL) || just_before_destroy;
+			if (IsGameTypeCoop() && strstr(Core.Params, "-coop_drop_trace"))
+				Msg("[COOP_DROP] reject npc=%u item=%u type=%u rest=%u just_before_destroy=%d side=%s", ID(), id, u32(type), rest, just_before_destroy ? 1 : 0, OnServer() ? "server" : "client");
 
 
 			O->SetTmpPreDestroy(just_before_destroy);

@@ -305,6 +305,8 @@ void CPhysicsShellHolder::setup_physic_shell()
 
 void CPhysicsShellHolder::deactivate_physics_shell()
 {
+	if (IsGameTypeCoop() && strstr(Core.Params, "-coop_drop_trace") && m_pPhysicsShell)
+		Msg("[COOP_DROP] deactivate id=%u section=%s parent=%u side=%s", ID(), cNameSect().c_str(), H_Parent() ? H_Parent()->ID() : u16(-1), OnServer() ? "server" : "client");
 	destroy_physics_shell(m_pPhysicsShell);
 }
 

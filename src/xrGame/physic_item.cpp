@@ -13,6 +13,7 @@
 #include "../Include/xrRender/RenderVisual.h"
 #include "../Include/xrRender/KinematicsAnimated.h"
 #include "../Include/xrRender/Kinematics.h"
+#include "level.h" // coop: -coop_drop_trace
 #define CHOOSE_MAX(x,inst_x,y,inst_y,z,inst_z)\
 	if(x>y)\
 	if(x>z){inst_x;}\
@@ -56,6 +57,12 @@ void CPhysicItem::OnH_B_Independent(bool just_before_destroy)
 {
 	inherited::OnH_B_Independent(just_before_destroy);
 
+	// Coop probe (-coop_drop_trace): the shell of an item let go (19.09: an NPC's dropped weapon hung
+	// in the air on the server - no shell a second later).
+	const bool trace = IsGameTypeCoop() && strstr(Core.Params, "-coop_drop_trace");
+	if (trace)
+		Msg("[COOP_DROP] independent id=%u section=%s shell=%d just_before_destroy=%d ready_to_destroy=%d parent=%u side=%s", ID(), cNameSect().c_str(),
+			m_pPhysicsShell ? 1 : 0, just_before_destroy ? 1 : 0, m_ready_to_destroy ? 1 : 0, H_Parent() ? H_Parent()->ID() : u16(-1), OnServer() ? "server" : "client");
 	if (m_ready_to_destroy)
 		return;
 
@@ -64,10 +71,16 @@ void CPhysicItem::OnH_B_Independent(bool just_before_destroy)
 
 	if (!just_before_destroy)
 		activate_physic_shell();
+	if (trace)
+		Msg("[COOP_DROP] independent done id=%u shell=%d active=%d enabled=%d at=%f,%f,%f", ID(), m_pPhysicsShell ? 1 : 0,
+			m_pPhysicsShell && m_pPhysicsShell->isActive() ? 1 : 0, m_pPhysicsShell && m_pPhysicsShell->isEnabled() ? 1 : 0, VPUSH(Position()));
 }
 
 void CPhysicItem::OnH_B_Chield()
 {
+	if (IsGameTypeCoop() && strstr(Core.Params, "-coop_drop_trace"))
+		Msg("[COOP_DROP] chield id=%u section=%s shell=%d parent=%u side=%s", ID(), cNameSect().c_str(), m_pPhysicsShell ? 1 : 0,
+			H_Parent() ? H_Parent()->ID() : u16(-1), OnServer() ? "server" : "client");
 	inherited::OnH_B_Chield();
 
 	setVisible(FALSE);
