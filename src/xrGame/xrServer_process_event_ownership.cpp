@@ -70,8 +70,12 @@ void xrServer::Process_event_ownership(NET_Packet& P, ClientID sender, u32 time,
 		return;
 	}
 
+	// Coop as SP: a corpse takes items - GAMMA's keep_guns_on_bodies gives a dead NPC its own
+	// weapon back (npc:transfer_item(item, npc): GE_TRADE_SELL detaches it without a physics shell,
+	// GE_TRADE_BUY re-attaches), and a player may put things into a corpse. With the MP rule the
+	// take was refused and the weapon hung in the air where the dying NPC let it go (19.09).
 	CSE_ALifeCreatureAbstract* alife_entity = smart_cast<CSE_ALifeCreatureAbstract*>(e_parent);
-	if (alife_entity && !alife_entity->g_Alive() && game->Type() != eGameIDSingle)
+	if (alife_entity && !alife_entity->g_Alive() && game->Type() != eGameIDSingle && game->Type() != eGameIDCoop)
 	{
 #ifdef MP_LOGGING
 		Msg("--- SV: WARNING: dead player [%d] tries to take item [%d]", id_parent, id_entity);
