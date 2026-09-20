@@ -2112,6 +2112,16 @@ void g_coop_teammate_hint(LPCSTR text)
 	game_cl_Coop::SetTeammateHint(text);
 }
 
+// Coop client: the SSFX wet-surface buildup (CEnvironment::wetness_factor) of the loading frames
+// - the engine's default weather cycle, the first by name (`night` in GAMMA, rain 0.95), plays
+// until the server's weather arrives after the join - is dropped by the client's Lua when that
+// weather is set; otherwise the ground kept the rain ripples for minutes after every level load.
+void g_coop_dry_ground()
+{
+	if (!IsGameTypeCoop() || OnServer() || !g_pGamePersistent) return;
+	g_pGamePersistent->Environment().wetness_factor = 0.f;
+}
+
 //can spawn entities like bolts, phantoms, ammo, etc. which normally crash when using alife():create()
 void spawn_section(LPCSTR sSection, Fvector3 vPosition, u32 LevelVertexID, u16 ParentID, bool bReturnItem = false)
 {
@@ -2679,6 +2689,7 @@ void CLevel::script_register(lua_State* L)
 			def("coop_self_downed", &g_coop_self_downed), // coop client: this player's body is down
 			def("coop_revive_hint", &g_coop_revive_hint), // coop client: the "use" hint shown on a downed body
 			def("coop_teammate_hint", &g_coop_teammate_hint), // coop client: the "use" hint shown on a standing teammate ("" - none)
+			def("coop_dry_ground", &g_coop_dry_ground), // coop client: drop the wet-surface buildup of the loading frames (the server's weather is set)
 
 			def("get_target_obj", ((CScriptGameObject * (*)()) & g_get_target_obj)), //intentionally named to what is in xray extensions
 			def("get_target_obj", ((CScriptGameObject* (*)(ETraceTarget)) & g_get_target_obj)), //intentionally named to what is in xray extensions
