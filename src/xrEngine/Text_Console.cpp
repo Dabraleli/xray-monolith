@@ -7,6 +7,7 @@ static WNDPROC coop_parent_proc = nullptr;
 static WNDPROC coop_edit_proc = nullptr;
 static CServerInfo coop_server_info;
 static bool coop_console_close = false;
+static u32 coop_quit_at = 0; // the close request's quit, after the players had the notice (OnFrame)
 
 bool CoopConsoleEnabled()
 {
@@ -537,6 +538,15 @@ void CTextConsole::OnFrame()
         {
             coop_console_close = false;
             Msg("[COOP_CONSOLE] STOP_REQUEST");
+            // The world as it is, and the players told to leave (game_sv_Coop::SaveOnStop); the quit
+            // waits for the notice to reach them: a client whose body the teardown destroys under a
+            // running level hit its mods' time events without db.actor (19.09 evening).
+            Execute("coop_save_on_stop");
+            coop_quit_at = Device.dwTimeGlobal + 1500;
+        }
+        if (coop_quit_at && Device.dwTimeGlobal >= coop_quit_at)
+        {
+            coop_quit_at = 0;
             Execute("quit");
         }
         return;

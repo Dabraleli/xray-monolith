@@ -162,7 +162,7 @@ static void coop_spawn_loadout(CALifeSimulator& alife, CSE_ALifeCreatureActor* b
 static void coop_store_load(xr_map<shared_str, xr_string>& store, LPCSTR save_name); // saves, below
 bool valid_saved_game_name(LPCSTR file_name); // console_commands.cpp
 
-game_sv_Coop::game_sv_Coop() : m_bootstrap_reported(false), m_loaded_save(false), m_autosave_ms(0), m_last_autosave(0),
+game_sv_Coop::game_sv_Coop() : m_bootstrap_reported(false), m_loaded_save(false), m_autosave_ms(0), m_last_autosave(0), m_quicksave_count(5),
     m_changing_level(false), m_level_change_radius(25.f), m_level_change_notice(0),
     m_bleedout_ms(120000), m_revive_ms(5000), m_revive_range(2.5f), m_revive_health(0.3f), m_down_health(0.05f),
     m_item_states_checked(0)
@@ -193,6 +193,8 @@ void game_sv_Coop::Create(shared_str& options)
         const u32 autosave_minutes = config.line_exist("server", "autosave_minutes") ? config.r_u32("server", "autosave_minutes") : 10;
         m_autosave_ms = autosave_minutes * 60 * 1000;
         m_last_autosave = Device.dwTimeGlobal;
+        if (config.line_exist("server", "quicksave_count")) m_quicksave_count = config.r_u32("server", "quicksave_count");
+        if (m_quicksave_count < 1) m_quicksave_count = 1;
         if (config.line_exist("server", "level_change_radius")) m_level_change_radius = config.r_float("server", "level_change_radius");
         if (config.line_exist("server", "bleedout_seconds")) m_bleedout_ms = config.r_u32("server", "bleedout_seconds") * 1000;
         if (config.line_exist("server", "revive_seconds")) m_revive_ms = config.r_u32("server", "revive_seconds") * 1000;
@@ -1110,6 +1112,43 @@ static u32 coop_save_online_objects()
     return saved;
 }
 
+// A player's F6: Anomaly's level_input rotates "<name> - quicksave_N" (N = 1..quicksave_cnt) by the
+// quicksaves it finds on its own disk - a coop client has none of the server's, so every quicksave
+// came as quicksave_1 (19.09). The server rotates instead: the newest save with this prefix by the
+// file time, its number + 1, wrapping at [server] quicksave_count.
+static bool coop_rotate_quicksave(LPCSTR name, u32 count, string_path& rotated)
+{
+    LPCSTR tag = strstr(name, "quicksave_");
+    if (!tag) return false;
+    LPCSTR digits = tag + xr_strlen("quicksave_");
+    if (!*digits) return false;
+    for (LPCSTR c = digits; *c; ++c) if (*c < '0' || *c > '9') return false;
+    string_path prefix;
+    strncpy_s(prefix, sizeof(prefix), name, size_t(digits - name));
+    xr_strlwr(prefix);
+    FS_FileSet files;
+    FS.file_list(files, "$game_saves$", FS_ListFiles | FS_RootOnly | FS_ClampExt, "*.scop");
+    u32 last = 0;
+    time_t last_time = 0;
+    for (FS_FileSetIt it = files.begin(); it != files.end(); ++it)
+    {
+        if (strncmp(it->name.c_str(), prefix, xr_strlen(prefix))) continue;
+        LPCSTR n = it->name.c_str() + xr_strlen(prefix);
+        if (!*n) continue;
+        bool numeric = true;
+        for (LPCSTR c = n; *c; ++c) if (*c < '0' || *c > '9') { numeric = false; break; }
+        if (!numeric) continue;
+        if (!last_time || it->time_write > last_time)
+        {
+            last_time = it->time_write;
+            last = u32(atoi(n));
+        }
+    }
+    const u32 next = (last >= count) ? 1 : last + 1;
+    xr_sprintf(rotated, "%s%u", prefix, next);
+    return true;
+}
+
 void game_sv_Coop::save_game(NET_Packet& net_packet, ClientID sender)
 {
     if (!ai().get_alife()) return;
@@ -1120,6 +1159,14 @@ void game_sv_Coop::save_game(NET_Packet& net_packet, ClientID sender)
     {
         Msg("! [COOP_SERVER] SAVE_REJECT by=%u name=%s", sender.value(), name.c_str() ? name.c_str() : "");
         return;
+    }
+    {
+        string_path rotated;
+        if (coop_rotate_quicksave(name.c_str(), m_quicksave_count, rotated))
+        {
+            Msg("[COOP_SERVER] QUICKSAVE %s -> %s", name.c_str(), rotated);
+            name = rotated;
+        }
     }
     const u32 online = coop_save_online_objects();
     // A parked body's state is kept here (offline entities lose theirs on every switch attempt)
@@ -1157,6 +1204,27 @@ void game_sv_Coop::save_game(NET_Packet& net_packet, ClientID sender)
     }
     Msg("[COOP_SERVER] SAVED name=%s by=%u online=%u parked=%u store=%u", name.c_str(), sender.value(), online, u32(m_parked.size()), u32(m_store.size()));
     SendLua(u16(-1), (xr_string("saved|") + name.c_str()).c_str());
+}
+
+// The console window closing (the host stops the server): the world as it is, into coop_autosave,
+// synchronously - the periodic autosave asks through a message (the save console command) that the
+// quit would overtake - and the players told to leave (server_stop: their clients disconnect to the
+// main menu before the teardown destroys their bodies under a running level; the console waits).
+void game_sv_Coop::SaveOnStop()
+{
+    game_sv_Coop* game = coop_server_game();
+    if (!game || !ai().get_alife() || game->m_changing_level) return; // a level change saves by itself
+    if (!game->m_parked.empty() || game->server().GetClientsCount() > 1) // somebody played: something to keep
+    {
+        NET_Packet P;
+        P.w_begin(M_SAVE_GAME);
+        P.w_stringZ("coop_autosave");
+        P.w_u8(1);
+        P.r_seek(sizeof(u16));
+        Msg("[COOP_SERVER] AUTOSAVE on stop");
+        game->save_game(P, game->server().GetServerClient() ? game->server().GetServerClient()->ID : ClientID());
+    }
+    game->SendLua(u16(-1), "server_stop");
 }
 
 bool game_sv_Coop::IsLoadedSave()

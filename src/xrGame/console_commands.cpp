@@ -13,6 +13,7 @@
 #include "game_cl_base.h"
 #include "game_cl_single.h"
 #include "game_sv_single.h"
+#include "game_sv_coop.h" // coop: coop_save_on_stop
 #include "hit.h"
 #include "PHDestroyable.h"
 #include "actor.h"
@@ -1001,6 +1002,18 @@ void get_files_list(xr_vector<shared_str>& files, LPCSTR dir, LPCSTR file_ext, b
 }
 
 #include "UIGameCustom.h"
+
+// Coop server: the world into coop_autosave, synchronously (the console window's close, Text_Console).
+class CCC_CoopSaveOnStop : public IConsole_Command
+{
+public:
+	CCC_CoopSaveOnStop(LPCSTR N) : IConsole_Command(N) { bEmptyArgsHandled = true; };
+	virtual void Execute(LPCSTR args)
+	{
+		if (!IsGameTypeCoop() || !OnServer()) return;
+		game_sv_Coop::SaveOnStop();
+	}
+};
 
 class CCC_ALifeSave : public IConsole_Command
 {
@@ -2523,6 +2536,7 @@ void CCC_RegisterCommands()
 #endif // DEBUG
 
 	CMD1(CCC_ALifeSave, "save"); // save game
+	CMD1(CCC_CoopSaveOnStop, "coop_save_on_stop"); // coop server: the console window's close saves the world before the quit
 	CMD1(CCC_ALifeLoadFrom, "load"); // load game from ...
 	CMD1(CCC_LoadLastSave, "load_last_save"); // load last saved game from ...
 

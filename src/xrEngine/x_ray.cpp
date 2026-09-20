@@ -666,6 +666,29 @@ void Startup()
             load_arg[n] = 0;
             if (n) load = load_arg;
         }
+        // "latest": the newest save of this server by the file time - its own, the autosave, a level
+        // change's, a player's F6 - so the host's start needs no look at the list; "new": a new world
+        // whatever the ltx says (Start-Server.bat new).
+        if (load && !_stricmp(load, "new")) load = "";
+        if (load && !_stricmp(load, "latest"))
+        {
+            FS_FileSet files;
+            FS.file_list(files, "$game_saves$", FS_ListFiles | FS_RootOnly | FS_ClampExt, "*.scop");
+            const FS_File* newest = NULL;
+            for (FS_FileSetIt it = files.begin(); it != files.end(); ++it)
+                if (!newest || it->time_write > newest->time_write) newest = &*it;
+            if (newest)
+            {
+                xr_strcpy(load_arg, newest->name.c_str());
+                load = load_arg;
+                Msg("[COOP_SERVER] START latest save: %s", load);
+            }
+            else
+            {
+                load = "";
+                Msg("! [COOP_SERVER] START 'latest': no saves (new game)");
+            }
+        }
         string_path save_file;
         if (load && xr_strlen(load))
         {

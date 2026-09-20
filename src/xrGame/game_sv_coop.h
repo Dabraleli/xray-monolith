@@ -199,6 +199,9 @@ public:
     static bool IsLoadedSave();
     u32 m_autosave_ms; // [server] autosave_minutes, 0 = off
     u32 m_last_autosave;
+    u32 m_quicksave_count; // [server] quicksave_count: a player's F6 rotates quicksave_1..N here (default 5)
+    // The console window closing: the world into coop_autosave, synchronously (console coop_save_on_stop).
+    static void SaveOnStop();
     // Level change: one world, everyone travels together. A changer on the server invites the
     // touching body's client (GE_COOP_LEVEL_INVITE -> the SP dialog) or, silent, requests the
     // change itself; the dialog's OK is the SP M_CHANGE_LEVEL. change_level moves every body
