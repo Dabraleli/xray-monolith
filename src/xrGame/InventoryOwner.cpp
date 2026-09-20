@@ -452,6 +452,17 @@ void CInventoryOwner::SetCommunity(CHARACTER_COMMUNITY_INDEX new_community)
 	CEntityAlive* EA = smart_cast<CEntityAlive*>(this);
 	VERIFY(EA);
 
+	// Coop client: no simulator here (ai().alife() is the server's) and the team is the server's
+	// (CEntity::import_network_team brings it with the update); the community set here is the
+	// presentation - GAMMA's disguise runs its actor side on the client (the community it shows,
+	// the attitudes it reads). The old path dereferenced the missing simulator and re-registered
+	// the body in the seniority hierarchy: a crash, or a dropped binder.
+	if (IsGameTypeCoop() && !OnServer())
+	{
+		CharacterInfo().SetCommunity(new_community);
+		return;
+	}
+
 	CSE_Abstract* e_entity = ai().alife().objects().object(EA->ID(), false);
 	if (!e_entity) return;
 

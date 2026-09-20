@@ -1110,6 +1110,11 @@ void CScriptGameObject::SetCharacterCommunity(LPCSTR comm, int squad, int group)
 		return;
 	}
 	pInventoryOwner->SetCommunity(community.index());
+	// Coop client: the community set here is the presentation (GAMMA's disguise runs its actor side
+	// on the client: the HUD's attitudes); the team is the server's and comes with the update
+	// (CEntity::import_network_team) once the server's copy changes (coop_server_actor, disguise|).
+	// The local re-registration in the seniority hierarchy threw and dropped the actor's binder.
+	if (IsGameTypeCoop() && !OnServer()) return;
 	entity->ChangeTeam(community.team(), squad, group);
 }
 

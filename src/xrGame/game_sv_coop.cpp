@@ -2491,6 +2491,14 @@ CSE_ALifeCreatureActor* game_sv_Coop::SpawnBody(xrClientData* client, bool with_
         if (index != NO_COMMUNITY_INDEX) body->m_community_index = index;
         else Msg("! [COOP_SERVER] BODY_PROFILE unknown community %s", community_id);
     }
+    else
+    {
+        // No join profile (a test client): the actor section's own profile makes the body a plain
+        // "stalker", where the SP actor is "actor_<faction>" and the scripts cut that prefix (GAMMA's
+        // disguise took "r" for the true faction). A loner, on the spawn packet.
+        if (strncmp(body->CommunityName(), "actor_", 6)) // "unknown" without one
+            body->m_community_index = CHARACTER_COMMUNITY::IdToIndex(shared_str("actor_stalker"), NO_COMMUNITY_INDEX, true);
+    }
     // The body is the player's: its character name is the connection name (shown in game and the
     // key a saved world is matched back to the player by, see Create), its object name readable.
     {
