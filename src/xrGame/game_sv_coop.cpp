@@ -404,6 +404,20 @@ bool game_sv_Coop::ParkBody(xrClientData* client, CSE_ALifeCreatureActor* body)
     return true;
 }
 
+// table[key] = nil through the raw API: luabind's `table[key] = luabind::object()` pushes the
+// default-constructed object, which has no Lua state (getref(NULL): the host's crash on a
+// console `load` while a body scope was open, 19.09).
+static void lua_table_set_nil(luabind::object& table, LPCSTR key)
+{
+    lua_State* L = table.lua_state();
+    if (!L || !table.is_valid()) return;
+    table.pushvalue();
+    lua_pushstring(L, key);
+    lua_pushnil(L);
+    lua_settable(L, -3);
+    lua_pop(L, 1);
+}
+
 // ---------------------------------------------------------------------------------------------
 // NPC dialogs for player bodies. Mirrors CUITalkWnd (InitOthersStartDialog / UpdateQuestions /
 // AskQuestion / SayPhrase) on the server with the body as "our" side and streams the result.
@@ -456,7 +470,7 @@ CoopLuaActor::~CoopLuaActor()
         // The saved actor may have been destroyed inside the scope (a level change or a shutdown tearing
         // the objects down from within a body's Lua): its wrapper is gone with it, so nil is restored.
         const bool saved_alive = saved_id == u16(-1) || (Level().Objects.net_Find(saved_id) && !Level().Objects.net_Find(saved_id)->getDestroy());
-        if (saved_alive) db["actor"] = saved; else db["actor"] = luabind::object();
+        if (saved_alive) db["actor"] = saved; else lua_table_set_nil(db, "actor");
         globals["AC_ID"] = saved_ac_id;
     }
     game_sv_Coop::s_context_body = saved_context && saved_context->getDestroy() ? NULL : saved_context;
@@ -480,7 +494,7 @@ void game_sv_Coop::OnLuaObjectGone(CGameObject* object)
     CScriptGameObject* current = luabind::object_cast<CScriptGameObject*>(actor);
     if (current && current == object->lua_game_object())
     {
-        table["actor"] = luabind::object();
+        lua_table_set_nil(table, "actor");
         Msg("[COOP_SERVER] LUA_ACTOR_GONE id=%u", object->ID());
     }
 }
