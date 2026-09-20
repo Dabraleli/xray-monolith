@@ -19,6 +19,7 @@
 #include "breakableobject.h"
 #include "GamePersistent.h"
 #include "../../script_game_object.h"
+#include "game_sv_coop.h" // coop: the body as the player around the activation callback
 
 #define WIND_RADIUS (4*Radius())	//расстояние до актера, когда появляется ветер 
 #define FASTMODE_DISTANCE (100.f)	//distance to camera from sphere, when zone switches to fast update sequence
@@ -678,7 +679,15 @@ void CCustomZone::shedule_Update(u32 dt)
 			{
 				::luabind::functor<bool> funct;
 				if (ai().script_engine().functor("_G.CCustomZone_BeforeActivateCallback", funct))
+				{
+					// Coop server: the listeners tell the player (id == AC_ID) from an NPC, which they keep
+					// out of the zone's reach until it is well inside (GAMMA aaaa_script_fixes_mp, the
+					// pathfinding rule: radius - 1.1 m). A player body is the player while they run, as
+					// around its hits and kills (CoopLuaActor); as an NPC it was ignored - and a
+					// CMosquitoBald (acid, electric, thermal) never hit it - until 1 m from the centre.
+					CoopLuaActor coop_actor(game_sv_Coop::BodyOf(pObject), false);
 					info.zone_ignore = !funct(this->lua_game_object(), pObject->lua_game_object());
+				}
 			}
 
 			//если есть хотя бы один не дисабленый объект, то
