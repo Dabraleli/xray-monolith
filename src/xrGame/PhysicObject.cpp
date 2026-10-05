@@ -27,7 +27,11 @@ CPhysicObject::CPhysicObject(void):
 	bones_snd_player(0),
 	m_net_updateData(0),
 	m_just_after_spawn(false),
-	m_activated(false)
+	m_activated(false),
+	m_coop_time_from(0),
+	m_coop_time_to(0),
+	m_coop_interval(0),
+	m_coop_arrival(0)
 {
 #ifdef CPHYSICOBJECT_CHANGE
 	m_physic_contact_callback = NULL;
@@ -398,6 +402,7 @@ void CPhysicObject::UpdateCL()
 	{
 		Interpolate();
 	}
+	coop_elements_follow(); // the door leaf between two server updates (coop client)
 
 	m_anim_script_callback.update(*this);
 	PHObjectPositionUpdate();
@@ -765,10 +770,12 @@ void CPhysicObject::net_Import(NET_Packet& P)
 
 	if (IsGameTypeCoop() && !P.r_eof())
 	{
-		// Coop: the other shell elements, applied directly (a door leaf follows the server at the
-		// update rate; element 0 keeps the interpolated path below).
+		// Coop: the other shell elements (a door leaf on its hinge). Element 0 keeps the engine's
+		// interpolated path below; these are driven to the arrived state over the arrival interval
+		// (coop_elements_follow), where before they were snapped and the door moved in steps.
 		const u8 extra = P.r_u8();
 		const bool apply = !Local() && m_pPhysicsShell;
+		if (extra && apply) coop_elements_arrival();
 		for (u8 i = 0; i < extra; ++i)
 		{
 			SPHNetState S;
@@ -778,25 +785,16 @@ void CPhysicObject::net_Import(NET_Packet& P)
 			P.r_float(S.quaternion.z);
 			P.r_float(S.quaternion.w);
 			S.enabled = P.r_u8() != 0;
-			CPHSynchronize* sync = apply && u16(i + 1) < PHGetSyncItemsNumber() ? PHGetSyncItem(u16(i + 1)) : NULL;
-			if (!sync) continue;
-			S.previous_position = S.position;
-			S.previous_quaternion = S.quaternion;
-			S.linear_vel.set(0.f, 0.f, 0.f);
-			S.angular_vel.set(0.f, 0.f, 0.f);
-			S.force.set(0.f, 0.f, 0.f);
-			S.torque.set(0.f, 0.f, 0.f);
-			sync->set_State(S);
-			if (i == 0 && S.enabled && strstr(Core.Params, "-coop_damage_probe"))
+			if (!apply || u16(i + 1) >= PHGetSyncItemsNumber()) continue;
+			if (i == 0 && strstr(Core.Params, "-coop_door_probe"))
 			{
-				static xr_map<u16, u32> reports;
-				u32& last = reports[ID()];
-				if (Device.dwTimeGlobal - last >= 1000)
-				{
-					last = Device.dwTimeGlobal;
-					Msg("[COOP_PHYS] side=client id=%u name=%s extra=%u e1=%f,%f,%f", ID(), cName().c_str(), extra, S.position.x, S.position.y, S.position.z);
-				}
+				const SCoopElement* known = m_coop_elements.size() ? &m_coop_elements[0] : NULL;
+				const float step = known && known->valid ? known->cur_pos.distance_to(S.position) : -1.f;
+				if (step > .002f || step < 0.f) // the ones that moved; a standing door writes nothing
+					Msg("[COOP_DOOR] side=client id=%u name=%s pace=%u drive=%u step=%f enabled=%u", ID(), cName().c_str(),
+					    m_coop_interval, m_coop_time_to - m_coop_time_from, step, S.enabled ? 1 : 0);
 			}
+			coop_element_arrived(i, S);
 		}
 	}
 
@@ -939,6 +937,98 @@ void CPhysicObject::CalculateInterpolationParams()
 	if (this->m_pPhysicsShell)
 		this->m_pPhysicsShell->NetInterpolationModeON();
 };
+
+// A new update of this object's extra elements: the interval the drive spends on it is the time
+// since the previous arrival, smoothed (the server sends with its own frame jitter) and bounded.
+void CPhysicObject::coop_elements_arrival()
+{
+	const u32 now = Device.dwTimeGlobal;
+	if (m_coop_arrival && now > m_coop_arrival)
+	{
+		// The pace quickens (a door starts moving: from one update in seconds to one in ~50 ms) -
+		// follow it at once, or the drive would lag a standing-still pace behind; it slows - ease out.
+		const u32 arrived = now - m_coop_arrival;
+		if (!m_coop_interval || arrived * 2 < m_coop_interval) m_coop_interval = arrived; // a door starts moving: the pace jumps from seconds to ~50 ms
+		else m_coop_interval = (m_coop_interval * 3 + arrived) / 4; // otherwise a steady average: the arrivals themselves jitter by a third
+		clamp(m_coop_interval, u32(30), u32(200));
+	}
+	m_coop_arrival = now;
+	m_coop_time_from = now;
+	// A fifth over the measured pace: the leaf keeps moving to the next update instead of arriving
+	// early and standing still until it comes (the stutter such a wait makes is what is being fixed).
+	m_coop_time_to = now + (m_coop_interval ? m_coop_interval + m_coop_interval / 5 : 120);
+}
+
+void CPhysicObject::coop_element_arrived(u8 index, const SPHNetState& state)
+{
+	if (m_coop_elements.size() <= u32(index)) m_coop_elements.resize(u32(index) + 1);
+	SCoopElement& element = m_coop_elements[index];
+	if (!element.valid)
+	{
+		element.cur_pos = state.position;
+		element.cur_q = state.quaternion;
+		element.valid = true;
+	}
+	element.from_pos = element.cur_pos;
+	element.from_q = element.cur_q;
+	element.to_pos = state.position;
+	element.to_q = state.quaternion;
+	element.enabled = state.enabled;
+	element.settled = false;
+}
+
+void CPhysicObject::coop_elements_follow()
+{
+	if (!IsGameTypeCoop() || m_coop_elements.empty() || !m_coop_time_to || !m_pPhysicsShell || Local()) return;
+	// A chase rather than a segment between two arrivals: the leaf moves toward the last state the
+	// server sent, closing a fixed share of the remaining gap each second. Its speed is continuous -
+	// no corner where one segment ends and the next begins, and the jitter of the arrivals (the
+	// server's own frame time plus the network) no longer shows as a twitch. The time constant
+	// follows the measured pace, so a fast door is chased fast and a slow one gently.
+	// Over the pace, not under it: a time constant shorter than the gap between arrivals reproduces
+	// their steps instead of smoothing them (20.09 evening: 0.6 of the pace still twitched). The leaf
+	// then trails the server by about tau - a few centimetres on a swinging door, which is not seen.
+	const float pace = float(m_coop_interval ? m_coop_interval : 100) / 1000.f;
+	float tau = pace * 1.3f;
+	clamp(tau, .05f, .2f);
+	const float delta = _max(Device.fTimeDelta, .001f);
+	const float factor = 1.f - exp(-delta / tau);
+	for (u32 i = 0; i < m_coop_elements.size(); ++i)
+	{
+		SCoopElement& element = m_coop_elements[i];
+		if (!element.valid || element.settled) continue;
+		if (u16(i + 1) >= PHGetSyncItemsNumber()) continue;
+		CPHSynchronize* sync = PHGetSyncItem(u16(i + 1));
+		if (!sync) continue;
+		const float left = element.cur_pos.distance_to(element.to_pos);
+		const float turn = 1.f - _abs(element.cur_q.x * element.to_q.x + element.cur_q.y * element.to_q.y +
+		                              element.cur_q.z * element.to_q.z + element.cur_q.w * element.to_q.w);
+		if (left < .0005f && turn < .000005f)
+		{
+			// close enough to be the arrived state: show it exactly and stop writing until the next one
+			element.cur_pos = element.to_pos;
+			element.cur_q = element.to_q;
+			element.settled = true;
+		}
+		else
+		{
+			element.cur_pos.lerp(element.cur_pos, element.to_pos, factor);
+			element.cur_q.slerp(element.cur_q, element.to_q, factor);
+		}
+		SPHNetState S;
+		sync->get_State(S);
+		S.position = element.cur_pos;
+		S.previous_position = element.cur_pos;
+		S.quaternion = element.cur_q;
+		S.previous_quaternion = element.cur_q;
+		S.linear_vel.set(0.f, 0.f, 0.f);
+		S.angular_vel.set(0.f, 0.f, 0.f);
+		S.force.set(0.f, 0.f, 0.f);
+		S.torque.set(0.f, 0.f, 0.f);
+		S.enabled = element.enabled;
+		sync->set_State(S);
+	}
+}
 
 void CPhysicObject::Interpolate()
 {

@@ -10,6 +10,7 @@
 #include "monster_velocity_space.h"
 #include "monster_event_manager.h"
 #include "control_jump.h"
+#include "../../game_sv_coop.h" // coop: a player body's position lags its client
 #include "../../sound_player.h"
 
 // DEBUG purpose only
@@ -634,11 +635,19 @@ void CControlAnimationBase::check_hit(MotionID motion, float time_perc)
 
 	m_object->sound().play(MonsterSound::eMonsterSoundAttackHit);
 
+	// Coop server: a player body stands where its client last said (an update interval and the
+	// latency behind, half a metre to a metre at a run), and the player sees the monster the same
+	// lag late - a boar's charge that plainly rammed the player on the screen missed by the angle
+	// here (20.09). The check on a body takes a margin: the distance and the field of hit widened.
+	const bool body_target = IsGameTypeCoop() && OnServer() && game_sv_Coop::BodyOf(enemy) != NULL;
+	const float dist_margin = body_target ? .75f : 0.f;
+	const float foh_margin = body_target ? .4f : 0.f;
+
 	bool should_hit = true;
 	// определить дистанцию до врага
 	Fvector d;
 	d.sub(enemy->Position(), m_object->Position());
-	if (d.magnitude() > params.dist)
+	if (d.magnitude() > params.dist + dist_margin)
 		should_hit = false;
 
 	// проверка на  Field-Of-Hit
@@ -648,20 +657,20 @@ void CControlAnimationBase::check_hit(MotionID motion, float time_perc)
 	m_object->Direction().getHP(my_h, my_p);
 	d.getHP(h, p);
 
-	float from = angle_normalize(my_h + params.foh.from_yaw);
-	float to = angle_normalize(my_h + params.foh.to_yaw);
+	float from = angle_normalize(my_h + params.foh.from_yaw - foh_margin);
+	float to = angle_normalize(my_h + params.foh.to_yaw + foh_margin);
 
 	if (!is_angle_between(h, from, to))
 		should_hit = false;
 
-	from = angle_normalize(my_p + params.foh.from_pitch);
-	to = angle_normalize(my_p + params.foh.to_pitch);
+	from = angle_normalize(my_p + params.foh.from_pitch - foh_margin);
+	to = angle_normalize(my_p + params.foh.to_pitch + foh_margin);
 
 	if (!is_angle_between(p, from, to))
 		should_hit = false;
 
     if (strstr(Core.Params,"-coop_damage_probe"))
-        Msg("[COOP_MELEE] attacker=%u target=%u distance=%f limit=%f hit=%u power=%f",m_object->ID(),enemy->ID(),d.magnitude(),params.dist,should_hit,params.hit_power);
+        Msg("[COOP_MELEE] attacker=%u target=%u distance=%f limit=%f hit=%u power=%f body=%d",m_object->ID(),enemy->ID(),d.magnitude(),params.dist + dist_margin,should_hit,params.hit_power,body_target ? 1 : 0);
 	if (should_hit)
 		m_object->HitEntity(enemy, params.hit_power, params.impulse, params.impulse_dir);
 

@@ -1,0 +1,218 @@
+-- The server owns save files. Clients receive only names/dates and request a world reload.
+local streams = {}
+local pending_load = nil
+local load_until = 0
+
+local function safe_name(name)
+    return type(name)=='string' and #name>0 and #name<=180
+        and not name:find('[%c/\\|:"<>*?;]') and not name:find('..',1,true)
+end
+
+local function catalog()
+    local list = getFS():file_list_open_ex('$game_saves$', bit_or(FS.FS_ListFiles,FS.FS_RootOnly), '*.scop')
+    local result = {}
+    if not list then return result end
+    list:Sort(FS.FS_sort_by_modif_down)
+    for i=0,list:Size()-1 do
+        local file = list:GetAt(i)
+        local name = file:NameFull():sub(1,-6)
+        if safe_name(name) and valid_saved_game(name) then
+            result[#result+1] = {name=name, date=file:ModifDigitOnly()}
+        end
+    end
+    return result
+end
+
+local function reply(id, text)
+    level.coop_send_lua(id, 'server_saves|' .. text)
+end
+
+function server_request(body, parts)
+    local id = body:id()
+    local op = parts[2]
+    if op=='list' then
+        local token=parts[3] or ''
+        if not token:match('^%d+$') or #token>12 then return end
+        streams[id]={token=token, rows=catalog(), next=1}
+        reply(id,'begin|'..token)
+        return
+    end
+    if op~='load' and op~='quick' and op~='latest' then return end
+    if pending_load or time_global()<load_until then
+        reply(id,'error|Сервер уже загружает сохранение.')
+        return
+    end
+    local selected=nil
+    for _,entry in ipairs(catalog()) do
+        if (op=='load' and entry.name==parts[3])
+            or op=='latest'
+            or (op=='quick' and entry.name:lower():match(' %- quicksave_%d+$')) then
+            selected=entry.name
+            break
+        end
+    end
+    if not selected then
+        reply(id,'error|'..(op=='quick' and 'На сервере нет быстрых сохранений.' or 'Сохранение отсутствует или повреждено.'))
+        return
+    end
+    pending_load={id=id, name=selected, at=time_global()+250}
+    reply(id,'loading|'..selected)
+    printf('[COOP_SAVES] REQUEST body=%s mode=%s name=%s',id,op,selected)
+end
+
+function server_update(now)
+    for id,stream in pairs(streams) do
+        if not level.object_by_id(id) then streams[id]=nil
+        else
+            for i=1,12 do
+                local entry=stream.rows[stream.next]
+                if not entry then
+                    reply(id,'end|'..stream.token)
+                    printf('[COOP_SAVES] LIST body=%s count=%s',id,#stream.rows)
+                    streams[id]=nil
+                    break
+                end
+                reply(id,'item|'..stream.token..'|'..entry.name..'|'..entry.date)
+                stream.next=stream.next+1
+            end
+        end
+    end
+    if pending_load and now>=pending_load.at then
+        local request=pending_load
+        pending_load=nil
+        if not level.object_by_id(request.id) then return end
+        -- Recheck after queuing: the file may have disappeared. Only a catalog name can reach here.
+        if not valid_saved_game(request.name) then reply(request.id,'error|Сохранение больше недоступно.') return end
+        load_until=now+10000
+        printf('[COOP_SAVES] LOAD name=%s',request.name)
+        -- Outside the caller's body scope; the normal console validates and enqueues M_LOAD_GAME.
+        get_console():execute('load '..request.name)
+    end
+end
+
+local installed=false
+local active=nil
+local sequence=0
+local rows={}
+local receiving=false
+local loading_until=0
+
+local function connected()
+    return level.present() and db.actor~=nil
+end
+
+local function message(text)
+    actor_menu.set_msg(1,text,8)
+    printf('[COOP_SAVES] %s',text)
+end
+
+function request_load(mode,name)
+    if not connected() then return false end
+    if time_global()<loading_until then return true end
+    loading_until=time_global()+3000
+    get_console():execute('main_menu off')
+    if device():is_paused() then device():pause(false) end
+    level.coop_send_lua(0,'server_saves|'..mode..(name and ('|'..name) or ''))
+    return true
+end
+
+function client_reset()
+    active=nil
+    sequence=sequence+1
+    rows={}
+    receiving=false
+    loading_until=0
+end
+
+function client_message(parts)
+    local op=parts[2]
+    if op=='error' then loading_until=0; message(parts[3] or '') return end
+    if op=='loading' then message('Сервер загружает: '..(parts[3] or '')) return end
+    if not active or parts[3]~=tostring(sequence) then return end
+    if op=='begin' then rows={};receiving=true
+    elseif op=='item' and receiving and safe_name(parts[4]) then
+        rows[#rows+1]={name=parts[4],date=parts[5] or ''}
+    elseif op=='end' and receiving then
+        receiving=false
+        active.list_box:RemoveAll()
+        for _,entry in ipairs(rows) do active:AddItemToList(entry.name,'['..entry.date..']') end
+        active.file_caption:SetText('Сохранения сервера')
+        active.file_data:SetText(#rows==0 and 'На сервере нет доступных сохранений.' or 'Выберите сохранение. Загрузка откатит общий мир для всех игроков.')
+        printf('[COOP_SAVES] CLIENT_LIST count=%s',#rows)
+    end
+end
+
+function install_client()
+    if installed then return end
+    installed=true
+    local quick=level_input.action_quick_load
+    level_input.action_quick_load=function(dik,bind)
+        if connected() then
+            local flags={ret=false}
+            SendScriptCallback('on_before_load_input',dik,bind,flags)
+            if not flags.ret then request_load('quick') end
+            return true
+        end
+        return quick(dik,bind)
+    end
+    local last=ui_main_menu.main_menu.LoadLastSave
+    ui_main_menu.main_menu.LoadLastSave=function(self,...)
+        if connected() then return request_load('latest') end
+        return last(self,...)
+    end
+    local cls=ui_load_dialog.UILoadDialog
+    local fill=cls.FillList
+    cls.FillList=function(self,...)
+        self.coop_server_list=connected()
+        if not self.coop_server_list then return fill(self,...) end
+        active=self;sequence=sequence+1;rows={};receiving=false
+        self.list_box:RemoveAll()
+        self.file_caption:SetText('Сохранения сервера')
+        self.file_data:SetText('Получение списка с сервера...')
+        self.picture:InitTexture('ui\\ui_noise')
+        level.coop_send_lua(0,'server_saves|list|'..sequence)
+    end
+    local click=cls.OnListItemClicked
+    cls.OnListItemClicked=function(self,...)
+        if not self.coop_server_list then return click(self,...) end
+        local item=self.list_box:GetSelectedItem()
+        if not item then return end
+        self.file_caption:SetText(item.fn:GetText())
+        self.file_data:SetText('Сохранение на сервере. Загрузка откатит общий мир для всех игроков.')
+    end
+    local load=cls.load_game_internal
+    cls.load_game_internal=function(self,...)
+        if not self.coop_server_list then return load(self,...) end
+        local item=self.list_box:GetSelectedItem()
+        if not item then return end
+        local name=item.fn:GetText()
+        active=nil
+        self:HideDialog()
+        request_load('load',name)
+    end
+    local button=cls.OnButton_load_clicked
+    cls.OnButton_load_clicked=function(self,...)
+        if not self.coop_server_list then return button(self,...) end
+        if not self.list_box:GetSelectedItem() then return end
+        self.msgbox_id=2
+        self.message_box:InitMessageBox('message_box_confirm_load_save')
+        self.message_box:ShowDialog(true)
+    end
+    local yes=cls.OnMsgYes
+    cls.OnMsgYes=function(self,...)
+        if not self.coop_server_list then return yes(self,...) end
+        if self.msgbox_id==2 then self:load_game_internal() end
+        self.msgbox_id=0
+    end
+    local delete=cls.OnButton_del_clicked
+    cls.OnButton_del_clicked=function(self,...)
+        if not self.coop_server_list then return delete(self,...) end
+        self.file_data:SetText('Серверные сохранения можно удалить только на сервере.')
+    end
+    local back=cls.OnButton_back_clicked
+    cls.OnButton_back_clicked=function(self,...)
+        if active==self then active=nil end
+        return back(self,...)
+    end
+    printf('[COOP_SAVES] CLIENT_INSTALLED')
+end

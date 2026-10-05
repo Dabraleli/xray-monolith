@@ -19,6 +19,9 @@
 #include "alife_registry_container.h"
 #include "xrServer.h"
 #include "level.h"
+#include "InventoryOwner.h"
+#include "GameObject.h"
+#include "game_sv_coop.h"
 
 #include <luabind/iterator_policy.hpp>
 #include <luabind/iterator_pair_policy.hpp>
@@ -334,9 +337,20 @@ KNOWN_INFO_VECTOR* registry(const CALifeSimulator* self, const ALife::_OBJECT_ID
 	return (self->registry().get<CInfoPortionRegistry>().object(id, true));
 }
 
+// Coop server: has_alife_info is alife():has_info(0, ...) - the actor by id. Inside a player's scope
+// (CoopLuaActor: the dialog, the body's Lua) a coop_server.ltx [personal_infos] portion of the world
+// actor is that body's own (CInventoryOwner::coop_personal_info).
+static ALife::_OBJECT_ID coop_info_holder(const CALifeSimulator* self, ALife::_OBJECT_ID id, LPCSTR info_id)
+{
+	if (!IsGameTypeCoop() || !game_sv_Coop::s_context_body || !self->graph().actor() || id != self->graph().actor()->ID)
+		return id;
+	const CInventoryOwner* body = smart_cast<CInventoryOwner*>(game_sv_Coop::s_context_body);
+	return body && body->coop_personal(shared_str(info_id)) ? body->m_coop_personal_holder : id;
+}
+
 bool has_info(const CALifeSimulator* self, const ALife::_OBJECT_ID& id, LPCSTR info_id)
 {
-	const KNOWN_INFO_VECTOR* known_info = registry(self, id);
+	const KNOWN_INFO_VECTOR* known_info = registry(self, coop_info_holder(self, id, info_id));
 	if (!known_info)
 		return (false);
 
@@ -353,9 +367,29 @@ bool dont_has_info(const CALifeSimulator* self, const ALife::_OBJECT_ID& id, LPC
 	return (!has_info(self, id, info_id));
 }
 
+// ALife's direct personal writes must reach the controlling client too. For an online
+// body use the same local update + GE_INFO_TRANSFER path as give_info_portion; offline
+// bodies retain the registry path and receive their book when they reconnect.
+static bool coop_transfer_personal_info(ALife::_OBJECT_ID holder, LPCSTR info_id, bool add)
+{
+    if (!IsGameTypeCoop() || !OnServer() || !CInventoryOwner::coop_personal_info(shared_str(info_id))) return false;
+    CInventoryOwner* body = smart_cast<CInventoryOwner*>(Level().Objects.net_Find(holder));
+    if (!body || !body->coop_personal(shared_str(info_id))) return false;
+    body->TransferInfo(shared_str(info_id), add);
+    return true;
+}
+
 void AlifeGiveInfo(const CALifeSimulator *alife, const ALife::_OBJECT_ID &id, LPCSTR info_id)
 {
-	KNOWN_INFO_VECTOR *known_info = alife->registry().get<CInfoPortionRegistry>().object(id, true);
+	const ALife::_OBJECT_ID holder = coop_info_holder(alife, id, info_id);
+	if (coop_transfer_personal_info(holder, info_id, true)) return;
+	KNOWN_INFO_VECTOR *known_info = alife->registry().get<CInfoPortionRegistry>().object(holder, true);
+	if (!known_info && holder != id)
+	{
+		KNOWN_INFO_VECTOR fresh; // a body's first own portion
+		alife->registry().get<CInfoPortionRegistry>().add(holder, fresh, false);
+		known_info = alife->registry().get<CInfoPortionRegistry>().object(holder, true);
+	}
 	if (!known_info)
 		return;
 
@@ -369,10 +403,17 @@ void AlifeGiveInfo(const CALifeSimulator *alife, const ALife::_OBJECT_ID &id, LP
 
 void AlifeRemoveInfo(const CALifeSimulator *alife, const ALife::_OBJECT_ID &id, LPCSTR info_id)
 {
-	KNOWN_INFO_VECTOR	*known_info = alife->registry().get<CInfoPortionRegistry>().object(id, true);
-	if (!known_info)
-		return;
-	known_info->erase(std::find_if(known_info->begin(), known_info->end(), CFindByIDPred(info_id)),known_info->end());
+	const ALife::_OBJECT_ID holder = coop_info_holder(alife, id, info_id);
+	if (coop_transfer_personal_info(holder, info_id, false)) return;
+	KNOWN_INFO_VECTOR* known_info = alife->registry().get<CInfoPortionRegistry>().object(holder, true);
+	if (!known_info) return;
+	const KNOWN_INFO_VECTOR_IT found = std::find_if(known_info->begin(), known_info->end(), CFindByIDPred(info_id));
+	if (IsGameTypeCoop() && CInventoryOwner::coop_personal_info(shared_str(info_id)))
+	{
+		// Removing one offline personal flag must not erase the flags stored after it.
+		if (found != known_info->end()) known_info->erase(found);
+	}
+	else known_info->erase(found, known_info->end());
 }
 
 //Alundaio: teleport object

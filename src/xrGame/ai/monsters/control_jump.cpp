@@ -8,6 +8,7 @@
 #include "../../level.h"
 #include "control_animation_base.h"
 #include "control_direction_base.h"
+#include "../../game_sv_coop.h" // coop: a player body's position lags its client
 #include "control_movement_base.h"
 #include "control_path_builder_base.h"
 #include "monster_velocity_space.h"
@@ -532,11 +533,17 @@ void CControlJump::hit_test()
 
 	if (!m_object_hitted && m_data.target_object)
 	{
+		// Coop server: a player body lags its client (see CControlAnimationBase::check_hit) - the
+		// jump of a dog that landed on the player on the screen took a margin here too.
+		const bool body_target = IsGameTypeCoop() && OnServer() && game_sv_Coop::BodyOf(m_data.target_object) != NULL;
+		const float dist_margin = body_target ? .75f : 0.f;
+		const float foh = PI_DIV_6 + (body_target ? .4f : 0.f);
+
 		m_object_hitted = true;
 		// определить дистанцию до врага
 		Fvector d;
 		d.sub(m_data.target_object->Position(), m_object->Position());
-		if (d.magnitude() > m_hit_trace_range)
+		if (d.magnitude() > m_hit_trace_range + dist_margin)
 			m_object_hitted = false;
 
 		// проверка на  Field-Of-Hit
@@ -546,15 +553,17 @@ void CControlJump::hit_test()
 		m_object->Direction().getHP(my_h, my_p);
 		d.getHP(h, p);
 
-		float from = angle_normalize(my_h - PI_DIV_6);
-		float to = angle_normalize(my_h + PI_DIV_6);
+		float from = angle_normalize(my_h - foh);
+		float to = angle_normalize(my_h + foh);
 
 		if (!is_angle_between(h, from, to)) m_object_hitted = false;
 
-		from = angle_normalize(my_p - PI_DIV_6);
-		to = angle_normalize(my_p + PI_DIV_6);
+		from = angle_normalize(my_p - foh);
+		to = angle_normalize(my_p + foh);
 
 		if (!is_angle_between(p, from, to)) m_object_hitted = false;
+		if (strstr(Core.Params, "-coop_damage_probe"))
+			Msg("[COOP_JUMP] attacker=%u target=%u distance=%f limit=%f hit=%u body=%d", m_object->ID(), m_data.target_object->ID(), d.magnitude(), m_hit_trace_range + dist_margin, m_object_hitted ? 1 : 0, body_target ? 1 : 0);
 	}
 
 	if (m_object_hitted)

@@ -40,6 +40,7 @@ extern MagicBox3 MagicMinBox(int iQuantity, const Fvector* akPoint);
 #pragma warning(disable:4995)
 #include <malloc.h>
 #include "game_sv_coop.h" // coop: OnLuaObjectGone
+#include "Actor.h" // coop: the nearest body for shedule_Scale
 #pragma warning(pop)
 
 #ifdef DEBUG
@@ -1088,6 +1089,21 @@ void CGameObject::DestroyObject()
 		u_EventGen(P, GE_DESTROY, ID());
 		u_EventSend(P);
 	}
+}
+
+// The scheduler spaces an object's updates by its distance from the camera (CObject::shedule_Scale:
+// 30 ms next to it, up to a second and more 200 m away). The coop server's camera never leaves the
+// world actor's spawn: every NPC and monster beside a player thought at the far rate - a boar
+// beside a body decided once a second, its bites never came (20.09). Here the distance is to the
+// nearest player body.
+float CGameObject::shedule_Scale()
+{
+	if (IsGameTypeCoop() && OnServer())
+	{
+		CActor* body = game_sv_Coop::NearestBody(Position());
+		if (body) return body->Position().distance_to(Position()) / 200.f;
+	}
+	return inherited::shedule_Scale();
 }
 
 void CGameObject::shedule_Update(u32 dt)

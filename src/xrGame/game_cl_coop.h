@@ -20,6 +20,11 @@ class game_cl_Coop : public game_cl_Single
     // CActor::PickupModeUpdate_COD and the Lua probe of coop_client_actor do the rest).
     void PickupProbeUpdate(CActor* actor);
     CCoopStoreAssembler m_store_parts;
+    // The server's shared + personal book for this recipient. Keep it while the own body is
+    // spawning, and reapply on respawn. Live removals replace earlier snapshot entries.
+    xr_map<shared_str, bool> m_info_mirror;
+    u16 m_info_mirror_body = u16(-1);
+    void UpdateInfoMirror();
     // Replies to the client's ALife creations (created|<request>|<id>|<section>|<parent>|x,y,z from the
     // server's coop Lua): CreateWait pumps the network until the one it waits for arrives.
     struct SCreateReply { u16 id; shared_str section; u16 parent; Fvector position; };
@@ -46,6 +51,7 @@ public:
     void OnPdaMessage(NET_Packet& P);
     // A text from the server's coop Lua (M_COOP_LUA): handed to coop_client_actor.on_server_lua.
     void OnLuaMessage(NET_Packet& P);
+    void OnInfoPortion(const shared_str& info_id, bool add);
     // Trade with an NPC (M_COOP_TRADE): the server runs the deal, this side shows the actor menu
     // with the prices it sent (CTrade::GetItemPrice asks TradePrice on a coop client).
     xr_map<u16, u32> m_trade_prices;

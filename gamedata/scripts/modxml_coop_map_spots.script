@@ -1,0 +1,20 @@
+-- Coop: the other players on the minimap. The engine marks every actor with actor_location (the
+-- man on the level map) and actor_location_p (the heading arrow); neither has a mini_map part -
+-- in SP the player is the minimap's centre - so a teammate showed on the PDA map and not on the
+-- minimap. coop_player_location is a mini-map-only spot type the game's own map_spots(_16).xml
+-- gets here; a coop client adds it for the other players' bodies (CActor::net_Spawn) when the
+-- type exists. Gathered by dxml_core like every modxml_* script.
+local SPOT = [[<coop_player_location hint="disable_hint"><mini_map spot="coop_player_mini_spot"/></coop_player_location>]]
+local MINI = [[<coop_player_mini_spot x="0" y="0" width="14" height="14" stretch="1" alignment="c" location_level="-1"><texture>ui_icons_newPDA_man</texture></coop_player_mini_spot>]]
+local FILES = { ['ui\\map_spots.xml'] = true, ['ui\\map_spots_16.xml'] = true }
+
+function on_xml_read()
+    RegisterScriptCallback('on_xml_read', function(xml_file_name, xml_obj)
+        if not FILES[xml_file_name] then return end
+        if xml_obj:query('coop_player_location')[1] then return end
+        local root = xml_obj:query('map_spots')[1]
+        if not root then return end
+        xml_obj:insertFromXMLString(SPOT, root, 1)
+        xml_obj:insertFromXMLString(MINI, root, 2)
+    end)
+end

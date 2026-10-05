@@ -514,6 +514,7 @@ void CLevel::cl_Process_Event(u16 dest, u16 type, NET_Packet& P)
         P.r_stringZ(info_id);
         const bool add = !!P.r_u8();
         P.r_seek(position);
+        if (game_cl_Coop* coop = smart_cast<game_cl_Coop*>(game)) coop->OnInfoPortion(info_id, add);
         ::luabind::functor<void> functor;
         if (ai().script_engine().functor("coop_client_actor.on_world_info", functor))
             functor(info_id.c_str(), add);

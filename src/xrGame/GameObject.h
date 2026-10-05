@@ -125,6 +125,7 @@ public:
 	//	virtual float			renderable_Ambient	();
 
 	virtual void shedule_Update(u32 dt);
+	virtual float shedule_Scale(); // coop server: by the nearest player body, not the camera
 	virtual bool shedule_Needed();
 
 	virtual void renderable_Render();

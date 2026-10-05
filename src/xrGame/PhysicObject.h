@@ -131,6 +131,24 @@ protected:
 
 	void net_Export_PH_Params(NET_Packet& P, SPHNetState& State, mask_num_items& num_items);
 	void net_Import_PH_Params(NET_Packet& P, net_update_PItem& N, mask_num_items& num_items);
+
+	// Coop client: the shell elements past 0 (a door leaf on its hinge, a cabinet door) come as plain
+	// states at the server's update rate. Applied as they arrived, the leaf stood still between two
+	// updates and jumped on each - the door opened in steps (05.10). Each element is driven from the
+	// state the client last showed to the one that arrived, over the measured arrival interval.
+	struct SCoopElement
+	{
+		Fvector from_pos, to_pos, cur_pos;
+		Fquaternion from_q, to_q, cur_q;
+		bool enabled;
+		bool valid;
+		bool settled; // the drive reached the arrived state: nothing to write until the next one
+	};
+	xr_vector<SCoopElement> m_coop_elements;
+	u32 m_coop_time_from, m_coop_time_to, m_coop_interval, m_coop_arrival;
+	void coop_elements_arrival(); // a new update for this object: the drive's interval
+	void coop_element_arrived(u8 index, const SPHNetState& state);
+	void coop_elements_follow(); // every frame, from UpdateCL
 	net_updatePhData* NetSync();
 	net_updatePhData* m_net_updateData;
 	void CalculateInterpolationParams();

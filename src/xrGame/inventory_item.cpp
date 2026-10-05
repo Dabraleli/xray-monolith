@@ -28,6 +28,7 @@
 #include "../xrEngine/igame_persistent.h"
 #include "eatable_item.h"
 #include "Weapon.h"
+#include "WeaponAmmo.h" // coop: the ammo box count in the item state
 #include "inventory_upgrade_manager.h"
 
 
@@ -314,7 +315,10 @@ void CInventoryItem::OnEvent(NET_Packet& P, u16 type)
 			if (uses != 0xff)
 				if (CEatableItem* eatable = cast_eatable_item()) eatable->SetRemainingUses(uses);
 			if (ammo != 0xffff)
+			{
 				if (CWeapon* weapon = smart_cast<CWeapon*>(this)) weapon->SetAmmoElapsed(ammo);
+				else if (CWeaponAmmo* box = smart_cast<CWeaponAmmo*>(this)) box->m_boxCurr = ammo; // the server's count of the box
+			}
 			// The server's place of the item in this player's inventory. The spawn of a returning
 			// player's items carries no saved state to a client (CoopHideClientData), so the
 			// outfit, helmet, backpack and PDA landed in the ruck by their default (132); the

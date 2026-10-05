@@ -1630,6 +1630,14 @@ void CScriptGameObject::AmmoSetCount(u16 count)
 	if (!ammo)
 		return;
 
+	// A count past the box size is a negative one wrapped by the u16 (the Lua took more rounds than
+	// the box had - a count the other side of a coop link changed under it): an empty box, logged.
+	if (count > ammo->m_boxSize)
+	{
+		Msg("! [COOP] ammo_set_count %u > box size %u for %s: emptied", u32(count), u32(ammo->m_boxSize), *object().cName());
+		count = 0;
+	}
+	game_cl_Coop::ItemVerb("item|box|%u|%u", object().ID(), u32(count)); // coop client: the server's box too
 	ammo->m_boxCurr = count;
 }
 

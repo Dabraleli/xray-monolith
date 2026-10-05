@@ -3,4 +3,7 @@
 	<string id="ui_mm_coop">
 		<text>Network game</text>
 	</string>
+	<string id="st_coop_wait_server">
+		<text>The server is moving the world to the new level, please wait…</text>
+	</string>
 </string_table>

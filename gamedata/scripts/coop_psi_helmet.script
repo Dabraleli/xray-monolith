@@ -1,0 +1,199 @@
+-- Coop-only personal Sakharov order. Original modpack dialog functions still own prices,
+-- item creation and shared story effects. No modpack file is replaced.
+local ID = 'yan_stalker_sakharov_psi_helmet_upgrade'
+local PDA_ID = 'coop_personal_psi_helmet'
+local orders = {}
+local installed = false
+local operation = nil
+local sent = {}
+local next_update = 0
+
+local function owner(body)
+    return body and level.coop_body_player(body:id()) or ''
+end
+
+local function stamp()
+    local y,m,d,h,n,s,ms = game.get_game_time():get(0,0,0,0,0,0,0)
+    return {y,m,d,h,n,s,ms}
+end
+
+local function ready(order)
+    if not order or order.status ~= 'ordered' then return false end
+    local started = game.CTime()
+    started:set(unpack(order.started))
+    return game.get_game_time():diffSec(started) >= order.wait
+end
+
+local function status(order)
+    if not order then return 'none' end
+    if order.status == 'completed' then return 'completed' end
+    return ready(order) and 'ready' or 'waiting'
+end
+
+function save(data)
+    if installed then data.coop_psi_orders = orders end
+end
+
+function sync(body, force)
+    if not installed then return end
+    local name = owner(body)
+    if name == '' then return end
+    local value = status(orders[name])
+    local key = tostring(body:id()) .. ':' .. value
+    if force or sent[name] ~= key then
+        sent[name] = key
+        local target = get_story_object_id('yan_stalker_sakharov') or 65535
+        level.coop_send_lua(body:id(), 'psi_order|' .. value .. '|' .. tostring(target))
+        printf('[COOP_PSI] SYNC player=%s body=%s status=%s', name, body:id(), value)
+    end
+end
+
+local function begin_order(body)
+    local name = owner(body)
+    if name == '' then return end
+    local params = parse_list(task_manager.task_ini, ID, 'status_functor_params')
+    orders[name] = {status='ordered', started=stamp(), wait=math.max(0, tonumber(params[1]) or 0)}
+    body:give_info_portion(ID)
+    printf('[COOP_PSI] ORDER player=%s body=%s wait=%s', name, body:id(), orders[name].wait)
+end
+
+local function finish_order(body)
+    local name = owner(body)
+    if not orders[name] then return end
+    orders[name].status = 'completed'
+    body:disable_info_portion(ID)
+    local storage = db.storage[body:id()]
+    if storage and storage.pstor_ctime then storage.pstor_ctime[ID] = nil end
+    printf('[COOP_PSI] RECEIVED player=%s body=%s', name, body:id())
+    sync(body, true)
+end
+
+-- Called only in the engine's talking-body scope. Reject duplicate/stale actions before
+-- the original function can debit money or create another item.
+local function wrap_action(name, kind)
+    local original = dialogs_yantar[name]
+    dialogs_yantar[name] = function(...)
+        local body = db.actor
+        local player = owner(body)
+        if player == '' then return original(...) end
+        local order = orders[player]
+        if kind == 'receive' then
+            if not ready(order) or body:object('good_psy_helmet') then return end
+        else
+            if order and order.status ~= 'completed' then return end
+            if kind == 'upgrade' then
+                if not body:object('bad_psy_helmet') or not dialogs_yantar.actor_can_afford_bad_to_good_psi_helmet(...) then return end
+            else
+                if dialogs_yantar.actor_has_psi_helmet(...) then return end
+                if not body:has_info('yan_stalker_sakharov_offer_free_upgrade') and not dialogs_yantar.actor_can_afford_good_psi_helmet(...) then return end
+            end
+        end
+        local previous = operation
+        operation = player
+        local tm = task_manager.get_task_manager()
+        local legacy = tm.task_info[ID]
+        local create_item, created = _G.alife_create_item, nil
+        -- The original receive function optionally completes the shared task. Our order is
+        -- personal; preserve any old shared entry instead of completing another payer's task.
+        if kind == 'receive' then
+            tm.task_info[ID] = nil
+            _G.alife_create_item = function(section, recipient, ...)
+                local item = create_item(section, recipient, ...)
+                if section == 'good_psy_helmet' and recipient == body and item then created = item end
+                return item
+            end
+        end
+        local result = {pcall(original, ...)}
+        if kind == 'receive' then
+            _G.alife_create_item = create_item
+            tm.task_info[ID] = legacy
+        end
+        operation = previous
+        -- Commit a successful spawn even if a later news/story callback failed. Otherwise
+        -- retrying that callback could create a second helmet. A failed spawn keeps the order.
+        if kind == 'receive' and created then finish_order(body) end
+        if not result[1] then error(result[2]) end
+        sync(body, true)
+        return unpack(result, 2)
+    end
+end
+
+function install()
+    if installed then return end
+    local cfg = level.coop_server_ini()
+    if not cfg or not cfg:line_exist('personal_infos', ID) then return end
+    installed = true
+    local data = alife_storage_manager.get_state()
+    orders = data.coop_psi_orders or {}
+    data.coop_psi_orders = orders
+    local cls = task_manager.CRandomTask
+    local give_task = cls.give_task
+    cls.give_task = function(self, id, ...)
+        if id == ID and owner(db.actor) ~= '' then
+            local entry = orders[owner(db.actor)]
+            if not entry or entry.status == 'completed' then begin_order(db.actor) end
+            return
+        end
+        -- The second helmet must not restart an existing shared world objective.
+        if operation and (id == 'turn_off_brain_machine' or id == 'turn_off_brain_scorcher') then
+            if self.task_info[id] or db.actor:get_task(id, false) then return end
+        end
+        return give_task(self, id, ...)
+    end
+    -- An old shared task does not identify its payer. Keep it for explicit migration,
+    -- never silently erase it or assign its payment to every joining player.
+    local tm = task_manager.get_task_manager()
+    if tm.task_info[ID] then
+        printf('[COOP_PSI] LEGACY_SHARED_ORDER preserved; payer migration required')
+    end
+    wrap_action('take_money_good_psi_helmet', 'buy')
+    wrap_action('upgrade_player_bad_psi_helmet', 'upgrade')
+    wrap_action('give_player_good_psi_helmet', 'receive')
+    dialogs_yantar.actor_has_good_psi_helmet_task_completed = function()
+        return ready(orders[owner(db.actor)])
+    end
+    dialogs_yantar.actor_dont_has_good_psi_helmet_task_completed = function()
+        return not ready(orders[owner(db.actor)])
+    end
+    printf('[COOP_PSI] INSTALLED personal order, original dialog prices and items')
+end
+
+function update(now)
+    if not installed or now < next_update then return end
+    next_update = now + 1000
+    for _, body in pairs(db.actors or {}) do
+        if body:alive() then sync(body, false) end
+    end
+end
+
+-- Client: a PDA entry only for the recipient, no shared task-manager callback.
+local pending = nil
+function on_message(parts)
+    pending = {value=parts[2], target=tonumber(parts[3]) or 65535}
+end
+
+function client_update()
+    if not pending or not db.actor then return end
+    local value, target = pending.value, pending.target
+    pending = nil
+    local t = db.actor:get_task(PDA_ID, true)
+    if value == 'none' or value == 'completed' then
+        if t then db.actor:set_task_state(value == 'completed' and task.completed or task.fail, PDA_ID) end
+        return
+    end
+    if not t then
+        t = CGameTask()
+        t:set_id(PDA_ID)
+        t:set_type(task.additional)
+        t:set_title(game.translate_string(ID .. '_name'))
+        t:set_description(game.translate_string(ID .. '_text'))
+        t:set_icon_name('ui_inGame2_Peremennoe_psi_izluchenie')
+        t:set_priority(14)
+        if target ~= 65535 then
+            t:set_map_location('ui_secondary_task_blink')
+            t:set_map_object_id(target)
+        end
+        db.actor:give_task(t, 0, false, 0)
+    end
+    printf('[COOP_PSI] PDA status=%s body=%s', value, db.actor:id())
+end

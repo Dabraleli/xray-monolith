@@ -42,16 +42,83 @@ void CInventoryOwner::OnEvent(NET_Packet& P, u16 type)
 }
 
 
+// ---- Coop: personal portions ------------------------------------------------------------------
+// coop_server.ltx [personal_infos] (the server's own file): one portion id per line. Read at the first
+// question; an edited list applies from the next server start.
+bool CInventoryOwner::coop_personal_info(const shared_str& info_id)
+{
+	static xr_vector<shared_str> listed;
+	static bool loaded = false;
+	if (!loaded && IsGameTypeCoop() && OnServer())
+	{
+		loaded = true;
+		string_path config_path;
+		FS.update_path(config_path, "$app_data_root$", "coop_server.ltx");
+		if (FS.exist(config_path))
+		{
+			CInifile config(config_path);
+			if (config.section_exist("personal_infos"))
+			{
+				LPCSTR name, value;
+				for (u32 i = 0; config.r_line("personal_infos", i, &name, &value); ++i)
+					if (name && xr_strlen(name)) listed.push_back(shared_str(name));
+			}
+		}
+		xr_string text;
+		for (u32 i = 0; i < listed.size(); ++i)
+		{
+			text += i ? ", " : " ";
+			text += listed[i].c_str();
+		}
+		Msg("[COOP_SERVER] PERSONAL_INFOS count=%u%s", u32(listed.size()), text.c_str());
+	}
+	if (listed.empty() || !info_id.size()) return false;
+	return std::find(listed.begin(), listed.end(), info_id) != listed.end();
+}
+
+void CInventoryOwner::coop_personal_infos(u16 holder, xr_vector<shared_str>& out)
+{
+	out.clear();
+	if (holder == u16(-1) || !ai().get_alife()) return;
+	const KNOWN_INFO_VECTOR* known = ai().alife().registry((CInfoPortionRegistry*)NULL).object(holder, true);
+	if (!known) return;
+	for (u32 i = 0; i < known->size(); ++i)
+		if (coop_personal_info((*known)[i])) out.push_back((*known)[i]);
+}
+
+void CInventoryOwner::coop_copy_personal_infos(u16 from, u16 to)
+{
+	xr_vector<shared_str> infos;
+	coop_personal_infos(from, infos);
+	if (infos.empty() || to == u16(-1)) return;
+	CInfoPortionRegistry& registry = ai().alife().registry((CInfoPortionRegistry*)NULL);
+	KNOWN_INFO_VECTOR* known = registry.object(to, true);
+	if (!known)
+	{
+		KNOWN_INFO_VECTOR fresh;
+		registry.add(to, fresh, false);
+		known = registry.object(to, true);
+	}
+	if (!known) return;
+	for (u32 i = 0; i < infos.size(); ++i)
+		if (std::find_if(known->begin(), known->end(), CFindByIDPred(infos[i])) == known->end()) known->push_back(infos[i]);
+	Msg("[COOP_SERVER] PERSONAL_INFO_COPY from=%u to=%u infos=%u", from, to, u32(infos.size()));
+}
+
 bool CInventoryOwner::OnReceiveInfo(shared_str info_id) const
 {
 	VERIFY(info_id.size());
 	//добавить запись в реестр
-	KNOWN_INFO_VECTOR& known_info = m_known_info_registry->registry().objects();
+	// Coop server: a [personal_infos] portion goes to the body's own registry, not the shared book.
+	const bool personal = coop_personal(info_id);
+	KNOWN_INFO_VECTOR& known_info = personal ? m_known_info_registry->registry().objects(m_coop_personal_holder)
+	                                         : m_known_info_registry->registry().objects();
 	KNOWN_INFO_VECTOR_IT it = std::find_if(known_info.begin(), known_info.end(), CFindByIDPred(info_id));
 	if (known_info.end() == it)
 		known_info.push_back(/*INFO_DATA(*/info_id/*, Level().GetGameTime())*/);
 	else
 		return false;
+	if (personal) Msg("[COOP_SERVER] PERSONAL_INFO body=%u info=%s add=1", m_coop_personal_holder, info_id.c_str());
 
 #ifdef DEBUG
 	if(psAI_Flags.test(aiInfoPortion))
@@ -86,11 +153,14 @@ void CInventoryOwner::OnDisableInfo(shared_str info_id) const
 		Msg("[%s] Disabled Info [%s]", Name(), info_id.c_str());
 #endif
 
-	KNOWN_INFO_VECTOR& known_info = m_known_info_registry->registry().objects();
+	const bool personal = coop_personal(info_id);
+	KNOWN_INFO_VECTOR& known_info = personal ? m_known_info_registry->registry().objects(m_coop_personal_holder)
+	                                         : m_known_info_registry->registry().objects();
 
 	KNOWN_INFO_VECTOR_IT it = std::find_if(known_info.begin(), known_info.end(), CFindByIDPred(info_id));
 	if (known_info.end() == it) return;
 	known_info.erase(it);
+	if (personal) Msg("[COOP_SERVER] PERSONAL_INFO body=%u info=%s add=0", m_coop_personal_holder, info_id.c_str());
 }
 
 void CInventoryOwner::TransferInfo(shared_str info_id, bool add_info) const
@@ -120,7 +190,8 @@ void CInventoryOwner::TransferInfo(shared_str info_id, bool add_info) const
 bool CInventoryOwner::HasInfo(shared_str info_id) const
 {
 	VERIFY(info_id.size());
-	const KNOWN_INFO_VECTOR* known_info = m_known_info_registry->registry().objects_ptr();
+	const KNOWN_INFO_VECTOR* known_info = coop_personal(info_id) ? m_known_info_registry->registry().objects_ptr(m_coop_personal_holder)
+	                                                             : m_known_info_registry->registry().objects_ptr();
 	if (!known_info) return false;
 
 	if (std::find_if(known_info->begin(), known_info->end(), CFindByIDPred(info_id)) == known_info->end())

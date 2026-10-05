@@ -31,6 +31,7 @@
 #include "inventory_item.h"
 #include "eatable_item.h"
 #include "Weapon.h"
+#include "WeaponAmmo.h" // coop: the ammo box count in the item state
 #include "actorcondition.h"
 #include "character_community.h"
 #include "ai/stalker/ai_stalker.h"
@@ -1615,6 +1616,12 @@ void game_sv_Coop::UpdateItemStates()
             state.uses = eatable ? eatable->GetRemainingUses() : 0xff;
             CWeapon* weapon = smart_cast<CWeapon*>(item);
             state.ammo = weapon ? u16(weapon->GetAmmoElapsed()) : 0xffff;
+            // An ammo box's rounds too: the server's copy changes on its own (UnloadMagazine puts the
+            // rounds back into the boxes, ReloadMagazine takes them) and the client's by its Lua
+            // (Magazines Redux loads magazines from boxes: ammo_set_count, sent here as item|box);
+            // neither side saw the other's count - a box showed x65514, 786 kg (20.09).
+            if (!weapon)
+                if (CWeaponAmmo* box = smart_cast<CWeaponAmmo*>(item)) state.ammo = box->m_boxCurr;
             // The place too: a returning player's items spawn on the client without the saved
             // state (CoopHideClientData), so the outfit, helmet, backpack and PDA fell into the
             // ruck by their default_to_ruck (132); the client follows the server's placement.
@@ -1745,6 +1752,17 @@ void game_sv_Coop::SendWorldInfos(xrClientData* client)
     if (!world || !client || !client->owner) return;
     xr_vector<shared_str> infos;
     world->coop_known_infos(infos);
+    // A save made before a flag became personal may still contain its old world value.
+    // It must not override the joining body's own book on the client.
+    for (xr_vector<shared_str>::iterator it = infos.begin(); it != infos.end(); )
+    {
+        if (CInventoryOwner::coop_personal_info(*it)) it = infos.erase(it);
+        else ++it;
+    }
+    // the player's own [personal_infos] portions (the body's registry) join the shared book in this mirror only
+    xr_vector<shared_str> personal;
+    CInventoryOwner::coop_personal_infos(client->owner->ID, personal);
+    infos.insert(infos.end(), personal.begin(), personal.end());
     xr_string text;
     u32 chunks = 0;
     for (u32 i = 0; i <= infos.size(); ++i)
@@ -1760,7 +1778,7 @@ void game_sv_Coop::SendWorldInfos(xrClientData* client)
         if (!text.empty()) text += ",";
         text += infos[i].c_str();
     }
-    Msg("[COOP_SERVER] WORLD_INFOS client=%u infos=%u chunks=%u", client->ID.value(), infos.size(), chunks);
+    Msg("[COOP_SERVER] WORLD_INFOS client=%u infos=%u personal=%u chunks=%u", client->ID.value(), infos.size(), u32(personal.size()), chunks);
 }
 
 void game_sv_Coop::SendTipTexts(xrClientData* client)
@@ -2416,24 +2434,105 @@ void game_sv_Coop::PrepareClient(xrClientData* client)
     SpawnBody(client, true);
 }
 
-// A new body for the player at the level's entry (Anomaly's new-game start on Cordon, the world
-// actor's place elsewhere): on a first connection with the [loadout], after a death without it.
+// A start place on the current level: x,y,z, or a section of plugins\\new_game_start_locations.ltx (its
+// x/y/z/lvid; its gvid must be a vertex of this level - a section of another level can carry a vertex
+// number that exists here too). False: not a place here.
+static bool coop_start_place(LPCSTR value, CInifile& locations, Fvector& position, u32& node)
+{
+    if (!value || !xr_strlen(value)) return false;
+    Fvector custom;
+    char trailing;
+    if (3 == sscanf(value, "%f,%f,%f %c", &custom.x, &custom.y, &custom.z, &trailing))
+    {
+        // vertex_id asserts on positions outside the graph in debug builds; NaN also bypasses
+        // its bounding comparisons. Reject user input before converting it to a graph position.
+        if (!_valid(custom) || !ai().level_graph().valid_vertex_position(custom)) return false;
+        const u32 vertex = ai().level_graph().vertex_id(custom);
+        if (!ai().level_graph().valid_vertex_id(vertex)) return false;
+        position = custom;
+        node = vertex;
+        return true;
+    }
+    if (!locations.section_exist(value)) return false;
+    const char* required[] = { "lvid", "gvid", "x", "y", "z" };
+    for (u32 i = 0; i < sizeof(required) / sizeof(required[0]); ++i)
+        if (!locations.line_exist(value, required[i])) return false;
+    const u32 vertex = locations.r_u32(value, "lvid");
+    if (!ai().level_graph().valid_vertex_id(vertex)) return false;
+    if (locations.line_exist(value, "gvid"))
+    {
+        const GameGraph::_GRAPH_ID game_vertex = GameGraph::_GRAPH_ID(locations.r_u32(value, "gvid"));
+        const GameGraph::_GRAPH_ID here = ai().cross_table().vertex(vertex).game_vertex_id();
+        if (!ai().game_graph().valid_vertex_id(game_vertex) ||
+            ai().game_graph().vertex(game_vertex)->level_id() != ai().game_graph().vertex(here)->level_id())
+            return false;
+    }
+    custom.set(locations.r_float(value, "x"), locations.r_float(value, "y"), locations.r_float(value, "z"));
+    if (!_valid(custom) || !ai().level_graph().valid_vertex_position(custom)) return false;
+    position = custom;
+    node = vertex;
+    return true;
+}
+
+// A new body for the player at the level's start: on a first connection with the [loadout], after a death
+// without it. The place: -coop_start_at=<section|x,y,z> (dev: open ground for the probes), else
+// coop_server.ltx [start] <level> = <section|x,y,z> (05.10: the hosts start the party south of Cordon's army
+// checkpoint - Anomaly's village start put a bandit among Wolf's men, inside a house), else Anomaly's own
+// new-game start on Cordon (rookie_village) and the world actor's place elsewhere.
 CSE_ALifeCreatureActor* game_sv_Coop::SpawnBody(xrClientData* client, bool with_loadout, const CInventoryOwner* standing_from)
 {
     CSE_ALifeCreatureActor* world = alife().graph().actor();
     Fvector position = world->o_Position;
     u32 seed_node = world->m_tNodeID;
-    // Use Anomaly's own new-game start. The world identity stays in place.
-    if (!strstr(Core.Params, "-coop_spatial_probe") &&
-        !xr_strcmp(alife().level_name().c_str(), "l01_escape"))
+    if (!strstr(Core.Params, "-coop_spatial_probe"))
     {
         string_path locations_path;
         FS.update_path(locations_path, "$game_config$", "plugins\\new_game_start_locations.ltx");
         CInifile locations(locations_path);
-        position.set(locations.r_float("rookie_village", "x"),
-            locations.r_float("rookie_village", "y"), locations.r_float("rookie_village", "z"));
-        seed_node = locations.r_u32("rookie_village", "lvid");
-        R_ASSERT2(ai().level_graph().valid_vertex_id(seed_node), "COOP invalid rookie village AI vertex");
+        LPCSTR level_name = alife().level_name().c_str();
+        string256 wanted = "";
+        LPCSTR source = NULL;
+        if (LPCSTR arg = strstr(Core.Params, "-coop_start_at="))
+        {
+            sscanf(arg + xr_strlen("-coop_start_at="), "%255[^ ]", wanted);
+            source = "dev";
+        }
+        else
+        {
+            string_path config_path;
+            FS.update_path(config_path, "$app_data_root$", "coop_server.ltx");
+            if (FS.exist(config_path))
+            {
+                CInifile::InvalidateCache(config_path); // edited while the server runs: the next body takes it
+                CInifile config(config_path);
+                if (config.line_exist("start", level_name))
+                {
+                    xr_strcpy(wanted, config.r_string("start", level_name));
+                    source = "ltx";
+                }
+            }
+        }
+        const bool cordon = !xr_strcmp(level_name, "l01_escape");
+        LPCSTR place = NULL;
+        Fvector found;
+        u32 found_node;
+        if (source && coop_start_place(wanted, locations, found, found_node)) place = wanted;
+        else
+        {
+            if (source) Msg("! [COOP_SERVER] START_PLACE rejected level=%s source=%s place=%s (not a place on this level)", level_name, source, wanted);
+            if (cordon && coop_start_place("rookie_village", locations, found, found_node))
+            {
+                place = "rookie_village";
+                source = "default";
+            }
+        }
+        if (place)
+        {
+            position = found;
+            seed_node = found_node;
+            Msg("[COOP_SERVER] START_PLACE client=%u level=%s source=%s place=%s position=%f,%f,%f node=%u", client->ID.value(), level_name,
+                source, place, VPUSH(position), seed_node);
+        }
     }
     position.x += 2.f + float(client->ID.value() % 3);
     u32 node = ai().level_graph().vertex(seed_node, position);
@@ -2527,6 +2626,7 @@ CSE_ALifeCreatureActor* game_sv_Coop::SpawnBody(xrClientData* client, bool with_
     {
         body->m_rank = standing_from->Rank();
         body->m_reputation = standing_from->Reputation();
+        CInventoryOwner::coop_copy_personal_infos(standing_from->object_id(), body->ID); // the player's own portions too
     }
     if (!body->m_bOnline) alife().switch_online(body);
     alife().coop_switch_all_next(); // as ReclaimBody: the world around the new body switches before its Lua sees it

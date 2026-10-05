@@ -148,6 +148,15 @@ public:
 	//	virtual bool				GetInfo		(shared_str info_id, INFO_DATA&) const;
 	// Coop server: the whole book (the world actor's, shared by the bodies) for a joining client's mirror.
 	void coop_known_infos(xr_vector<shared_str>& out) const;
+	// Coop server: the portions listed in coop_server.ltx [personal_infos] are each player's own - a
+	// body keeps them under its own id in the ALife info registry (saved with the world), every other
+	// portion in the shared book. A one-off dialog branch closed by such a portion stays open for the
+	// other players. u16(-1): no own portions (NPCs, the world actor, clients).
+	static bool coop_personal_info(const shared_str& info_id);
+	static void coop_personal_infos(u16 holder, xr_vector<shared_str>& out); // a body's own portions
+	static void coop_copy_personal_infos(u16 from, u16 to); // a respawned player keeps them, as the rank
+	bool coop_personal(const shared_str& info_id) const { return m_coop_personal_holder != u16(-1) && coop_personal_info(info_id); }
+	u16 m_coop_personal_holder;
 
 #ifdef DEBUG
 	void CInventoryOwner::DumpInfo() const;

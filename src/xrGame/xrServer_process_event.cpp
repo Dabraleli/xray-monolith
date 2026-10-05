@@ -12,6 +12,30 @@
 #include "Level.h"
 #include "inventory_item.h"
 #include "inventory_upgrade_manager.h"
+#include "InventoryOwner.h"
+#include "alife_graph_registry.h"
+
+// Coop: an info event of a player body's coop_server.ltx [personal_infos] portion is that player's alone -
+// it reaches only the client controlling the body (its mirror of the book), not every client.
+static bool coop_personal_info_event(xrServer* server, NET_Packet& P, CSE_Abstract* receiver, u32 payload, xrClientData*& owner)
+{
+	owner = NULL;
+	if (!IsGameTypeCoop() || !receiver || !smart_cast<CSE_ALifeCreatureActor*>(receiver)) return false;
+	if (!ai().get_alife() || !ai().alife().graph().actor()) return false;
+	const u32 position = P.r_tell();
+	P.r_seek(payload);
+	u16 from;
+	shared_str info_id;
+	P.r_u16(from);
+	P.r_stringZ(info_id);
+	P.r_seek(position);
+	if (!CInventoryOwner::coop_personal_info(info_id)) return false;
+    // World-context writes to a personal flag stay in the world registry. Broadcasting
+    // them would replace every player's independent value (including old-save values).
+    if (receiver->ID == ai().alife().graph().actor()->ID) return true;
+	owner = server->CoopControllerOf(receiver);
+	return true;
+}
 
 void xrServer::Process_event(NET_Packet& P, ClientID sender)
 {
@@ -30,6 +54,7 @@ void xrServer::Process_event(NET_Packet& P, ClientID sender)
 	// read generic info
 	P.r_u16(type);
 	P.r_u16(destination);
+	const u32 payload = P.r_tell();
 
 	CSE_Abstract* receiver = game->get_entity_from_eid(destination);
 	if (receiver)
@@ -48,6 +73,16 @@ void xrServer::Process_event(NET_Packet& P, ClientID sender)
 		}
 		break;
 	case GE_INFO_TRANSFER:
+		{
+			xrClientData* owner = NULL;
+			if (coop_personal_info_event(this, P, receiver, payload, owner))
+			{
+				if (owner) SendTo(owner->ID, P, MODE);
+			}
+			else
+				SendBroadcast(BroadcastCID, P, MODE);
+		}
+		break;
 	case GE_WPN_STATE_CHANGE:
 	case GE_ZONE_STATE_CHANGE:
 	case GE_ACTOR_JUMPING:

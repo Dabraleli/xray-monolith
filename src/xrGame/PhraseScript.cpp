@@ -9,6 +9,21 @@
 #include "ai_debug.h"
 #include "ui/xrUIXmlParser.h"
 #include "actor.h"
+#include "Level.h"
+#include "game_sv_coop.h"
+
+// Who a dialog's <has_info>/<dont_has_info>/<give_info>/<disable_info> portion belongs to: the actor (on a
+// coop server the world actor, whose book every body shares). A coop_server.ltx [personal_infos] portion
+// is the talking player's own - the body Lua runs for during the dialog (CoopLuaActor).
+static const CInventoryOwner* dialog_info_owner(const shared_str& info_id)
+{
+	if (IsGameTypeCoop() && game_sv_Coop::s_context_body)
+	{
+		const CInventoryOwner* body = smart_cast<CInventoryOwner*>(game_sv_Coop::s_context_body);
+		if (body && body->coop_personal(info_id)) return body;
+	}
+	return Actor();
+}
 
 
 //загрузка из XML файла
@@ -43,7 +58,7 @@ bool CDialogScriptHelper::CheckInfo(const CInventoryOwner* pOwner) const
 
 	for (u32 i = 0; i < m_HasInfo.size(); ++i)
 	{
-		if (!Actor()->HasInfo(m_HasInfo[i]))
+		if (!dialog_info_owner(m_HasInfo[i])->HasInfo(m_HasInfo[i]))
 		{
 #ifdef DEBUG
 			if(psAI_Flags.test(aiDialogs) )
@@ -55,7 +70,7 @@ bool CDialogScriptHelper::CheckInfo(const CInventoryOwner* pOwner) const
 
 	for (u32 i = 0; i < m_DontHasInfo.size(); i++)
 	{
-		if (Actor()->HasInfo(m_DontHasInfo[i]))
+		if (dialog_info_owner(m_DontHasInfo[i])->HasInfo(m_DontHasInfo[i]))
 		{
 #ifdef DEBUG
 			if(psAI_Flags.test(aiDialogs) )
@@ -73,10 +88,10 @@ void CDialogScriptHelper::TransferInfo(const CInventoryOwner* pOwner) const
 	THROW(pOwner);
 
 	for (u32 i = 0; i < m_GiveInfo.size(); ++i)
-		Actor()->TransferInfo(m_GiveInfo[i], true);
+		dialog_info_owner(m_GiveInfo[i])->TransferInfo(m_GiveInfo[i], true);
 
 	for (u32 i = 0; i < m_DisableInfo.size(); ++i)
-		Actor()->TransferInfo(m_DisableInfo[i], false);
+		dialog_info_owner(m_DisableInfo[i])->TransferInfo(m_DisableInfo[i], false);
 }
 
 LPCSTR CDialogScriptHelper::GetScriptText(LPCSTR str_to_translate, const CGameObject* pSpeakerGO1,

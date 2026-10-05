@@ -47,10 +47,46 @@ bool game_cl_Coop::RestartPending()
     return coop_restart_pending;
 }
 
+void game_cl_Coop::OnInfoPortion(const shared_str& info_id, bool add)
+{
+    m_info_mirror[info_id] = add;
+    CActor* actor = smart_cast<CActor*>(Level().CurrentControlEntity());
+    if (actor && actor->Local())
+    {
+        // Local registry only: TransferInfo would send the restored state back to the server.
+        if (add) actor->OnReceiveInfo(info_id);
+        else actor->OnDisableInfo(info_id);
+    }
+}
+
+void game_cl_Coop::UpdateInfoMirror()
+{
+    CActor* actor = smart_cast<CActor*>(Level().CurrentControlEntity());
+    if (!actor || !actor->Local() || actor->ID() == m_info_mirror_body) return;
+    m_info_mirror_body = actor->ID();
+    for (xr_map<shared_str, bool>::const_iterator it = m_info_mirror.begin(); it != m_info_mirror.end(); ++it)
+    {
+        if (it->second) actor->OnReceiveInfo(it->first);
+        else actor->OnDisableInfo(it->first);
+    }
+}
+
 void game_cl_Coop::OnLuaMessage(NET_Packet& P)
 {
     shared_str text;
     P.r_stringZ(text);
+    if (text.c_str() && !strncmp(text.c_str(), "infos|", 6))
+    {
+        LPCSTR begin = text.c_str() + 6;
+        while (*begin)
+        {
+            LPCSTR end = strchr(begin, ',');
+            const xr_string info(begin, end ? size_t(end - begin) : xr_strlen(begin));
+            if (!info.empty()) OnInfoPortion(shared_str(info.c_str()), true);
+            if (!end) break;
+            begin = end + 1;
+        }
+    }
     // The world restarts on the server: from here on the level only waits for the disconnect.
     if (text.c_str() && (!strncmp(text.c_str(), "levelchange|", 12) || !strncmp(text.c_str(), "reload|", 7)))
     {
@@ -654,6 +690,7 @@ void game_cl_Coop::PickupProbeUpdate(CActor* actor)
 void game_cl_Coop::shedule_Update(u32 dt)
 {
     inherited::shedule_Update(dt);
+    if (!OnServer()) UpdateInfoMirror();
     if (!OnServer() && m_probe_started && strstr(Core.Params, "-coop_pickup_probe"))
         PickupProbeUpdate(smart_cast<CActor*>(Level().CurrentControlEntity()));
     if (OnServer() || !m_probe_started || m_probe_stopped || !strstr(Core.Params, "-coop_client_probe")) return;

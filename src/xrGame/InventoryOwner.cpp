@@ -46,6 +46,7 @@ CInventoryOwner::CInventoryOwner()
 	bDisableBreakDialog = false;
 
 	m_known_info_registry = xr_new<CInfoPortionWrapper>();
+	m_coop_personal_holder = u16(-1);
 	m_tmp_active_slot_num = NO_ACTIVE_SLOT;
 	m_need_osoznanie_mode = FALSE;
 
@@ -143,8 +144,13 @@ BOOL CInventoryOwner::net_Spawn(CSE_Abstract* DC)
 		// story (dialog conditions, given infos, has_alife_info in Lua) is one shared book. Clients
 		// keep a local registry for their own UI flags.
 		u16 info_holder = E->ID;
+		m_coop_personal_holder = u16(-1);
 		if (IsGameTypeCoop() && OnServer() && smart_cast<CActor*>(pThis) && ai().get_alife() && ai().alife().graph().actor())
+		{
 			info_holder = ai().alife().graph().actor()->ID;
+			// A player body (not the world actor) keeps the [personal_infos] portions under its own id.
+			if (E->ID != info_holder) m_coop_personal_holder = E->ID;
+		}
 		m_known_info_registry->registry().init(info_holder);
 		//-------------------------------------
 

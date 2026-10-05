@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="windows-1251" standalone="yes" ?>
+<!-- Coop HUD pieces (coop_client_actor.script): the teammates' corner at the top left (name, health, distance; GAMMA's minimap is at the top right) and the
+     action dialog opened by "use" on a standing teammate (money), in the look of the game's own message
+     boxes. Coordinates in the 1024x768 UI space; the _16 copy is identical (stretched statics). -->
+<w>
+	<hud>
+		<teammates x="12" y="86" width="300" height="96">
+			<line x="0" y="0" width="300" height="20">
+				<text font="letterica16" align="l" r="215" g="215" b="215" vert_align="c" />
+			</line>
+		</teammates>
+	</hud>
+
+	<give_dialog>
+		<frame x="312" y="290" width="400" height="188" stretch="1">
+			<texture>ui_inGame2_message_box</texture>
+		</frame>
+
+		<cap_title x="0" y="6" width="400" height="24">
+			<text r="170" g="170" b="170" font="graffiti22" align="c" vert_align="c" />
+		</cap_title>
+
+		<text_info x="20" y="40" width="360" height="40">
+			<text complex_mode="1" font="letterica16" r="170" g="170" b="170" align="c" />
+		</text_info>
+
+		<cap_amount x="60" y="90" width="120" height="25">
+			<text font="letterica16" vert_align="c" />
+		</cap_amount>
+		<input_amount x="180" y="90" width="160" height="25" max_symb_count="9">
+			<text x="3" font="letterica16" vert_align="c" />
+			<texture>ui_inGame2_edit_box_1</texture>
+		</input_amount>
+
+		<text_status x="20" y="118" width="360" height="20">
+			<text complex_mode="1" font="letterica16" r="230" g="150" b="80" align="c" />
+		</text_status>
+
+		<btn_give x="60" y="146" width="127" height="28" stretch="1">
+			<text font="letterica18" />
+			<texture>ui_button_ordinary</texture>
+		</btn_give>
+		<btn_cancel x="213" y="146" width="127" height="28" stretch="1">
+			<text font="letterica18" />
+			<texture>ui_button_ordinary</texture>
+		</btn_cancel>
+	</give_dialog>
+</w>
