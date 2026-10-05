@@ -44,6 +44,9 @@ function load_identity()
     id.icon = cfg:r_value('coop', 'icon', 0, '')
     id.loadout = cfg:r_value('coop', 'loadout', 0, '')
     id.money = tonumber(cfg:r_value('coop', 'money', 0, 0)) or 0
+    id.difficulty = tonumber(cfg:r_value('coop', 'difficulty', 0, ''))
+    id.economy = tonumber(cfg:r_value('coop', 'economy', 0, ''))
+    id.opened_routes = cfg:r_value('coop', 'opened_routes', 1, false)==true
     return id
 end
 
@@ -56,6 +59,9 @@ function save_identity(id)
     cfg:w_value('coop', 'icon', id.icon)
     cfg:w_value('coop', 'loadout', id.loadout)
     cfg:w_value('coop', 'money', tostring(id.money or 0))
+    cfg:w_value('coop', 'difficulty', id.difficulty)
+    cfg:w_value('coop', 'economy', id.economy)
+    cfg:w_value('coop', 'opened_routes', id.opened_routes==true)
     cfg:save()
 end
 
@@ -188,6 +194,9 @@ function UICoopJoin:StartGame() -- UINewGame:OnStartGame after it wrote [charact
         local sections = str_explode(cfg:r_value('character_creation', 'new_game_loadout', 3) or '', ',')
         id.loadout = loadout_with_ammo(sections)
         id.money = tonumber(cfg:r_value('character_creation', 'new_game_money', 2)) or 0
+        id.difficulty = tonumber(cfg:r_value('character_creation', 'new_game_difficulty', 2))
+        id.economy = tonumber(cfg:r_value('character_creation', 'new_game_economy', 2))
+        id.opened_routes = cfg:r_value('character_creation', 'new_game_opened_routes', 1)==true
         -- not a single-player new game: nothing must wait in [character_creation]
         for _, key in ipairs({ 'new_game_character_name', 'new_game_faction', 'new_game_icon', 'new_game_loadout',
                                'new_game_money', 'new_game_map', 'new_game_difficulty', 'new_game_economy',

@@ -159,6 +159,7 @@ function server_actor:net_spawn(se)
         death_manager.init_drop_settings()
         self.first_update_pending = true
         bind_stalker_ext.actor_on_net_spawn(self) -- AI aim settings, phantom cleanup, on_game_load
+        coop_world_settings.server_init(loaded_save ~= nil)
         printf('[COOP_SERVER] WORLD_SERVICES_LOADED actor=%s', tostring(id))
         -- Tasks: the engine reports task state changes to the world actor (CGameTask::ChangeStateCallback);
         -- bind_stalker_ext forwards them to task_manager (rewards, news) exactly as in SP.
@@ -737,15 +738,6 @@ local function body_new_game(body)
     printf('%s[COOP_SERVER] BODY_NEW_GAME body=%s%s', ok and '' or '! ', tostring(body:id()), ok and '' or (' error=' .. tostring(err)))
 end
 
--- The world's difficulty (game_difficulties: the host's choice, in the world's storage) to the
--- client: its copy of the module sets the same factors (notify_anomaly, notify_geiger, ...).
-local function send_difficulty(target)
-    local state = alife_storage_manager.get_state()
-    local game = type(state.diff_game) == 'table' and state.diff_game.type or nil
-    local eco = type(state.diff_eco) == 'table' and state.diff_eco.type or nil
-    if game or eco then level.coop_send_lua(target, string.format('difficulty|%s|%s', tostring(game or ''), tostring(eco or ''))) end
-end
-
 -- Campfires: bind_campfire puts them out and lights them here (the squads at the smart, a player's
 -- matches); a client gets each switch as a zone state event while connected, but a replica spawns
 -- burning (CZoneCampfire starts on) whatever the state here - every campfire burned for a player
@@ -768,7 +760,7 @@ end
 function on_client_ready(body, fresh)
     coop_psi_helmet.sync(body, true)
     if fresh then body_new_game(body) end
-    send_difficulty(body:id())
+    coop_world_settings.server_ready(body)
     send_campfires(body:id())
     send_weather(body:id())
     send_emissions(body:id())
@@ -3767,6 +3759,7 @@ end
 function on_client_lua(body, text)
     local parts = str_explode(text, '|')
     if parts[1] == 'server_saves' then return coop_server_saves.server_request(body, parts) end
+    if parts[1] == 'world_settings' then return coop_world_settings.server_request(body, parts) end
     local kind = parts[1]
     local request = parts[#parts] and string.match(parts[#parts], '^rpc:(%d+)$')
     if request then
@@ -4140,6 +4133,7 @@ local function update_world(self, delta)
     end
     coop_psi_helmet.update(now)
     coop_server_saves.server_update(now)
+    coop_world_settings.server_update()
     update_stats(self)
     kill_probe_update(self, now)
     travel_probe_update(self, now)

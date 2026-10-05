@@ -1687,16 +1687,8 @@ function on_server_lua(text)
         apply_voice(parts)
     elseif kind == 'campfires' then
         apply_campfires(parts)
-    elseif kind == 'difficulty' then
-        -- the world's difficulty types: the module's factors as its on_game_load sets them in SP
-        if game_difficulties and game_difficulties.setup_game_factors then
-            local game, eco = tonumber(parts[2]), tonumber(parts[3])
-            local ok, err = pcall(function()
-                if game then game_difficulties.gameplay = { type = game }; game_difficulties.setup_game_factors(game) end
-                if eco then game_difficulties.economy = { type = eco }; game_difficulties.setup_eco_factors(eco) end
-            end)
-            printf('%s[COOP_CLIENT] DIFFICULTY game=%s eco=%s%s', ok and '' or '! ', tostring(game), tostring(eco), ok and '' or (' error=' .. tostring(err)))
-        end
+    elseif kind == 'world_settings' then
+        coop_world_settings.client_message(parts)
     elseif kind == 'measure' then
         -- the measurement task reached (or left) its anomaly with this body: the device beeps here
         if tasks_measure and tasks_measure.start_measurement_hud then
@@ -2401,6 +2393,7 @@ function client_actor:update(delta)
     update_contacts()
     local now = time_global()
     coop_psi_helmet.client_update()
+    coop_world_settings.client_update()
     eat_probe_update(self, now)
     place_probe_update(self, now)
     fast_travel_probe_update(self, now)
@@ -3193,6 +3186,7 @@ function client_actor:net_destroy()
         return
     end
     coop_server_saves.client_reset()
+    coop_world_settings.client_reset()
     store_send() -- best effort; the periodic copy is at most store_interval old
     bind_stalker_ext.actor_on_net_destroy(self) -- actor_status removes its HUD
     for cb, func in pairs(client_callbacks()) do

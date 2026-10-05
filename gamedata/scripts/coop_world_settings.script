@@ -1,0 +1,152 @@
+-- World rules belong to the save. Only the first ready player may initialise a new world.
+local pending, owner_id = nil, nil
+local client_pending = nil
+local game_keys = {'type','actor_immunities','hit_power','dispersion_base','dispersion_factor','power_loss_bias','weight','thirst','sleep','radiation_day','notify_geiger','notify_anomaly'}
+local eco_keys = {'type','goodwill','rewards','repair','upgrade','buy','sell','artefact','loots','money_loots','stash_chance','weapon_degradation','battery_consumption','random_items','scope_chance','arty_chance','restock','percentage_parts','limited_bolts','arty_degradation','bkpk_degradation','outfit_drops'}
+
+local function preset(v)
+    v=tonumber(v)
+    return v and (v==1 or v==2 or v==3) and v or nil
+end
+
+-- The difficulty module keeps its tables in locals. Reuse its own load callback,
+-- without firing unrelated world-load callbacks or substituting the modpack's module.
+function refresh()
+    for i=1,32 do
+        local name,fn=debug.getupvalue(game_difficulties.on_game_start,i)
+        if not name then break end
+        if name=='on_game_load' and type(fn)=='function' then fn(); return end
+    end
+    error('game_difficulties load callback unavailable')
+end
+
+local function refresh_treasure()
+    -- This cache is built during world creation, before a player can choose the economy.
+    -- Rebuild only its candidate lists; placed items and discovered stashes stay intact.
+    for i=1,32 do
+        local name,value=debug.getupvalue(treasure_manager.init_settings,i)
+        if not name then break end
+        if name=='item_list' and type(value)=='table' then
+            for key in pairs(value) do value[key]=nil end
+            for key in pairs(treasure_manager.stash_bonus) do treasure_manager.stash_bonus[key]=nil end
+            treasure_manager.init_settings()
+            return
+        end
+    end
+    error('treasure_manager item cache unavailable')
+end
+
+local function pack(keys, getter)
+    local values={}
+    for _,key in ipairs(keys) do
+        local v=getter(key)
+        values[#values+1]=v==true and 't' or v==false and 'f' or tostring(tonumber(v) or 0)
+    end
+    return table.concat(values,',')
+end
+
+local function unpack_factors(keys,text)
+    local result,i={},0
+    for v in (text or ''):gmatch('[^,]+') do
+        i=i+1
+        if not keys[i] then return end
+        local value
+        if v=='t' then value=true elseif v=='f' then value=false else value=tonumber(v) end
+        if value==nil or (type(value)=='number' and (value~=value or value==math.huge or value==-math.huge)) then return end
+        result[keys[i]]=value
+    end
+    if i~=#keys or not preset(result.type) then return end
+    return result
+end
+
+function server_init(loaded)
+    pending,owner_id=nil,nil
+    local state=alife_storage_manager.get_state()
+    if not loaded and not state.coop_world_settings then state.coop_world_settings={version=1,ready=false} end
+    -- No marker in an older save means existing authoritative rules, not a new world.
+    if not state.coop_world_settings then state.coop_world_settings={version=1,ready=true} end
+end
+
+function server_sync(id)
+    local state=alife_storage_manager.get_state()
+    level.coop_send_lua(id,'world_settings|state|'..pack(game_keys,game_difficulties.get_game_factor)
+        ..'|'..pack(eco_keys,game_difficulties.get_eco_factor)..'|'..(state.opened_routes and '1' or '0'))
+end
+
+function server_ready(body)
+    local rules=alife_storage_manager.get_state().coop_world_settings
+    local name=level.coop_body_player(body:id())
+    if rules and not rules.ready and name~='' then
+        if not rules.owner then rules.owner=name end
+        if rules.owner==name then
+            owner_id=body:id()
+            level.coop_send_lua(owner_id,'world_settings|choose')
+        end
+    end
+    server_sync(body:id())
+end
+
+function server_request(body,parts)
+    local rules=alife_storage_manager.get_state().coop_world_settings
+    if not rules or rules.ready or pending or body:id()~=owner_id
+        or level.coop_body_player(body:id())~=rules.owner or parts[2]~='choose' then return end
+    local g,e=preset(parts[3]),preset(parts[4])
+    if not g or not e or (parts[5]~='0' and parts[5]~='1') then return end
+    pending={game=g,eco=e,open=parts[5]=='1'}
+end
+
+function server_update()
+    if not pending then return end
+    local choice=pending;pending=nil
+    local state=alife_storage_manager.get_state()
+    local old_game,old_eco,old_open=state.diff_game,state.diff_eco,state.opened_routes
+    state.diff_game={type=choice.game};state.diff_eco={type=choice.eco};state.opened_routes=choice.open
+    local ok,err=pcall(function()
+        refresh()
+        death_manager.init_drop_settings()
+        refresh_treasure()
+    end)
+    if not ok then
+        state.diff_game,state.diff_eco,state.opened_routes=old_game,old_eco,old_open
+        pcall(refresh)
+        pcall(death_manager.init_drop_settings)
+        pcall(refresh_treasure)
+        printf('! [COOP_SETTINGS] APPLY_FAILED %s',tostring(err));return
+    end
+    state.coop_world_settings.ready=true
+    -- Restrictors registered before the first player arrived. Add the newly opened spots.
+    if choice.open then
+        for _,a in ipairs(txr_routes.maps) do
+            for _,b in ipairs(txr_routes.maps) do txr_routes.open_route(a,b,true) end
+        end
+    end
+    for id,body in pairs(db.actors or {}) do
+        if body:alive() then server_sync(id) end
+    end
+    printf('[COOP_SETTINGS] APPLIED owner=%s game=%s eco=%s open=%s',state.coop_world_settings.owner,choice.game,choice.eco,tostring(choice.open))
+end
+
+function client_message(parts)
+    if parts[2]=='choose' then
+        local id=coop_menu.load_identity()
+        if not preset(id.difficulty) or not preset(id.economy) then
+            actor_menu.set_msg(1,'Выберите сложности в меню «Персонаж» и подключитесь снова.',12)
+            printf('! [COOP_SETTINGS] CHOICE_MISSING');return
+        end
+        level.coop_send_lua(0,'world_settings|choose|'..id.difficulty..'|'..id.economy..'|'..(id.opened_routes and '1' or '0'))
+    elseif parts[2]=='state' then
+        local g,e=unpack_factors(game_keys,parts[3]),unpack_factors(eco_keys,parts[4])
+        if g and e and (parts[5]=='0' or parts[5]=='1') then client_pending={g=g,e=e,open=parts[5]=='1'} end
+    end
+end
+
+function client_update()
+    if not client_pending then return end
+    local choice=client_pending;client_pending=nil
+    local state=alife_storage_manager.get_state()
+    state.diff_game,state.diff_eco,state.opened_routes=choice.g,choice.e,choice.open
+    local ok,err=pcall(refresh)
+    printf('%s[COOP_SETTINGS] RECEIVED game=%s eco=%s open=%s%s',ok and '' or '! ',choice.g.type,choice.e.type,tostring(choice.open),ok and '' or (' error='..tostring(err)))
+end
+
+function client_reset() client_pending=nil end
