@@ -83,7 +83,7 @@ void CUIMMShniaga::InitShniaga(CUIXml& xml_doc, LPCSTR path)
 	}
 	else
 	{
-		if (GameID() == eGameIDSingle)
+		if (GameID() == eGameIDSingle || IsGameTypeCoop())
 		{
 			VERIFY(Actor());
 			if (g_actor && !Actor()->g_Alive())

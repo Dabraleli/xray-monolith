@@ -242,6 +242,8 @@ void CUIGameCustom::ShowMessagesWindow()
 
 bool CUIGameCustom::ShowPdaMenu()
 {
+    CActor* actor = smart_cast<CActor*>(Level().CurrentEntity());
+    if (IsGameTypeCoop() && actor && actor->IsTalking()) return false;
 	HideActorMenu();
 	if (!PdaMenu->IsShown())
 	{

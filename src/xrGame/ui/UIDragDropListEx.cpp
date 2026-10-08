@@ -331,6 +331,42 @@ void CUIDragDropListEx::Compact()
 	}
 }
 
+// Reposition existing roots without destroying stacks, selection, or item callbacks.
+void CUIDragDropListEx::ArrangeGroups(const xr_vector<CUICellItem*>& items, const xr_vector<int>& groups)
+{
+    if (items.empty() || items.size() != groups.size() || !IsAutoGrow() || GetVerticalPlacement() || GetVirtualCells()) return;
+    const Ivector2 capacity = CellsCapacity();
+    for (CUICellItem* item : items)
+        if (!item || item->GetGridSize().x > capacity.x || item->GetGridSize().x <= 0 || item->GetGridSize().y <= 0) return;
+    const int scroll = ScrollPos();
+    for (int y = 0; y < capacity.y; ++y)
+        for (int x = 0; x < capacity.x; ++x)
+            m_container->GetCellAt(Ivector2().set(x, y)).Clear();
+    for (CUICellItem* item : items) m_container->DetachChild(item);
+    int first_row = 0, bottom = 0;
+    for (u32 n = 0; n < items.size(); ++n)
+    {
+        if (n && groups[n] != groups[n - 1]) first_row = bottom;
+        CUICellItem* item = items[n];
+        const Ivector2 size = item->GetGridSize();
+        Ivector2 pos;
+        bool found = false;
+        while (!found)
+        {
+            for (pos.y = first_row; pos.y <= CellsCapacity().y - size.y && !found; ++pos.y)
+                for (pos.x = 0; pos.x <= CellsCapacity().x - size.x; ++pos.x)
+                    if (m_container->IsRoomFree(pos, size)) { found = true; break; }
+            if (found) --pos.y; else m_container->Grow();
+        }
+        m_container->PlaceItemAtPos(item, pos);
+        item->SetOwnerList(this);
+        bottom = _max(bottom, pos.y + size.y);
+    }
+    ReinitScroll();
+    m_vScrollBar->SetScrollPos(scroll);
+    OnScrollV(NULL, NULL);
+}
+
 void CUIDragDropListEx::Draw()
 {
 	inherited::Draw();

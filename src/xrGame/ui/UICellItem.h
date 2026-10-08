@@ -48,6 +48,7 @@ public:
 
 	virtual bool OnKeyboardAction(int dik, EUIMessages keyboard_action);
 	virtual bool OnMouseAction(float x, float y, EUIMessages mouse_action);
+	CUIWindow* m_coop_presentation = nullptr; // Lua-owned, prepared during Update, never Lua in Draw.
 	virtual void Draw();
 	virtual void Update();
 

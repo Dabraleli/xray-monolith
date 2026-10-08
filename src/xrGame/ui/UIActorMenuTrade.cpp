@@ -29,8 +29,71 @@
 
 // -------------------------------------------------
 
+// Native coop trade retains server prices; SortingPlus supplies presentation categories only.
+static void coop_sort_trade_bag(CUIDragDropListEx* list, bool actor)
+{
+    if (!IsGameTypeCoop() || !OnClient() || !list || !list->ItemsCount()) return;
+    luabind::functor<int> category;
+    if (!ai().script_engine().functor("coop_client_actor.trade_sort_key", category)) return;
+    struct Entry { CUICellItem* cell; PIItem item; int group; };
+    xr_vector<Entry> entries;
+    for (u32 n = 0; n < list->ItemsCount(); ++n)
+    {
+        CUICellItem* cell = list->GetItemIdx(n);
+        PIItem item = static_cast<PIItem>(cell->m_pData);
+        if (!item) return;
+        const int group = category(item->object().ID(), actor);
+        if (group == -32768) return; // no SortingPlus, or this bag's sorting is disabled
+        entries.push_back({cell, item, group});
+    }
+    std::stable_sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b)
+    {
+        if (a.group != b.group) return a.group < b.group;
+        const Ivector2 as = a.cell->GetGridSize(), bs = b.cell->GetGridSize();
+        if (as.x != bs.x) return as.x > bs.x;
+        if (as.y != bs.y) return as.y > bs.y;
+        const int name = xr_strcmp(a.item->object().cNameSect().c_str(), b.item->object().cNameSect().c_str());
+        if (name) return name < 0;
+        return a.item->object().ID() > b.item->object().ID();
+    });
+    xr_vector<CUICellItem*> cells;
+    xr_vector<int> groups;
+    for (const Entry& e : entries) { cells.push_back(e.cell); groups.push_back(e.group); }
+    list->ArrangeGroups(cells, groups);
+    if (strstr(Core.Params, "-coop_trade_sort_probe"))
+        for (const Entry& e : entries)
+        {
+            const Fvector2 pos = e.cell->GetWndPos(); const Ivector2 size = e.cell->GetGridSize();
+            Msg("[COOP_TRADE_SORT] actor=%u id=%u section=%s group=%d x=%.1f y=%.1f w=%d h=%d stack=%u", actor ? 1 : 0, e.item->object().ID(), e.item->object().cNameSect().c_str(), e.group, pos.x, pos.y, size.x, size.y, e.cell->ChildsCount() + 1);
+        }
+}
+
+void CUIActorMenu::CoopDealCompleted(u16 npc, u16 owner, const xr_vector<u16>& ids)
+{
+    if (m_currMenuMode != mmTrade || !m_pPartnerInvOwner || m_pPartnerInvOwner->object_id() != npc) return;
+    for (u16 id : ids) m_coop_trade_sort_items.push_back(std::make_pair(id, owner));
+}
+
+void CUIActorMenu::CoopUpdateTradeSort()
+{
+    if (m_coop_trade_sort_items.empty()) return;
+    // The deal confirmation may precede processing of timestamped ownership
+    // events. Arrange only when every confirmed transfer has reached the UI.
+    for (const auto& entry : m_coop_trade_sort_items)
+    {
+        CObject* item = Level().Objects.net_Find(entry.first);
+        if (item && (!item->H_Parent() || item->H_Parent()->ID() != entry.second)) return;
+    }
+    m_coop_trade_sort_items.clear();
+    coop_sort_trade_bag(m_pTradeActorBagList, true);
+    coop_sort_trade_bag(m_pTradePartnerBagList, false);
+    if (strstr(Core.Params, "-coop_trade_sort_probe")) Msg("[COOP_TRADE_SORT] DEAL_COMPLETE npc=%u", m_pPartnerInvOwner->object_id());
+    UpdatePrices();
+}
+
 void CUIActorMenu::InitTradeMode()
 {
+    m_coop_trade_sort_items.clear();
 	m_pInventoryBagList->Show(false);
 	m_PartnerCharacterInfo->Show(true);
 	m_PartnerMoney->Show(true);
@@ -55,6 +118,9 @@ void CUIActorMenu::InitTradeMode()
 
 	InitInventoryContents(m_pTradeActorBagList);
 	InitPartnerInventoryContents();
+	// Arrange once per opened trade; price and ownership updates retain cell positions.
+	coop_sort_trade_bag(m_pTradeActorBagList, true);
+	coop_sort_trade_bag(m_pTradePartnerBagList, false);
 
 	m_actor_trade = m_pActorInvOwner->GetTrade();
 	m_partner_trade = m_pPartnerInvOwner->GetTrade();
@@ -132,6 +198,7 @@ void CUIActorMenu::FilterActorTradeBagList(int mode)
 			}
 		}
 	}
+	coop_sort_trade_bag(m_pTradeActorBagList, true);
 }
 
 void CUIActorMenu::InitPartnerInventoryContents()
@@ -146,6 +213,7 @@ void CUIActorMenu::InitPartnerInventoryContents()
 	TIItemContainer::iterator ite = items_list.end();
 	for (; itb != ite; ++itb)
 	{
+		if (IsGameTypeCoop() && OnClient() && !game_cl_Coop::TradePrice((*itb)->object().ID())) continue;
 		if (!is_item_in_list(m_pTradePartnerList, *itb))
 		{
 			CUICellItem* itm = create_cell_item(*itb);
@@ -167,6 +235,7 @@ void CUIActorMenu::FilterTraderList(int mode)
 	TIItemContainer::iterator ite = items_list.end();
 	for (; itb != ite; ++itb)
 	{
+		if (IsGameTypeCoop() && OnClient() && !game_cl_Coop::TradePrice((*itb)->object().ID())) continue;
 		if (!is_item_in_list(m_pTradePartnerList, *itb))
 		{
 			PIItem iitm = *itb;
@@ -193,6 +262,7 @@ void CUIActorMenu::FilterTraderList(int mode)
 			}
 		}
 	}
+	coop_sort_trade_bag(m_pTradePartnerBagList, false);
 	m_trade_partner_inventory_state = m_pPartnerInvOwner->inventory().ModifyFrame();
 }
 
@@ -210,6 +280,7 @@ void CUIActorMenu::ColorizeItem(CUICellItem* itm, bool colorize)
 
 void CUIActorMenu::DeInitTradeMode()
 {
+    m_coop_trade_sort_items.clear();
 	if (IsGameTypeCoop() && OnClient())
 		game_cl_Coop::TradeSend(3, 0, NULL); // the server's CTrade of both sides stops with ours
 	if (m_actor_trade)
@@ -431,7 +502,8 @@ bool CUIActorMenu::CanMoveToPartner(PIItem pItem)
 	}
 
 	bool has_max_uses = pItem->cast_eatable_item() && pItem->cast_eatable_item()->GetMaxUses();
-	if (!has_max_uses && (pItem->GetCondition() < m_pPartnerInvOwner->trade_parameters().buy_item_condition_factor))
+	if (!has_max_uses && !(IsGameTypeCoop() && READ_IF_EXISTS(pSettings, r_bool, pItem->object().cNameSect(), "is_mag", false)) &&
+        (pItem->GetCondition() < m_pPartnerInvOwner->trade_parameters().buy_item_condition_factor))
 		return false;
 
 	float r1 = CalcItemsWeight(m_pTradeActorList); // actor
@@ -521,6 +593,20 @@ void CUIActorMenu::UpdatePrices()
 
 	UpdateActor();
 	UpdatePartnerBag();
+    if (IsGameTypeCoop() && OnClient() && strstr(Core.Params, "-coop_trade_sort_probe"))
+    {
+        static u32 snapshot = 0;
+        ++snapshot;
+        CUIDragDropListEx* bags[] = {m_pTradeActorBagList, m_pTradePartnerBagList};
+        for (u32 bag = 0; bag < 2; ++bag)
+            for (u32 n = 0; n < bags[bag]->ItemsCount(); ++n)
+            {
+                CUICellItem* cell = bags[bag]->GetItemIdx(n);
+                PIItem item = static_cast<PIItem>(cell->m_pData);
+                const Fvector2 pos = cell->GetWndPos();
+                Msg("[COOP_TRADE_LAYOUT] snapshot=%u bag=%u id=%u x=%.1f y=%.1f stack=%u", snapshot, bag, item->object().ID(), pos.x, pos.y, cell->ChildsCount() + 1);
+            }
+    }
 	u32 actor_price = CalcItemsPrice(m_pTradeActorList, m_partner_trade, true);
 	u32 partner_price = CalcItemsPrice(m_pTradePartnerList, m_partner_trade, false);
 

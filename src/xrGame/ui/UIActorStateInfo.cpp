@@ -6,6 +6,8 @@
 ////////////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+#include "pch_script.h"
+#include "script_engine.h"
 #include "UIActorStateInfo.h"
 #include "UIProgressBar.h"
 #include "UIProgressShape.h"
@@ -275,10 +277,27 @@ void ui_actor_state_wnd::UpdateHitZone()
 	wnd->UpdateZones();
 }
 
+void ui_actor_state_wnd::Update()
+{
+    inherited::Update();
+    m_coop_presentation = nullptr;
+    if (IsGameTypeCoop() && OnClient())
+    {
+        luabind::functor<CUIWindow*> draw;
+        if (ai().script_engine().functor("coop_native_presentation.actor_stats", draw))
+        {
+            Frect rect; GetAbsoluteRect(rect);
+            CUIWindow* wnd = draw(rect.x1, rect.y1);
+            m_coop_presentation = wnd;
+        }
+    }
+}
+
 void ui_actor_state_wnd::Draw()
 {
-	inherited::Draw();
-	m_hint_wnd->Draw();
+    if (m_coop_presentation) { m_coop_presentation->Draw(); return; }
+    inherited::Draw();
+    m_hint_wnd->Draw();
 }
 
 void ui_actor_state_wnd::Show(bool status)

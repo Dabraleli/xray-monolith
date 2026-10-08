@@ -49,6 +49,8 @@ public:
 	void TryAddUpgradeInfo(CInventoryItem& pInvItem);
 	void TryAddBoosterInfo(CInventoryItem& pInvItem);
 
+	CUIWindow* m_coop_presentation = nullptr; // Lua-owned, prepared during Update, never Lua in Draw.
+	virtual void Update();
 	virtual void Draw();
 	bool m_b_FitToHeight;
 	u32 delay;

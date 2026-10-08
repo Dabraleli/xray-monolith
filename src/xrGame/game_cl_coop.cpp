@@ -12,6 +12,7 @@
 #include "ai_space.h"
 #include "script_engine.h"
 #include "ui/UITalkWnd.h"
+#include "ui/UIPdaWnd.h"
 #include "ui/UIMessagesWindow.h"
 #include "InventoryOwner.h"
 #include "string_table.h"
@@ -24,6 +25,8 @@
 #include "MainMenu.h"
 #include "CustomMonster.h"
 #include "sound_player.h"
+#include "ai/trader/ai_trader.h"
+#include "ai/trader/trader_animation.h"
 #include "coop_alife_mirror.h"
 #include "../xrEngine/x_ray.h"
 
@@ -496,6 +499,29 @@ void game_cl_Coop::OnSoundMessage(NET_Packet& P)
         monster->sound().play(internal_type, max_start, min_start, max_stop, min_stop, index);
         break;
     }
+    case 5: // trader greeting, idle line or dialogue phrase
+    {
+        const u16 object_id = P.r_u16();
+        shared_str path;
+        P.r_stringZ(path);
+        CAI_Trader* trader = smart_cast<CAI_Trader*>(Level().Objects.net_Find(object_id));
+        if (!trader || trader->getDestroy()) return;
+        if (path.size())
+        {
+            string_path file;
+            if (!FS.exist("$game_sounds$", path.c_str()) && !FS.exist(file, "$game_sounds$", path.c_str(), ".ogg"))
+            {
+                Msg("! [COOP_TRADER_SOUND] missing=%s id=%u", path.c_str(), object_id);
+                return;
+            }
+            trader->animation().coop_sound(path.c_str());
+        }
+        else
+            trader->animation().coop_sound(NULL);
+        if (strstr(Core.Params, "-coop_damage_probe"))
+            Msg("[COOP_TRADER_SOUND] side=client id=%u path=%s", object_id, path.size() ? path.c_str() : "<stop>");
+        break;
+    }
     default:
         break;
     }
@@ -541,12 +567,35 @@ void game_cl_Coop::OnTradeMessage(NET_Packet& P)
         if (npc) npc->set_money(npc_money, false); // the menu's "can the NPC pay" check and its money label
         if (op == 1)
         {
-            if (npc) ui->StartTrade(actor, npc);
+            if (npc)
+            {
+                CUIActorMenu& menu = ui->GetActorMenu();
+                // A repeated begin reply refreshes the existing transaction UI.
+                // SetActor/SetPartner require a hidden menu; do not reopen it.
+                if (menu.IsShown() && menu.GetMenuMode() == mmTrade && menu.GetPartner() == npc)
+                    menu.CoopPricesChanged();
+                else
+                {
+                    if (menu.IsShown()) menu.HideDialog();
+                    ui->StartTrade(actor, npc);
+                }
+            }
         }
         else if (ui->GetActorMenu().IsShown())
             ui->GetActorMenu().CoopPricesChanged();
         if (strstr(Core.Params, "-coop_damage_probe"))
             Msg("[COOP_CLIENT] TRADE_PRICES op=%u npc=%u count=%u", u32(op), npc_id, u32(count));
+        break;
+    }
+    case 5: // committed deal: wait for these ownership events before sorting
+    {
+        const u16 npc = P.r_u16();
+        const bool buying = P.r_u8() != 0;
+        const u16 count = P.r_u16();
+        xr_vector<u16> ids;
+        for (u16 i = 0; i < count && P.B.count >= P.r_tell() + sizeof(u16); ++i) ids.push_back(P.r_u16());
+        if (ui->GetActorMenu().IsShown())
+            ui->GetActorMenu().CoopDealCompleted(npc, buying ? actor->ID() : npc, ids);
         break;
     }
     case 4: // refused
@@ -576,6 +625,9 @@ void game_cl_Coop::OnTalkMessage(NET_Packet& P)
         CGameObject* npc_object = smart_cast<CGameObject*>(Level().Objects.net_Find(npc_id));
         CInventoryOwner* npc = smart_cast<CInventoryOwner*>(npc_object);
         if (!npc || actor->IsTalking()) return;
+        // PDA can be non-modal and not the top input receiver. Close it
+        // explicitly before taking input for the server-confirmed dialog.
+        if (ui->GetPdaMenu().IsShown()) ui->GetPdaMenu().HideDialog();
         // Replica flags only: CInventoryOwner::UpdateInventoryOwner ends a talk whose partner is silent.
         npc->StartTalk(actor);
         actor->StartTalk(npc);

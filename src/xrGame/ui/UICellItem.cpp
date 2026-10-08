@@ -4,6 +4,9 @@
 ////////////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+#include "pch_script.h"
+#include "script_engine.h"
+#include "script_game_object.h"
 #include "UICellItem.h"
 #include "uicursor.h"
 #include "../inventory_item.h"
@@ -90,11 +93,18 @@ void CUICellItem::init()
 
 void CUICellItem::Draw()
 {
-	m_drawn_frame = Device.dwFrame;
-
-	inherited::Draw();
-	if (m_custom_draw)
-		m_custom_draw->OnDraw(this);
+    m_drawn_frame = Device.dwFrame;
+    if (m_coop_presentation && !Heading())
+    {
+        m_coop_presentation->Draw();
+        if (m_text->IsShown()) m_text->Draw();
+    }
+    else
+    {
+        inherited::Draw();
+        if (m_coop_presentation) m_coop_presentation->Draw();
+    }
+    if (m_custom_draw) m_custom_draw->OnDraw(this);
 };
 
 void CUICellItem::Update()
@@ -135,6 +145,23 @@ void CUICellItem::Update()
 		}
 		m_upgrade->SetWndPos(pos);
 	}
+    m_coop_presentation = nullptr;
+    if (IsGameTypeCoop() && OnClient() && m_pData)
+    {
+        luabind::functor<CUIWindow*> draw;
+        if (ai().script_engine().functor(Heading() ? "coop_native_presentation.item_cell_heading" : "coop_native_presentation.item_cell", draw))
+        {
+            Frect rect;
+            // Equipped weapon labels belong to the entire slot, not the
+            // centered (and differently sized) rotated weapon icon.
+            if (Heading()) m_pParentList->GetClientArea(rect);
+            else GetAbsoluteRect(rect);
+            CInventoryItem* item = static_cast<CInventoryItem*>(m_pData);
+            CUIWindow* wnd = draw(item->object().lua_game_object(), rect.x1, rect.y1,
+                rect.width(), rect.height(), GetTextureColor());
+            m_coop_presentation = wnd;
+        }
+    }
 	m_upgrade->Show(m_has_upgrade);
 }
 

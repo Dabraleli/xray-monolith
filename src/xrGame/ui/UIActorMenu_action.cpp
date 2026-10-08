@@ -356,8 +356,14 @@ bool CUIActorMenu::OnItemFocusReceive(CUICellItem* itm)
 		PIItem _iitem = (PIItem)itm->m_pData;
 
 		CGameObject* GO = _iitem ? smart_cast<CGameObject*>(_iitem) : NULL;
-		if (GO)
-			funct1(GO->lua_game_object());
+        if (GO)
+        {
+            luabind::functor<void> native_focus;
+            if (IsGameTypeCoop() && OnClient() && ai().script_engine().functor(
+                "coop_native_presentation.native_focus", native_focus))
+                native_focus(this, GO->lua_game_object());
+            else funct1(GO->lua_game_object());
+        }
 	}
 
 	return true;

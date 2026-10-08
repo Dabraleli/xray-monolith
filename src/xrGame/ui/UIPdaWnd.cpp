@@ -308,6 +308,18 @@ void CUIPdaWnd::Update()
 
 void CUIPdaWnd::SetActiveSubdialog(const shared_str& section)
 {
+    // Script hotkeys (e.g. GAMMA's taskboard) select content directly. Keep
+    // the highlighted tab in sync without emitting TAB_CHANGED recursively
+    // and constructing/refreshing the scripted dialog twice.
+    if (IsGameTypeCoop() && UITabControl && UITabControl->GetButtonById(section) &&
+        UITabControl->GetActiveId() != section)
+    {
+        const bool accelerators = UITabControl->GetAcceleratorsMode();
+        UITabControl->SetAcceleratorsMode(false);
+        UITabControl->SetActiveTab(section);
+        UITabControl->SetAcceleratorsMode(accelerators);
+    }
+
 	if (m_pActiveDialog)
 	{
 		//if (m_sActiveSection == section) return;

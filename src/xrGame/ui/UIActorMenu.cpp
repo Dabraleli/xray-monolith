@@ -227,8 +227,16 @@ void CUIActorMenu::Update()
 		}
 	case mmTrade:
 		{
+			CoopUpdateTradeSort();
 			if (m_pPartnerInvOwner->inventory().ModifyFrame() != m_trade_partner_inventory_state)
-				InitPartnerInventoryContents();
+            {
+                // Coop ownership events already add/remove individual cells in OnInventoryAction.
+                // Rebuilding here compacts every remaining item after a purchase or sale.
+                if (IsGameTypeCoop() && OnClient())
+                    m_trade_partner_inventory_state = m_pPartnerInvOwner->inventory().ModifyFrame();
+                else
+                    InitPartnerInventoryContents();
+            }
 			CheckDistance();
 			break;
 		}
@@ -433,7 +441,8 @@ void CUIActorMenu::InfoCurItem(CUICellItem* cell_item)
 			m_ItemInfo->InitItem(cell_item, compare_item, u32(-1), "st_no_trade_tip_1");
 		else if (eatable_item && eatable_item->GetMaxUses())
 			m_ItemInfo->InitItem(cell_item, compare_item, item_price);
-		else if (current_item->GetCondition() < m_pPartnerInvOwner->trade_parameters().buy_item_condition_factor)
+		else if (!(IsGameTypeCoop() && READ_IF_EXISTS(pSettings, r_bool, current_item->object().cNameSect(), "is_mag", false)) &&
+            current_item->GetCondition() < m_pPartnerInvOwner->trade_parameters().buy_item_condition_factor)
 			m_ItemInfo->InitItem(cell_item, compare_item, u32(-1), "st_no_trade_tip_2");
 		else
 			m_ItemInfo->InitItem(cell_item, compare_item, item_price);

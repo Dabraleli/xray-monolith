@@ -22,6 +22,8 @@ class CTraderAnimation
 	ref_sound* m_sound;
 
 	bool m_external_sound;
+	bool m_coop_relayed_sound = false;
+	u32 m_sound_started = 0;
 
 	// Coop: what the server Lua last asked for, replicated to clients (CAI_Trader::net_Export).
 	// Own copies: the LPCSTR fields above point into Lua strings.
@@ -56,7 +58,9 @@ public:
 
 	void external_sound_start(LPCSTR phrase);
 	void external_sound_stop();
+	// Ambient server lines must not replace or stop the local dialogue voice.
+	void coop_sound(LPCSTR path);
 
 private:
-	void remove_sound();
+	void remove_sound(bool notify_clients = true);
 };

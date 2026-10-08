@@ -3,6 +3,7 @@
 #include "ai_trader.h"
 #include "../../script_callback_ex.h"
 #include "../../game_object_space.h"
+#include "../../game_sv_coop.h"
 
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -15,6 +16,7 @@ void CTraderAnimation::reinit()
 	m_motion_global.invalidate();
 	m_sound = 0;
 	m_external_sound = 0;
+	m_coop_relayed_sound = false;
 
 	m_anim_global = 0;
 	m_anim_head = 0;
@@ -97,18 +99,24 @@ void CTraderAnimation::set_sound(LPCSTR sound, LPCSTR anim)
 
 	m_sound = xr_new<ref_sound>();
 	m_sound->create(sound, st_Effect, SOUND_TYPE_WORLD);
-	m_sound->play(m_trader);
+	m_sound->play_at_pos(m_trader, m_trader->Position());
+	m_sound_started = Device.dwTimeGlobal;
+	game_sv_Coop::RelayTraderSound(m_trader, sound);
 }
 
-void CTraderAnimation::remove_sound()
+void CTraderAnimation::remove_sound(bool notify_clients)
 {
 	VERIFY(m_sound);
+	if (IsGameTypeCoop() && strstr(Core.Params, "-coop_damage_probe"))
+		Msg("[COOP_TRADER_VOICE_END] id=%u remote=%u relayed=%u elapsed_ms=%u length_ms=%u notify=%u", m_trader->ID(), m_trader->Remote() ? 1 : 0, m_coop_relayed_sound ? 1 : 0, Device.dwTimeGlobal - m_sound_started, u32(m_sound->get_length_sec() * 1000.f), notify_clients ? 1 : 0);
+	if (notify_clients) game_sv_Coop::RelayTraderSound(m_trader, NULL);
 
 	if (m_sound->_feedback())
 		m_sound->stop();
 
 	m_sound->destroy();
 	xr_delete(m_sound);
+	m_coop_relayed_sound = false;
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -123,7 +131,9 @@ void CTraderAnimation::update_frame()
 		else
 		{
 			m_trader->callback(GameObject::eTraderSoundEnd)();
-			remove_sound();
+			// Each listener finishes its own emitter. The server may have no audible target;
+			// its natural completion must not truncate the remote listener's phrase.
+			remove_sound(false);
 		}
 	}
 
@@ -152,13 +162,39 @@ void CTraderAnimation::external_sound_start(LPCSTR phrase)
 
 	m_sound = xr_new<ref_sound>();
 	m_sound->create(phrase, st_Effect, SOUND_TYPE_WORLD);
-	m_sound->play(m_trader);
+	m_sound->play_at_pos(m_trader, m_trader->Position());
+	m_sound_started = Device.dwTimeGlobal;
+	m_coop_relayed_sound = false;
+	if (IsGameTypeCoop() && strstr(Core.Params, "-coop_damage_probe"))
+		Msg("[COOP_TRADER_VOICE] id=%u remote=%u path=%s playing=%u pos=%f,%f,%f", m_trader->ID(), m_trader->Remote() ? 1 : 0, phrase, m_sound->_feedback() ? 1 : 0, VPUSH(m_trader->Position()));
+	game_sv_Coop::RelayTraderSound(m_trader, phrase);
 
 	m_motion_head.invalidate();
 }
 
+void CTraderAnimation::coop_sound(LPCSTR path)
+{
+    if (path && *path)
+    {
+        // The talking player's UI owns an external phrase until it finishes or stops.
+        if (m_sound && !m_coop_relayed_sound && m_sound->_feedback()) return;
+        external_sound_start(path);
+        m_coop_relayed_sound = true;
+    }
+    else if (m_coop_relayed_sound && m_sound)
+        remove_sound(false); // explicit stop from the server owns this relayed slot
+}
+
 void CTraderAnimation::external_sound_stop()
 {
+	// UITalkWnd calls this even for an unvoiced line, and when closing the window.
+	// That UI owns local dialogue audio, not the server's greeting/farewell.
+	if (IsGameTypeCoop() && m_trader->Remote() && m_coop_relayed_sound)
+	{
+		if (strstr(Core.Params, "-coop_damage_probe"))
+			Msg("[COOP_TRADER_UI_STOP_IGNORED] id=%u elapsed_ms=%u", m_trader->ID(), Device.dwTimeGlobal - m_sound_started);
+		return;
+	}
 	if (m_sound) remove_sound();
 }
 

@@ -56,6 +56,8 @@ public:
 	void UpdateActorInfo(CInventoryOwner* owner);
 	void UpdateHitZone();
 
+	CUIWindow* m_coop_presentation = nullptr; // Lua-owned, prepared during Update, never Lua in Draw.
+	virtual void Update();
 	virtual void Draw();
 	virtual void Show(bool status);
 

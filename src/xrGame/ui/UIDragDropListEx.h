@@ -151,6 +151,7 @@ public:
 	void DestroyDragItem();
 	void ClearAll(bool bDestroy);
 	void Compact();
+	void ArrangeGroups(const xr_vector<CUICellItem*>& items, const xr_vector<int>& groups);
 	bool IsOwner(CUICellItem* itm);
 	void clear_select_armament();
 	Ivector2 PickCell(const Fvector2& abs_pos);

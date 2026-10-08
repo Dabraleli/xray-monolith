@@ -502,7 +502,10 @@ void CUITalkWnd::PlaySnd(LPCSTR text)
 	//	strconcat( sizeof(fn), fn, "characters_voice\\dialogs\\", text2, ".ogg" );
 
 	StopSnd();
-	if (FS.exist("$game_sounds$", fn))
+	const bool voice_exists = FS.exist("$game_sounds$", fn);
+	if (IsGameTypeCoop() && strstr(Core.Params, "-coop_damage_probe"))
+		Msg("[COOP_DIALOG_VOICE] file=%s exists=%u", fn, voice_exists ? 1 : 0);
+	if (voice_exists)
 	{
 		VERIFY(m_pActor);
 		if (!m_pActor->OnDialogSoundHandlerStart(m_pOthersInvOwner, fn))

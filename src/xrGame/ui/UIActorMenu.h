@@ -180,6 +180,8 @@ protected:
 	bool m_item_info_view;
 	bool m_highlight_clear;
 	u32 m_trade_partner_inventory_state;
+	xr_vector<std::pair<u16, u16>> m_coop_trade_sort_items; // confirmed item -> new owner
+	void CoopUpdateTradeSort();
 public:
 	CUIDragDropReferenceList* m_pQuickSlot;
 
@@ -346,6 +348,7 @@ public:
 	void xr_stdcall OnMesBoxNo(CUIWindow*, void*);
 
 	void OnInventoryAction(PIItem pItem, u16 action_type);
+	void CoopDealCompleted(u16 npc, u16 owner, const xr_vector<u16>& ids);
 	void CoopPricesChanged() { if (m_currMenuMode == mmTrade) UpdatePrices(); } // coop client: new server prices
 	void CoopMoneyChanged(); // coop client: the body's money arrived from the server
 	// Coop client, trade mode: the partner's items are placed by the server's trade events too.

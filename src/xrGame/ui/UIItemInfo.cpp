@@ -231,6 +231,7 @@ void CUIItemInfo::InitItem(CUICellItem* pCellItem, CInventoryItem* pCompareItem,
 {
 	if (!pCellItem)
 	{
+        m_coop_presentation = nullptr;
 		m_pInvItem = NULL;
 		Enable(false);
 		return;
@@ -463,8 +464,26 @@ void CUIItemInfo::TryAddBoosterInfo(CInventoryItem& pInvItem)
 	}
 }
 
+void CUIItemInfo::Update()
+{
+    inherited::Update();
+    m_coop_presentation = nullptr;
+    if (m_pInvItem && IsGameTypeCoop() && OnClient())
+    {
+        luabind::functor<CUIWindow*> draw;
+        if (ai().script_engine().functor("coop_native_presentation.item_info", draw))
+        {
+            CUIWindow* wnd = draw(m_pInvItem->object().lua_game_object(),
+                UICost && UICost->IsShown() ? UICost->GetText() : "",
+                UITradeTip && UITradeTip->IsShown() ? UITradeTip->GetText() : "");
+            m_coop_presentation = wnd;
+        }
+    }
+}
+
 void CUIItemInfo::Draw()
 {
-	if (m_pInvItem)
-		inherited::Draw();
+    if (!m_pInvItem) return;
+    if (m_coop_presentation) { m_coop_presentation->Draw(); return; }
+    if (m_pInvItem) inherited::Draw();
 }
