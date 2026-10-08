@@ -1681,6 +1681,9 @@ end
 -- body-part injuries, fed in SP by the balancer with the same threshold.
 local function apply_hit_report(parts)
     if not db.actor then return end
+    -- Hit reports invoke GAMMA directly, bypassing CActor::Hit's downed guard.
+    -- Reject the whole report before psy, limb and outfit/helmet listeners run.
+    if downed[db.actor:id()] then return end
     local hit_type, bone_id, who_id = tonumber(parts[2]), tonumber(parts[3]), tonumber(parts[4])
     local power, damage = tonumber(parts[5]) or 0, tonumber(parts[6]) or 0
     local dir = str_explode(parts[7] or '', ',')
@@ -2120,6 +2123,15 @@ function install_disguise_relay() -- module function: install_client_callbacks b
 end
 
 local function send_client_callback(name, ...)
+    if db.actor and downed[db.actor:id()] and
+        (name=='actor_on_before_hit' or name=='actor_on_hit_callback') then
+        if name=='actor_on_before_hit' then
+            local h,bone,flags=...
+            if h then h.power=0;h.impulse=0 end
+            if flags then flags.ret_value=false end
+        end
+        return
+    end
     local intercepts = client_intercepts()
     local list = intercepts and intercepts[name]
     if not list then return client_send_callback(name, ...) end
