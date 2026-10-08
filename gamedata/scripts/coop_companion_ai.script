@@ -1,0 +1,16 @@
+-- NPC weapon decisions belong to the server. Client replicas have no AI binder
+-- storage, even when replicated info portions identify them as companions.
+local disabled = function() end
+
+function install_client()
+    -- Do not require an optional GAMMA mod in an Anomaly-only installation.
+    local patch = package.loaded['illish.patches.xr_combat']
+    if type(patch) ~= 'table' or type(patch.onChooseWeapon) ~= 'function' then return end
+    local original = patch.onChooseWeapon
+    if original == disabled then return end
+    -- Remove the existing function reference as well as replacing the field:
+    -- idiots_on_start can register the field again after a reconnect.
+    UnregisterScriptCallback('npc_on_choose_weapon', original)
+    patch.onChooseWeapon = disabled
+    printf('[COOP_CLIENT] companion weapon AI kept on server')
+end

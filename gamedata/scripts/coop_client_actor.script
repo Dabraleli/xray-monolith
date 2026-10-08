@@ -219,23 +219,24 @@ local function install_client_globals()
         return nil
     end
     -- alife():create(...) of the mirror (CCoopAlifeMirror::create*): the id, -1 when refused
-    alife_create_id = function(section, pos, lvid, gvid, parent_id)
+    alife_create_id = function(section, pos, lvid, gvid, parent_id, ammo)
         if not section then return -1 end
+        local props = ammo and ammo >= 0 and { ammo = ammo } or nil
         local se = nil
         if parent_id and parent_id >= 0 and parent_id ~= 65535 then
-            se = _G.alife_create_item(section, { id = parent_id })
+            se = _G.alife_create_item(section, { id = parent_id }, props)
         else
-            se = create_and_wait(string.format('item|create|%s|world:%f,%f,%f,%d,%d|', section, pos.x, pos.y, pos.z,
-                tonumber(lvid) or db.actor:level_vertex_id(), tonumber(gvid) or db.actor:game_vertex_id()))
+            se = create_and_wait(string.format('item|create|%s|world:%f,%f,%f,%d,%d|%s', section, pos.x, pos.y, pos.z,
+                tonumber(lvid) or db.actor:level_vertex_id(), tonumber(gvid) or db.actor:game_vertex_id(), item_props_text(props)))
         end
         return se and se.id or -1
     end
     _G.alife_release = function(obj)
         local id = obj and (type(obj.id) == 'function' and obj:id() or type(obj.id) == 'number' and obj.id)
-        if id then item_verb('item|release|' .. id) end
+        if id then coop_magazine_lifecycle.prepare_release(id); item_verb('item|release|' .. id) end
     end
     _G.alife_release_id = function(id)
-        if id then item_verb('item|release|' .. id) end
+        if id then coop_magazine_lifecycle.prepare_release(id); item_verb('item|release|' .. id) end
     end
     -- The PDA's Lua tabs: contacts from the stalker replicas here (db.OnlineStalkers), relations
     -- and the ranking from the server's mirrors (install_pda below), asked for when the tab opens.
@@ -335,6 +336,7 @@ end
 
 local function store_collect()
     local data = store_state()
+    coop_player_injuries.capture(data)
     SendScriptCallback("save_state", data) -- every client-started module with a listener
     for _, name in ipairs(STORE_MODULES) do
         local module = _G[name]
@@ -419,6 +421,11 @@ local mags_carry_pending = {} -- magazine id -> retry deadline: the server says 
 mags_carry_next = 0 -- module field (the local budget of the main chunk is nearly spent)
 local mags_mirror = { asked = {}, pending = {}, sent = {} } -- id -> time asked; id -> a stand-in waits for the server's table; id -> the last text sent
 
+function magazine_ready(id)
+    magazine_binder.get_data(id) -- starts the request if only a placeholder is available
+    return not mags_mirror.pending[id]
+end
+
 local function mag_data_text(data)
     if data == nil then return '-' end
     if data == false then return 'false' end
@@ -435,10 +442,21 @@ end
 
 local function install_magazines()
     if not (magazine_binder and magazine_binder.set_data and magazine_binder.get_data and magazines) then return end
+    coop_magazine_lifecycle.install()
     local original_get, original_set = magazine_binder.get_data, magazine_binder.set_data
     magazine_binder.get_data = function(id)
         local data = original_get(id)
-        if data ~= nil or not id then return data end
+        if not id then return data end
+        -- A cached stand-in is not an authoritative reply. Keep requesting it
+        -- after a lost/early response, including immediately after level load.
+        if mags_mirror.pending[id] then
+            local now = time_global()
+            if not mags_mirror.asked[id] or now < mags_mirror.asked[id] or now - mags_mirror.asked[id] >= 5000 then
+                mags_mirror.asked[id] = now
+                level.coop_send_lua(0, string.format('mags|get|%d', id))
+            end
+        end
+        if data ~= nil then return data end
         local obj = level.object_by_id(id)
         if not obj then return data end
         local is_mag = magazines.is_magazine(obj)
@@ -447,7 +465,7 @@ local function install_magazines()
         -- get_data again on the way
         if not (is_mag or magazines.is_supported_weapon(obj:section())) then return data end
         local now = time_global()
-        if (mags_mirror.asked[id] or 0) + 5000 < now then
+        if not mags_mirror.asked[id] or now < mags_mirror.asked[id] or now - mags_mirror.asked[id] >= 5000 then
             mags_mirror.asked[id] = now
             level.coop_send_lua(0, string.format('mags|get|%d', id))
         end
@@ -500,7 +518,7 @@ end
 function repoint_magazine_captures() -- module function: install_presentation_layer above calls it
     if not magazine_binder then return end
     local captures = {
-        magazines = { get_mag_data = 'get_data', set_mag_data = 'set_data', toggle_carried_mag = 'toggle_carried_mag', is_carried_mag = 'is_carried_mag' },
+        magazines = { get_mag_data = 'get_data', set_mag_data = 'set_data', toggle_carried_mag = 'toggle_carried_mag', is_carried_mag = 'is_carried_mag', get_carried_mags = 'get_carried_mags' },
         magazines_loot = { get_data = 'get_data', set_data = 'set_data', create_mag_data = 'create_mag_data' },
         mags_patches = { get_data = 'get_data', set_data = 'set_data', toggle_carried_mag = 'toggle_carried_mag', is_carried_mag = 'is_carried_mag', create_mag_data = 'create_mag_data' },
     }
@@ -686,10 +704,40 @@ end
 -- sees and hears: sounds, screen effects, HUD indicators, wave and vortex particles. The server
 -- starts and ends it (surge|start, surge|end, psi|start, psi|end), places the wave planes and the
 -- vortices (surge|wave, psi|vortex) and tells the cover state (surge|cover), which replaces
--- actor_status' zone scan — there are no zones on the client. Hits the managers deal here are
+-- actor_status' zone scan вЂ” there are no zones on the client. Hits the managers deal here are
 -- events the server drops; the real ones are the server's.
 local emissions_installed = false
 local cover_current, cover_near = false, false
+
+-- SP publishes the inactive state on the next manager update. On a coop client
+-- inactive managers are not ticked, so publish it here as well as on teardown.
+local function sync_emission_hud(reset)
+    local sm = surge_manager.SurgeManager
+    local pm = psi_storm_manager.PsiStormManager
+    local surge = not reset and sm and sm.started or false
+    local psi = not reset and pm and pm.started or false
+    SetEvent('surge', 'state', surge)
+    SetEvent('psi_storm', 'state', psi)
+    if not psi then SetEvent('psi_storm', 'vortex', false) end
+    if not surge and not psi then
+        local cover = rawget(_G, 'dynamic_emission_cover_mcm')
+        if cover and cover.deactivate_hud then cover.deactivate_hud() end
+    end
+end
+
+local function install_emission_hud_guard()
+    local cover = rawget(_G, 'dynamic_emission_cover_mcm')
+    local class = cover and cover.DynamicCoverUI
+    if not class then return end
+    local update = class.Update
+    class.Update = function(self)
+        if not db.actor then
+            self.dialog:Show(false)
+            return
+        end
+        return update(self)
+    end
+end
 
 local function parse_time(text)
     local p = str_explode(text or '', ',')
@@ -833,13 +881,14 @@ local function apply_emission(parts)
         elseif op == 'vortex' then psi_vortex(tonumber(parts[3]) or 0, tonumber(parts[4]) or 0, tonumber(parts[5]) or 0, tonumber(parts[6]) or 0)
         end
     end
+    sync_emission_hud(false)
 end
 
 -- ---- Sleep and tutorials ------------------------------------------------------------------------
 -- Sleeping is the SP dialog (ui_sleep_dialog) on this client: the sleep zones start its "press use"
 -- tutorial through the server (zone logic runs there, game.start_tutorial is relayed), the dialog's
--- checks read the cover state the server sends, and the time skip is the server's: the dialog asks
--- for it (sleep|hours) and the world's clock moves for everyone. The other players get the blackout.
+-- checks read the cover state the server sends. The button asks for unanimous consent;
+-- only a server commit advances time and rests each participating player.
 local sleep_installed = false
 
 local function install_sleep()
@@ -851,26 +900,7 @@ local function install_sleep()
         give_info('sleep_active')
         ui_sleep_dialog.sleep()
     end
-    -- SP dream_callback: the waking effector, the time skip and actor_on_sleep; the skip is the server's
-    ui_sleep_dialog.dream_callback = function()
-        local gui = ui_sleep_dialog.GUI
-        local hours = gui and (gui.forced or gui.time_track:GetIValue()) or 0
-        if gui and gui.forced then
-            level.add_cam_effector('camera_effects\\surge_01.anm', 10, false, 'ui_sleep_dialog.dream_callback2')
-        else
-            level.add_cam_effector('camera_effects\\sleep.anm', 10, false, 'ui_sleep_dialog.dream_callback2')
-        end
-        level.coop_send_lua(0, 'sleep|' .. tostring(hours))
-        SendScriptCallback('actor_on_sleep', hours) -- this player's thirst and sleep deprivation
-        printf('[COOP_CLIENT] SLEEP hours=%s', tostring(hours))
-    end
-end
-
-local function apply_sleep(hours, sleeper)
-    if sleeper == AC_ID then return end -- the sleeper's own dialog plays its sequence
-    level.add_pp_effector('surge_fade.ppe', 11, false)
-    actor_menu.set_msg(1, string.format('%s hours pass while a companion sleeps', tostring(hours)), 6)
-    printf('[COOP_CLIENT] SLEEP by=%s hours=%s', tostring(sleeper), tostring(hours))
+    coop_sleep_vote.install_client()
 end
 
 local function apply_tutorial(op, name)
@@ -884,7 +914,7 @@ end
 -- Level transitions: the SP box (ui_sr_teleport.msg_box_ui) opens here when the server's zone
 -- logic asks for it (srteleport|ask); "yes" asks the server for the change (it moves everyone
 -- once the others stand near), "no" steps back to the zone's reject point as in SP. The zone
--- checks (section, known route) are the server's — the box's own are bypassed.
+-- checks (section, known route) are the server's вЂ” the box's own are bypassed.
 local sr_teleport_installed = false
 local sr_teleport_box = nil
 
@@ -931,11 +961,11 @@ local downed_texts = {
             revived_self = 'You are back on your feet', revived_other = '%s is back up',
             died_self = 'You died. Your body and gear stay where you fell', died_other = '%s died',
             respawn_self = 'A new life at the level entry, empty-handed' },
-    rus = { revive = 'Поднять', down_self = 'Вы ранены. Ждите помощи: %d с', down_other = '%s ранен!',
-            reviving = 'Поднимаем %s: %d%%', being_revived = '%s поднимает вас: %d%%',
-            revived_self = 'Вы снова на ногах', revived_other = '%s снова на ногах',
-            died_self = 'Вы погибли. Тело и снаряжение остались на месте', died_other = '%s погиб',
-            respawn_self = 'Новая жизнь у входа на уровень, с пустыми руками' },
+    rus = { revive = 'РџРѕРґРЅСЏС‚СЊ', down_self = 'Р’С‹ СЂР°РЅРµРЅС‹. Р–РґРёС‚Рµ РїРѕРјРѕС‰Рё: %d СЃ', down_other = '%s СЂР°РЅРµРЅ!',
+            reviving = 'РџРѕРґРЅРёРјР°РµРј %s: %d%%', being_revived = '%s РїРѕРґРЅРёРјР°РµС‚ РІР°СЃ: %d%%',
+            revived_self = 'Р’С‹ СЃРЅРѕРІР° РЅР° РЅРѕРіР°С…', revived_other = '%s СЃРЅРѕРІР° РЅР° РЅРѕРіР°С…',
+            died_self = 'Р’С‹ РїРѕРіРёР±Р»Рё. РўРµР»Рѕ Рё СЃРЅР°СЂСЏР¶РµРЅРёРµ РѕСЃС‚Р°Р»РёСЃСЊ РЅР° РјРµСЃС‚Рµ', died_other = '%s РїРѕРіРёР±',
+            respawn_self = 'РќРѕРІР°СЏ Р¶РёР·РЅСЊ Сѓ РІС…РѕРґР° РЅР° СѓСЂРѕРІРµРЅСЊ, СЃ РїСѓСЃС‚С‹РјРё СЂСѓРєР°РјРё' },
 }
 
 local function downed_text(key)
@@ -956,14 +986,15 @@ local function hud_text(static_name, text)
     if static then static:wnd():TextControl():SetText(text) end
 end
 
+local downed_weapon_hidden = false
 local function downed_self_apply(on)
     if not db.actor then return end
     if on then
-        db.actor:hide_weapon()
+        if not downed_weapon_hidden then db.actor:hide_weapon();downed_weapon_hidden=true end
         level.add_pp_effector('bloody.ppe', DOWNED_PPE, true)
     else
         level.remove_pp_effector(DOWNED_PPE)
-        db.actor:restore_weapon()
+        if downed_weapon_hidden then db.actor:restore_weapon();downed_weapon_hidden=false end
         hud_text('mp_force_respawn_time', nil)
         hud_text('mp_warm_up', nil)
     end
@@ -1243,6 +1274,7 @@ end
 local function start_item_modules()
     if item_modules_started or not item_parts then return end
     item_modules_started = true
+    coop_torch.install_client(item_verb)
     local modules = { 'item_repair', 'item_cooking', 'item_map_kit', 'item_money', 'item_backpack', 'item_tent', 'item_parts', 'item_weapon', 'item_device' }
     for _, name in ipairs(modules) do
         local module = _G[name]
@@ -1601,6 +1633,7 @@ local function update_emissions()
     if sm and sm.started then sm:update() end
     local pm = psi_storm_manager.PsiStormManager
     if pm and pm.started then pm:update() end
+    sync_emission_hud(false)
 end
 
 -- ---- Fast travel (game_fast_travel) ------------------------------------------------------------------
@@ -1663,6 +1696,16 @@ local function apply_hit_report(parts)
             tostring(who_id), tostring(power), tostring(damage), tostring(db.actor.health))
     end
     local flags = { ret_value = true }
+    -- GAMMA routes psy damage through its balancer into arszi_psy's local
+    -- state. The generic balancer callback is skipped here to avoid applying
+    -- physical damage twice, so invoke only its psy branch for server reports.
+    local balancer = rawget(_G, 'grok_actor_damage_balancer')
+    if hit_type == hit.telepatic and power > 0 and balancer and balancer.psi_damage then
+        -- Server settings replace diff_game after the modules' first update;
+        -- refresh the balancer's cached table before using its psy-only entry.
+        balancer.actor_on_first_update()
+        balancer.psi_damage(who and who:section() or '', h, bone_id or 65535, flags)
+    end
     SendScriptCallback('actor_on_before_hit', h, bone_id or 65535, flags)
     if damage > 0 then
         SendScriptCallback('actor_on_hit_callback', db.actor, damage, h.direction, who, bone_id or 65535)
@@ -1677,7 +1720,9 @@ function on_server_lua(text)
     if type(text) ~= "string" or text == "" then return end
     local parts = str_explode(text, '|')
     local kind = parts[1]
-    if kind == 'psi_order' then
+    if kind == 'loot_lock' then
+        coop_loot_lock.client_reply(parts)
+    elseif kind == 'psi_order' then
         coop_psi_helmet.on_message(parts)
     elseif kind == 'hit' then
         apply_hit_report(parts)
@@ -1755,8 +1800,8 @@ function on_server_lua(text)
         -- The server console loads a save: the world restarts, this client is dropped and returns by itself.
         actor_menu.set_msg(1, 'Server loads "' .. tostring(parts[2] or '') .. '": reconnecting in a minute', 30)
         printf('[COOP_CLIENT] SERVER_RELOAD name=%s', tostring(parts[2]))
-    elseif kind == 'sleep' then
-        apply_sleep(tonumber(parts[2]) or 0, tonumber(parts[3]))
+    elseif kind == 'sleep_vote' then
+        coop_sleep_vote.client_reply(parts)
     elseif kind == 'tutorial' then
         apply_tutorial(parts[2], parts[3])
     elseif kind == 'srteleport' and parts[2] == 'ask' then
@@ -1854,7 +1899,7 @@ local LOADER_OWN = {
     ce_switcher = true, lua_help = true, rx_gl = true,
 }
 local LOADER_ALLOW = { xrs_dyn_music = true } -- presentation modules caught by a world prefix
--- GAMMA (73 §4, side "server"): spawners, ZCP, level changes, NPC rules - world modules with an
+-- GAMMA (73 В§4, side "server"): spawners, ZCP, level changes, NPC rules - world modules with an
 -- on_game_start whose client copy would spawn or move things it has no right to (the server
 -- refuses the creations as "too far", but the modules keep trying every update).
 local LOADER_WORLD_GAMMA = {
@@ -1919,6 +1964,13 @@ end
 
 local function start_script_modules()
     load_script_modules()
+    coop_loot_actions.install_client(rpc, function(id,result)
+        parts_mirror[id]=result.parts
+        parts_se_var(id,result.parts)
+        -- Ask for the authoritative magazine snapshot without writing the mirror back.
+        item_verb('mags|get|' .. id)
+    end)
+    install_emission_hud_guard()
     local loaded = loader_loaded
     local probe = loader_probe()
     local fatal_window = _G.COnLuaBindFatalError
@@ -1929,6 +1981,7 @@ local function start_script_modules()
     for _, name in ipairs(loaded) do
         local module = rawget(_G, name)
         if module and type(rawget(module, 'on_game_start')) == 'function' then
+            if name == 'tb_rf_receiver_packages' then coop_rf_packages.install(module, rpc) end
             local ok, err = pcall(module.on_game_start)
             if ok then
                 started = started + 1
@@ -1948,6 +2001,8 @@ local function start_script_modules()
         printf('%s[COOP_LOADER] global on_game_start (%s) started once: %s', ok and '' or '! ', tostring(info and info.short_src), ok and 'ok' or tostring(err))
     end
     _G.COnLuaBindFatalError = fatal_window
+    coop_companion_ai.install_client()
+    coop_loot_lock.install_client(function(text) level.coop_send_lua(0, text) end)
     printf('[COOP_LOADER] loaded=%s started=%s failed=%s probe=%s', tostring(#loaded),
         tostring(started), tostring(failed), tostring(probe))
 end
@@ -2137,7 +2192,7 @@ local function install_presentation_layer()
     install_mutant_loot()
     -- Script sound themes (xr_sound: looting, emission rumble and sirens); SP loads them in the binder.
     if sound_theme and sound_theme.load_sound and next(sound_theme.theme or {}) == nil then sound_theme.load_sound() end
-    -- Safe covers are ALife server objects; the client keeps no list — the server tells the state (surge|cover).
+    -- Safe covers are ALife server objects; the client keeps no list вЂ” the server tells the state (surge|cover).
     actor_status.prepare_safe_zone = function() end
     install_emissions()
     install_sleep()
@@ -2177,6 +2232,7 @@ local function install_presentation_layer()
     end)
     install_client_callbacks()
     start_script_modules()
+    coop_client_events.install()
     coop_server_saves.install_client()
     -- The magazine tables are the mirror's (install_magazines above): the kept state's load_state
     -- pass (store_apply below) must not replace them - the mod's listener resets its tables to the
@@ -2251,6 +2307,7 @@ end
 function client_actor:release_actor()
     if self.released then return end
     self.released = true
+    downed_weapon_hidden = false
     -- The body may be gone already (its net_destroy did not run to the end: a C++ exception in
     -- a listener, GAMMA 17.09): self.object is nil then and db.actor is a reference not to touch.
     local obj = self.object
@@ -2296,6 +2353,25 @@ end
 -- player's per-life module state that SP would reset by loading a save. GAMMA Player Injuries: the
 -- body parts are whole again (the tables are the module's globals; the new body's pstor is empty).
 local function new_life_reset()
+    coop_magazine_lifecycle.reset()
+    local psy = rawget(_G, 'arszi_psy')
+    if psy then
+        local state = alife_storage_manager.get_state()
+        state.psy_table = { actor_psy_health = 1 }
+        psy.load_state(state)
+        psy.remove_all_psy_ppe_effects()
+        for _, fn in ipairs({ psy.manage_zombification, psy.manage_sound_effects }) do
+            for i = 1, 40 do
+                local name, value = debug.getupvalue(fn, i)
+                if not name then break end
+                if name == 'sound_psy_death_scene' or name == 'sound_zombified' then value:stop() end
+            end
+        end
+        level.enable_input()
+        printf('[COOP_CLIENT] NEW_LIFE psy_health=1')
+    end
+    mags_carry_pending = {}
+    mags_mirror = { asked = {}, pending = {}, sent = {} }
     local injuries = rawget(_G, 'zzz_player_injuries')
     if injuries and type(injuries.health) == 'table' and type(injuries.maxhp) == 'table' then
         for part, max in pairs(injuries.maxhp) do
@@ -2329,6 +2405,7 @@ function client_actor:net_spawn(se)
     -- The Anomaly constant "actor id" (0 in _g.script) is this player's body here: the presentation
     -- modules address their sounds and item checks by it (xr_sound looped sounds: db.storage[AC_ID]).
     _G.AC_ID = self.object:id()
+    coop_player_injuries.restore(store_state(), self.object)
     self.first_update_pending = true
     reset_item_animations()
     spawn_generation = spawn_generation + 1
@@ -2393,6 +2470,9 @@ function client_actor:update(delta)
     update_contacts()
     local now = time_global()
     coop_psi_helmet.client_update()
+    coop_loot_lock.client_update()
+    coop_loot_actions.client_update()
+    coop_sleep_vote.client_update()
     coop_world_settings.client_update()
     eat_probe_update(self, now)
     place_probe_update(self, now)
@@ -2775,11 +2855,11 @@ local coop_texts = {
             give_sent = 'You gave %s %d RU', give_got = '%s gave you %d RU', give_fail = 'Nothing given: %s',
             fail_no_player = 'no such player here', fail_self = 'that is you', fail_sum = 'no such sum', fail_far = 'too far',
             hud_line = '%s  %s  %s', hud_far = 'far', hud_down = 'DOWN', hud_m = '%d m' },
-    rus = { teammate_use = 'Передать деньги', give_title = 'Передать деньги: %s', give_info = 'У вас %d руб.', give_amount = 'Рублей:',
-            btn_give = 'Передать', btn_cancel = 'Отмена', give_bad = 'Введите целую сумму, которая у вас есть',
-            give_sent = 'Вы передали %s %d руб.', give_got = '%s передал вам %d руб.', give_fail = 'Не передано: %s',
-            fail_no_player = 'игрока здесь нет', fail_self = 'это вы сами', fail_sum = 'нет такой суммы', fail_far = 'слишком далеко',
-            hud_line = '%s  %s  %s', hud_far = 'далеко', hud_down = 'РАНЕН', hud_m = '%d м' },
+    rus = { teammate_use = 'РџРµСЂРµРґР°С‚СЊ РґРµРЅСЊРіРё', give_title = 'РџРµСЂРµРґР°С‚СЊ РґРµРЅСЊРіРё: %s', give_info = 'РЈ РІР°СЃ %d СЂСѓР±.', give_amount = 'Р СѓР±Р»РµР№:',
+            btn_give = 'РџРµСЂРµРґР°С‚СЊ', btn_cancel = 'РћС‚РјРµРЅР°', give_bad = 'Р’РІРµРґРёС‚Рµ С†РµР»СѓСЋ СЃСѓРјРјСѓ, РєРѕС‚РѕСЂР°СЏ Сѓ РІР°СЃ РµСЃС‚СЊ',
+            give_sent = 'Р’С‹ РїРµСЂРµРґР°Р»Рё %s %d СЂСѓР±.', give_got = '%s РїРµСЂРµРґР°Р» РІР°Рј %d СЂСѓР±.', give_fail = 'РќРµ РїРµСЂРµРґР°РЅРѕ: %s',
+            fail_no_player = 'РёРіСЂРѕРєР° Р·РґРµСЃСЊ РЅРµС‚', fail_self = 'СЌС‚Рѕ РІС‹ СЃР°РјРё', fail_sum = 'РЅРµС‚ С‚Р°РєРѕР№ СЃСѓРјРјС‹', fail_far = 'СЃР»РёС€РєРѕРј РґР°Р»РµРєРѕ',
+            hud_line = '%s  %s  %s', hud_far = 'РґР°Р»РµРєРѕ', hud_down = 'Р РђРќР•Рќ', hud_m = '%d Рј' },
 }
 local function coop_text(key)
     local lang = 'eng'
@@ -2828,6 +2908,7 @@ end
 function teammates_hud_update(now) -- module function: client_actor:update above calls it
     if now < mates.next then return end
     mates.next = now + 500
+    coop_teammate_spots.update(mates.list, db.actor and db.actor:id())
     local hud = get_hud()
     if not hud then return end
     local own = db.actor and db.actor:id()
@@ -3186,7 +3267,11 @@ function client_actor:net_destroy()
         return
     end
     coop_server_saves.client_reset()
+    coop_loot_lock.client_reset()
+    coop_sleep_vote.client_reset()
+    coop_teammate_spots.reset()
     coop_world_settings.client_reset()
+    sync_emission_hud(true)
     store_send() -- best effort; the periodic copy is at most store_interval old
     bind_stalker_ext.actor_on_net_destroy(self) -- actor_status removes its HUD
     for cb, func in pairs(client_callbacks()) do
@@ -3202,4 +3287,22 @@ function client_actor:net_destroy()
     if RemoveUniqueCall and ProcessEventQueue then RemoveUniqueCall(ProcessEventQueue) end
     printf('[COOP_CLIENT] LUA_ACTOR_RELEASE id=%s', tostring(self.object:id()))
     object_binder.net_destroy(self)
+end
+
+-- Presentation bridge for native coop trade. SortingPlus remains the source of categories/settings.
+function trade_sort_key(id, actor_bag)
+    local sorting = rawget(_G, 'zzz_rax_sortingplus_mcm')
+    if not sorting or type(sorting.get_sort_kind) ~= 'function' or type(sorting.item_order) ~= 'table' then return -32768 end
+    if (actor_bag and not sorting.PLAYERTRADE) or (not actor_bag and not sorting.NPCTRADE) then return -32768 end
+    local obj = level.object_by_id(id)
+    if not obj then return -32768 end
+    local sec = obj:section()
+    local kind = sorting.get_sort_kind(sec)
+    local favorites = sorting.favorite_itms or {}
+    local junk = sorting.junk_itms or {}
+    kind = (sorting.SORTFAVS and favorites[sec]) or (sorting.SORTJUNK and junk[sec]) or kind
+    if magazine_binder and magazine_binder.is_carried_mag and magazine_binder.is_carried_mag(id) then kind = 'loadout' end
+    local rank = tonumber(sorting.item_order[kind] or sorting.item_order.na)
+    if not rank or rank ~= rank or rank < -32767 or rank > 32767 then return -32768 end
+    return math.floor(rank)
 end

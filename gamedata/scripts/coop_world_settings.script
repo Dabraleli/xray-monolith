@@ -130,7 +130,7 @@ function client_message(parts)
     if parts[2]=='choose' then
         local id=coop_menu.load_identity()
         if not preset(id.difficulty) or not preset(id.economy) then
-            actor_menu.set_msg(1,'Выберите сложности в меню «Персонаж» и подключитесь снова.',12)
+            actor_menu.set_msg(1,'Р’С‹Р±РµСЂРёС‚Рµ СЃР»РѕР¶РЅРѕСЃС‚Рё РІ РјРµРЅСЋ В«РџРµСЂСЃРѕРЅР°Р¶В» Рё РїРѕРґРєР»СЋС‡РёС‚РµСЃСЊ СЃРЅРѕРІР°.',12)
             printf('! [COOP_SETTINGS] CHOICE_MISSING');return
         end
         level.coop_send_lua(0,'world_settings|choose|'..id.difficulty..'|'..id.economy..'|'..(id.opened_routes and '1' or '0'))

@@ -1,0 +1,124 @@
+local locks = {}
+local pending, active, send, original_start, wrapped_start, next_ping
+local serial = 0
+local delayed_guard_installed=false
+function server_owns(body, id)
+    local lock=locks[id]
+    local obj=level.object_by_id(id)
+    local now=time_global()
+    local valid=lock and lock.owner==body:id() and now>=lock.at and now-lock.at<=5000
+        and obj and IsStalker(obj) and not obj:alive() and body:alive()
+        and obj:position():distance_to_sqr(body:position())<=64
+    if not valid then printf('[COOP_LOOT] DENY body=%s corpse=%s owner=%s age=%s distance=%s',body:id(),id,lock and lock.owner or -1,lock and now-lock.at or -1,obj and obj:position():distance_to_sqr(body:position()) or -1) end
+    return valid
+end
+function server_request(body, parts)
+    local id, token = tonumber(parts[3]), tonumber(parts[4])
+    if not id or not token then return end
+    local now = time_global()
+    if parts[2]~='ping' then printf('[COOP_LOOT] REQUEST body=%s verb=%s corpse=%s token=%s',body:id(),parts[2],id,token) end
+    local lock = locks[id]
+    if lock and (now < lock.at or now - lock.at > 5000 or not level.object_by_id(lock.owner)) then
+        locks[id] = nil; lock = nil
+    end
+    if parts[2] == 'close' then
+        if lock and lock.owner == body:id() and lock.token == token then locks[id] = nil end
+        return
+    end
+    local obj = level.object_by_id(id)
+    local valid = obj and IsStalker(obj) and not obj:alive() and body:alive()
+        and obj:position():distance_to_sqr(body:position()) <= 64
+    if parts[2] == 'open' and valid and (not lock or lock.owner == body:id()) then
+        locks[id] = {owner=body:id(),token=token,at=now}
+        level.coop_send_lua(body:id(),string.format('loot_lock|ok|%d|%d',id,token))
+    elseif parts[2] == 'ping' and valid and lock and lock.owner == body:id() and lock.token == token then
+        lock.at = now
+        level.coop_send_lua(body:id(),string.format('loot_lock|alive|%d|%d',id,token))
+    else
+        level.coop_send_lua(body:id(),string.format('loot_lock|busy|%d|%d',id,token))
+    end
+end
+local function close(lock)
+    if lock then send(string.format('loot_lock|close|%d|%d',lock.id,lock.token)) end
+end
+function install_client(sender)
+    send = sender
+    if not delayed_guard_installed and liz_fdda_redone_body_search then
+        local f=liz_fdda_redone_body_search.start_body_search
+        for i=1,60 do
+            local name,base=debug.getupvalue(f,i)
+            if not name then break end
+            if name=='baseUIS' and type(base)=='function' then
+                -- Guard the Lua opening function captured by FDDA, not the native virtual ShowDialog.
+                debug.setupvalue(f,i,function(mode,obj)
+                    if mode=='loot' and obj and IsStalker(obj) and not obj:alive()
+                        and (not active or active.id~=obj:id() or time_global()-active.at>4000) then return end
+                    return base(mode,obj)
+                end)
+                delayed_guard_installed=true
+                break
+            end
+        end
+    end
+    if not ui_inventory or not ui_inventory.start or ui_inventory.start == wrapped_start then return end
+    original_start = ui_inventory.start
+    wrapped_start = function(mode,obj)
+        if mode ~= 'loot' or not obj or not IsStalker(obj) or obj:alive() then return original_start(mode,obj) end
+        if ui_inventory.GUI and ui_inventory.GUI:IsShown() then return end
+        if pending and time_global()-pending.at < 5000 then return end
+        close(active);active=nil
+        serial=serial+1
+        pending={id=obj:id(),token=serial,at=time_global()}
+        send(string.format('loot_lock|open|%d|%d',pending.id,pending.token))
+    end
+    ui_inventory.start = wrapped_start
+end
+function client_reply(parts)
+    local id,token=tonumber(parts[3]),tonumber(parts[4])
+    if parts[2]~='alive' then printf('[COOP_LOOT] REPLY verb=%s corpse=%s token=%s pending=%s',parts[2],id,token,pending and pending.id or -1) end
+    if parts[2]=='alive' then
+        if active and active.id==id and active.token==token then active.at=time_global() end
+        return
+    end
+    if active and active.id==id and active.token==token and parts[2]=='busy' then
+        if ui_inventory.GUI and ui_inventory.GUI:IsShown() then ui_inventory.GUI:HideDialog() end
+        active=nil;return
+    end
+    if not pending or pending.id~=id or pending.token~=token then
+        if parts[2]=='ok' then close({id=id,token=token}) end
+        return
+    end
+    local request=pending;pending=nil
+    local obj=level.object_by_id(id)
+    if parts[2]=='ok' and obj and db.actor and db.actor:alive() and not db.actor:is_talking()
+        and time_global()-request.at<5000 then
+        active=request;active.at=time_global();active.opening=time_global();next_ping=0
+        original_start('loot',obj)
+        return
+    end
+    close(request)
+    if parts[2]=='busy' and actor_menu and actor_menu.set_msg then
+        actor_menu.set_msg(1, 'Тело уже обыскивает другой игрок', 3)
+    end
+    printf('[COOP_CLIENT] LOOT_LOCK unavailable corpse=%s',id)
+end
+function client_update()
+    if not active then return end
+    local gui=ui_inventory.GUI
+    local now=time_global()
+    local opening=active.opening and now>=active.opening and now-active.opening<10000
+    local shown=gui and gui:IsShown() and gui.mode=='loot' and gui.npc_id==active.id
+    if shown then active.opening=nil end
+    if (not opening and not shown) or now<active.at or now-active.at>4000 then
+        printf('[COOP_LOOT] CLOSE corpse=%s opening=%s shown=%s age=%s',active.id,tostring(opening),tostring(shown),now-active.at)
+        if gui and gui:IsShown() and gui.mode=='loot' and gui.npc_id==active.id then gui:HideDialog() end
+        close(active);active=nil;return
+    end
+    if now>=next_ping then
+        next_ping=now+1000
+        send(string.format('loot_lock|ping|%d|%d',active.id,active.token))
+    end
+end
+function client_reset()
+    close(active);close(pending);active=nil;pending=nil
+end

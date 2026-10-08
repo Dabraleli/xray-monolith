@@ -69,7 +69,83 @@ local player_enc = {} -- PDA encyclopedia unlocks per player (name -> { articles
 
 function on_world_loaded(name) -- called by the engine (game_sv_Coop::Create)
     loaded_save = name
+    -- Saved se_actor instances remember that the initial population was created,
+    -- but SIMBOARD's process-local latch is fresh after loading. A newly joining
+    -- player's se_actor must not fill the entire Zone again.
+    sim_board.get_sim_board().start_position_filled = true
     printf('[COOP_SERVER] WORLD_LOADED save=%s', tostring(name))
+end
+
+-- Repair the named single-member squads created by the old repeated initial
+-- population bug. The story registry owns the surviving NPC; section equality
+-- alone is never sufficient (ordinary stalkers may legitimately share it).
+function repair_duplicate_story_npcs()
+    local sim = alife()
+    local replacements, squads = {}, {}
+    local function single_member(squad, id)
+        if not (squad and squad.squad_members) then return false end
+        local count = 0
+        for member in squad:squad_members() do
+            if member.id ~= id then return false end
+            count = count + 1
+        end
+        return count == 1
+    end
+    for id = 1, 65534 do
+        local obj = sim:object(id)
+        if obj and IsStalker(nil, obj:clsid()) and obj:alive() then
+            local section = obj:section_name()
+            local story = ini_sys:r_string_ex(section, 'story_id')
+            local keeper_id = story and story_objects.object_id_by_story_id[story]
+            local keeper = keeper_id and keeper_id ~= id and sim:object(keeper_id)
+            local spawn_ini = obj:spawn_ini()
+            -- Spawn-specific story assignments are outside this migration.
+            if keeper and not (spawn_ini and spawn_ini:section_exist('story_object'))
+                and keeper:section_name() == section and keeper:alive()
+                and story_objects.story_id_by_object_id[id] == nil then
+                local squad = obj.group_id and sim:object(obj.group_id)
+                local kept_squad = keeper.group_id and sim:object(keeper.group_id)
+                if single_member(squad, id) and single_member(kept_squad, keeper_id)
+                    and squad:section_name() == kept_squad:section_name() then
+                    replacements[id] = keeper_id
+                    squads[id] = squad
+                    printf('[COOP_NPC_REPAIR] duplicate=%s keeper=%s story=%s squad=%s', id, keeper_id, story, squad.id)
+                else
+                    printf('! [COOP_NPC_REPAIR] skipped ambiguous squad npc=%s story=%s', id, story)
+                end
+            end
+        end
+    end
+    -- Tasks taken from a duplicate must still be returnable to the original.
+    -- Do not alter task stages, status, rewards or ordinary NPC targets.
+    for task_id, task in pairs(task_manager.get_task_manager().task_info) do
+        local giver = replacements[task.task_giver_id]
+        if giver then
+            printf('[COOP_NPC_REPAIR] task=%s giver=%s -> %s', task_id, task.task_giver_id, giver)
+            task.task_giver_id = giver
+        end
+        local target = replacements[task.current_target]
+        if target then
+            task.current_target = target
+            if task.t then task.t:change_map_location(task.spot, target) end
+        end
+    end
+    local count = 0
+    for id, squad in pairs(squads) do
+        local obj = sim:object(id)
+        squad.current_action = nil
+        SIMBOARD:assign_squad_to_smart(squad, nil)
+        SIMBOARD.squads[squad.id] = nil
+        local smart = obj.m_smart_terrain_id and sim:object(obj.m_smart_terrain_id)
+        if smart then smart:unregister_npc(obj) end
+        squad:unregister_member(id)
+        safe_release_manager.release(obj)
+        squad:hide()
+        safe_release_manager.release(squad)
+        count = count + 1
+    end
+    printf('[COOP_NPC_REPAIR] queued=%s', count)
+    return count
 end
 
 function server_actor.save_world_state(obj, m_data) -- obj: the world actor's game object, looked up at the save
@@ -224,7 +300,7 @@ end
 -- difficulty factors) with the player's presentation (HUD, screen effects, sounds, per-player
 -- status). The clients run the presentation modules against their own body (coop_client_actor);
 -- the world actor runs the rest here. Listeners of the presentation modules are skipped by script
--- name; every other listener runs under pcall — an error is reported once and the listener
+-- name; every other listener runs under pcall â€” an error is reported once and the listener
 -- disabled, where the engine would otherwise stop the headless server (lua_pcall_failed is fatal).
 local WORLD_SKIP = {
     on_game_load = {
@@ -232,7 +308,7 @@ local WORLD_SKIP = {
         ui_pda_encyclopedia_tab = true, ui_pda_radio_tab = true, ui_sleep_dialog = true,
         -- game_relations.reset_all_relations (a fresh world) copies [communities_relations] rows by
         -- position into its own, older, faction order (no army_npc/greh_npc columns): stalker gets
-        -- the killer column (-2000) for stalker and actor_stalker — everyone fought everyone (109).
+        -- the killer column (-2000) for stalker and actor_stalker â€” everyone fought everyone (109).
         -- The engine has already loaded the matrix by name; the saved-game restore (load_relation,
         -- by name) is for the saves stage.
         game_relations = true,
@@ -950,6 +1026,37 @@ end
 function install_emissions() -- module function: called from install_world_callbacks above
     local SM = surge_manager.CSurgeManager
     local PM = psi_storm_manager.CPsiStormManager
+    local balancer = rawget(_G, 'grok_actor_damage_balancer')
+    if balancer and balancer.psi_damage then
+        local psi_damage = balancer.psi_damage
+        balancer.psi_damage = function(section, s_hit, bone_id, flags)
+            if context_body() then
+                -- arszi_psy's per-player state lives on the owning client,
+                -- which applies this branch once from the server hit report.
+                s_hit.power = 0
+                flags.ret_value = false
+                return
+            end
+            return psi_damage(section, s_hit, bone_id, flags)
+        end
+    end
+    -- SP excludes actor ID 0 from its friendly-NPC guard. Coop actors have
+    -- nonzero IDs, but storm scripts still attribute environmental hits to self.
+    local before_hit = _G.CActor__BeforeHitCallback
+    _G.CActor__BeforeHitCallback = function(actor, s_hit, bone_id)
+        local source = s_hit.draftsman
+        if source and source:id() == actor:id() and
+            (s_hit.type == hit.telepatic or s_hit.type == hit.shock) then
+            if bind_stalker_ext.invulnerable_time and time_global() < bind_stalker_ext.invulnerable_time then
+                bind_stalker_ext.invulnerable_time = bind_stalker_ext.invulnerable_time - 500
+                return false
+            end
+            local flags = { ret_value = true }
+            SendScriptCallback('actor_on_before_hit', s_hit, bone_id, flags)
+            return flags.ret_value
+        end
+        return before_hit(actor, s_hit, bone_id)
+    end
     -- presentation: the clients'
     SM.play_blowout_sound = function() end
     SM.play_siren_sound = function() end
@@ -1044,8 +1151,20 @@ function install_emissions() -- module function: called from install_world_callb
     end
     PM.vortex_actor_hit = function(self, vortex)
         for _, body in ipairs(living_bodies()) do
-            if not self:pos_in_cover(body:position()) then as_body(body, psi_hit, self, vortex) end
+            -- Both emissions use SurgeManager's cover registry; PsiStormManager has no pos_in_cover.
+            if not surge_manager.get_surge_manager():pos_in_cover(body:position()) then as_body(body, psi_hit, self, vortex) end
         end
+    end
+    -- The SP update gates the entire hit callback on the shared actor's cover.
+    -- A covered world actor/first player must not protect all other players.
+    -- The callback above performs the actual cover check for each body.
+    local psi_update = PM.update
+    PM.update = function(self)
+        local cover = GetEvent('current_safe_cover')
+        SetEvent('current_safe_cover', false)
+        local ok, err = pcall(psi_update, self)
+        SetEvent('current_safe_cover', cover)
+        if not ok then error(err) end
     end
     -- the world actor is never a psi-storm target itself (SP checks the actor's cover before the hit)
     printf('[COOP_SERVER] EMISSIONS_INSTALLED')
@@ -1178,7 +1297,7 @@ end
 
 -- The zone fires on every restrictor update while the body stands in it (SP pauses the world under
 -- the box; the server does not): one ask per body and zone, answered or timed out; a confirmed
--- (or box-less) transition is asked of the changer again every few seconds while the body stays —
+-- (or box-less) transition is asked of the changer again every few seconds while the body stays â€”
 -- the others may have arrived meanwhile (change_level waits for them within its radius).
 local sr_teleport_state = {} -- body id -> { zone = section, time = ms, ok/cancelled/unknown = true }
 local SR_TELEPORT_RETRY = 5000 -- ms between changer requests of a confirmed transition
@@ -1581,6 +1700,8 @@ end
 local function send_mag_data(target, id, data)
     local body = level.object_by_id(target)
     local carried = body and carried_set(body)
+    local se = alife_object(id)
+    if carried and carried[id] and (not se or se.parent_id ~= target) then carried[id] = nil end
     level.coop_send_lua(target, string.format('mags|set|%d|%s|%s', id, mag_data_text(data), carried and (carried[id] and '1' or '0') or '-'))
 end
 
@@ -1626,6 +1747,12 @@ end
 -- the body's weapons and magazines on join
 send_all_mags = function(body) -- forward-declared near the top (on_client_ready uses it)
     if not (magazine_binder and magazine_binder.get_data) then return end
+    -- The statistics set survives respawn; pouch assignments belong to the current body only.
+    local carried = carried_set(body)
+    for id in pairs(carried or {}) do
+        local se = alife_object(id)
+        if not se or se.parent_id ~= body:id() then carried[id] = nil end
+    end
     local count = 0
     body:iterate_inventory(function(owner, obj)
         if obj and (magazines.is_magazine(obj) or magazines.is_supported_weapon(obj)) then
@@ -3016,6 +3143,15 @@ local function fast_travel_distance(body, smart, same_level)
     return from and to and from:game_point():distance_to(to:game_point()) or 1000
 end
 
+-- enemy_id is a candidate evaluated by xr_combat_ignore, not necessarily an active fight.
+-- Mutants select targets through EnemyMan (get_enemy); stalkers use memory().enemy (best_enemy).
+-- Do not clear the shared combat registry: another player's fight may still be active.
+local function fast_travel_enemy(npc)
+    if not (npc and npc:alive()) then return nil end
+    if IsMonster(npc) then return npc:get_enemy() end
+    return npc:best_enemy()
+end
+
 -- "fast_travel|go|<smart id>" from the client's PDA menu (body context): the SP checks, then the move.
 local function fast_travel_go(body, smart_id)
     local smart = smart_id and alife_object(smart_id)
@@ -3033,11 +3169,14 @@ local function fast_travel_go(body, smart_id)
         for npc_id in pairs(xr_combat_ignore.fighting_with_actor_npcs) do
             local st = db.storage[npc_id]
             local npc = st and st.object
-            local enemy = npc and npc:alive() and npc:best_enemy()
-            if (st and st.enemy_id == body:id()) or (enemy and enemy:id() == body:id()) then
+            local enemy = fast_travel_enemy(npc)
+            if enemy and enemy:id() == body:id() then
                 actor_menu.set_msg(1, game.translate_string('st_travel_event'), 4)
-                printf('[COOP_SERVER] FAST_TRAVEL denied body=%s to=%s: in combat with %s', tostring(body:id()), name, tostring(npc_id))
+                printf('[COOP_SERVER] FAST_TRAVEL denied body=%s to=%s: in combat with %s section=%s distance=%s visible=%s', tostring(body:id()), name, tostring(npc_id), npc:section(), string.format('%.1f', body:position():distance_to(npc:position())), tostring(npc:see(body)))
                 return
+            end
+            if st and st.enemy_id == body:id() then
+                printf('[COOP_SERVER] FAST_TRAVEL ignored cached enemy body=%s npc=%s alive=%s current=%s', tostring(body:id()), tostring(npc_id), tostring(npc and npc:alive()), tostring(enemy and enemy:id()))
             end
         end
     end
@@ -3195,8 +3334,8 @@ end
 -- "Is it in the player's hands": four task scripts of Anomaly/GAMMA compare the item's parent with 0,
 -- the SP actor's id - the recover-item-on-corpse tasks of Sidorovich and Sakharov, the mutant data
 -- for the scientists, the chimera scan, story items through story_object_owned. A body has its own
--- id: the task stayed at its first stage, the marker on the carrier, no hand-in line (19.09, "Òîâàð
--- Ñèäîðîâè÷à"). Any player body counts - connected or parked - as the SP actor does; the other
+-- id: the task stayed at its first stage, the marker on the carrier, no hand-in line (19.09, "Ð¢Ð¾Ð²Ð°Ñ€
+-- Ð¡Ð¸Ð´Ð¾Ñ€Ð¾Ð²Ð¸Ñ‡Ð°"). Any player body counts - connected or parked - as the SP actor does; the other
 -- comparisons of those scripts (AC_ID, db.actor:id()) are right in the body's context already.
 function install_task_item_holders() -- module function: called from install_pda below
     local function held_by_player(se)
@@ -3348,12 +3487,14 @@ function install_world_news() -- module function: called from install_pda below
 end
 
 function install_pda() -- module function: called from net_spawn above
+    coop_torch.install_server()
     coop_psi_helmet.install()
     install_world_news()
     install_standing()
     install_task_standing()
     install_trade_party_tier()
     install_task_item_holders()
+    coop_quest_documents.install_server()
     install_disguise()
     install_player_statistics()
     install_player_encyclopedia()
@@ -3518,11 +3659,14 @@ local function item_verb(body, text, parts)
         local obj; obj, err = item_of_body(body, tonumber(parts[3]))
         if obj then obj:unload_magazine(parts[4] == '1') end
         ok = obj ~= nil
+    elseif verb == 'torch' then
+        ok = coop_torch.request(body, tonumber(parts[3]), parts[4] == '1')
+        if not ok then err = 'torch not equipped or unpowered' end
     elseif verb == 'box' then
         -- an ammo box's rounds as the client's Lua set them (Magazines Redux loading a magazine from the
         -- box: ammo_set_count); the count goes back to the client with the item state
         local obj; obj, err = item_of_body(body, tonumber(parts[3]))
-        if obj then obj:ammo_set_count(tonumber(parts[4]) or 0) end
+        if obj then obj:ammo_set_count_revision(tonumber(parts[4]) or 0, tonumber(parts[5]) or 0) end
         ok = obj ~= nil
     elseif verb == 'ammo_type' then
         local obj; obj, err = item_of_body(body, tonumber(parts[3]))
@@ -3568,10 +3712,15 @@ local function item_verb(body, text, parts)
         elseif string.sub(owner, 1, 6) == 'world:' then
             local w = str_explode(string.sub(owner, 7), ',')
             local pos = vector():set(tonumber(w[1]) or 0, tonumber(w[2]) or 0, tonumber(w[3]) or 0)
-            if distance_between(body, { position = function() return pos end }) > 20 then
+            if distance_between(body, { position = function() return pos end }) > 20 and
+                not coop_rf_packages.allowed_spawn(section, pos, tonumber(w[4]), tonumber(w[5])) then
                 ok, err = false, 'too far'
             else
-                created = alife_create(section, pos, tonumber(w[4]) or body:level_vertex_id(), tonumber(w[5]) or body:game_vertex_id())
+                if props.ammo then
+                    created = alife():create_ammo(section, pos, tonumber(w[4]) or body:level_vertex_id(), tonumber(w[5]) or body:game_vertex_id(), 65535, props.ammo)
+                else
+                    created = alife_create(section, pos, tonumber(w[4]) or body:level_vertex_id(), tonumber(w[5]) or body:game_vertex_id())
+                end
             end
         elseif string.sub(owner, 1, 6) == 'owner:' then
             -- Another inventory within the body's reach: the corpse being looted (Magazines Redux
@@ -3762,10 +3911,13 @@ function on_client_lua(body, text)
     if parts[1] == 'world_settings' then return coop_world_settings.server_request(body, parts) end
     local kind = parts[1]
     local request = parts[#parts] and string.match(parts[#parts], '^rpc:(%d+)$')
+    if kind == 'loot_lock' then return coop_loot_lock.server_request(body, parts) end
     if request then
         parts[#parts] = nil
         local ok, result = pcall(function()
             if kind == 'taskboard' then return taskboard_request(body, parts[2], parts) end
+            if kind == 'rf_package' then return coop_rf_packages.server_request(body, parts) end
+            if kind == 'loot_action' then return coop_loot_actions.server_request(body, parts) end
             return nil
         end)
         if not ok then printf('! [COOP_SERVER] RPC %s failed: %s', text, tostring(result)) end
@@ -3791,6 +3943,17 @@ function on_client_lua(body, text)
         if box and IsInvbox(box) and box:position():distance_to(body:position()) <= 8 then
             local ok, err = pcall(SendScriptCallback, kind == 'box_take' and 'actor_on_item_take_from_box' or 'actor_on_item_put_in_box', box, item)
             if not ok then printf('! [COOP_SERVER] BOX_CALLBACK %s error=%s', kind, tostring(err)) end
+            if kind == 'box_put' and item and IsAmmo(item) then
+                local box_id, item_id = box:id(), item:id()
+                CreateTimeEvent('coop_box_ammo', box_id .. ':' .. item_id, 0, function()
+                    local container, ammo = level.object_by_id(box_id), level.object_by_id(item_id)
+                    local parent = ammo and ammo:parent()
+                    if container and IsInvbox(container) and parent and parent:id() == box_id and IsAmmo(ammo) then
+                        item_weapon.ammo_aggregation(ammo, container)
+                    end
+                    return true
+                end)
+            end
         end
     elseif kind == 'money' and parts[2] == 'give' then
         -- Money to a teammate (the action dialog of "use" on a standing player): a whole sum the giver
@@ -3866,17 +4029,8 @@ function on_client_lua(body, text)
         companion_order(body, parts[2], parts[3], parts[4])
     elseif kind == 'pda' then
         if parts[2] == 'rankings' then send_rankings(body) elseif parts[2] == 'relations' then send_relations(body) end
-    elseif kind == 'sleep' then
-        -- The player's sleep dialog said sleep for N hours: the world's clock moves for everyone
-        -- (SP ui_sleep_dialog.dream_callback), the sleeper rests, the others get the blackout.
-        local hours = math.floor(tonumber(parts[2]) or 0)
-        if hours >= 1 and hours <= 24 and body:alive() then
-            level.change_game_time(0, hours, 0)
-            body.power = 1
-            SendScriptCallback('actor_on_sleep', hours) -- body context: surge/psi-storm time_forwarded, weather change
-            level.coop_send_lua(65535, string.format('sleep|%s|%s', hours, body:id()))
-            printf('[COOP_SERVER] SLEEP body=%s hours=%s', tostring(body:id()), tostring(hours))
-        end
+    elseif kind == 'sleep_vote' then
+        coop_sleep_vote.server_request(body,parts)
     elseif kind == 'console' and string.find(command_line(), '-coop_damage_probe', 1, true) then
         -- Test hook (probe servers only): a server console command from a client, e.g.
         -- run_string level.coop_send_lua(0,"console|load test2")
@@ -4064,6 +4218,9 @@ local function update_tasks()
         if b == task_reward.last_killer then return false end
         return a < b
     end)
+    for task_id,id in pairs(coop_fetch_tasks.update(tm, order)) do
+        if not task_completer[task_id] then task_completer[task_id]=id end
+    end
     for _, id in ipairs(order) do
         local body = db.actors[id]
         if body and body:alive() and level.coop_enter_body(id) then
@@ -4105,9 +4262,11 @@ if string.find(command_line(), '-coop_anchor_probe', 1, true) then
 end
 
 local function update_world(self, delta)
+    coop_sleep_vote.server_update()
     if self.first_update_pending then
         self.first_update_pending = nil
         bind_stalker_ext.actor_on_first_update(self, delta)
+        if loaded_save then repair_duplicate_story_npcs() end
         if not has_alife_info('global_dialogs') then self.object:give_info_portion('global_dialogs') end
         if not has_alife_info('level_changer_icons') then self.object:give_info_portion('level_changer_icons') end
         pda.fill_primary_objects() -- map spots of traders, mechanics, sleep places (mirrored to the clients)

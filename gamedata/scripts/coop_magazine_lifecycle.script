@@ -1,0 +1,112 @@
+-- Magazines Redux keeps pouch IDs across actor binders. In coop those IDs may belong to a corpse.
+local installed = false
+local raw_carried, raw_toggle
+
+function owns(obj)
+    local actor = db.actor
+    if not obj or not actor or not actor:alive() then return false end
+    local parent = obj:parent()
+    return parent ~= nil and parent:id() == actor:id()
+end
+
+-- Remote release is asynchronous; the last round must disappear locally before another timer runs.
+function prepare_release(id)
+    local obj = level.object_by_id(id)
+    if owns(obj) and IsAmmo(obj) then obj:ammo_set_count(0) end
+end
+
+local function install_ammo_loading()
+    local load = magazines.load_magazine
+    if not load then return end
+    -- The GAMMA timer keeps its selected box in this private upvalue. Read it for the guard;
+    -- the original still owns timing, movement penalties, cancellation, sounds and UI updates.
+    local box_index
+    for i = 1, 64 do
+        local name = debug.getupvalue(load, i)
+        if not name then break end
+        if name == 'ext_ammo_box' then box_index = i; break end
+    end
+    magazines.load_magazine = function(mag, capacity, delay)
+        local _, id
+        if box_index then _, id = debug.getupvalue(load, box_index) end
+        local box = id and level.object_by_id(id)
+        if not owns(mag) or not owns(box) or box:ammo_get_count() <= 0 or not coop_client_actor.magazine_ready(mag:id()) then
+            magazines.do_interrupt()
+        end
+        return load(mag, capacity, delay)
+    end
+    magazines.find_next_box = function(section, excluded)
+        local found
+        db.actor:iterate_inventory(function(_, item)
+            if item:id() ~= excluded and IsAmmo(item) and item:section() == section and item:ammo_get_count() > 0 then found = item end
+        end)
+        return found
+    end
+    local fast_load = magazines.fast_load_magazine
+    magazines.fast_load_magazine = function(mag, box, one)
+        if not owns(mag) or not owns(box) or box:ammo_get_count() <= 0 or not coop_client_actor.magazine_ready(mag:id()) then return end
+        local ids = {}
+        if one then ids[1] = box:id() else
+            db.actor:iterate_inventory(function(_, item)
+                if IsAmmo(item) and item:section() == box:section() and item:ammo_get_count() > 0 then ids[#ids + 1] = item:id() end
+            end)
+        end
+        -- Recompute the remaining capacity for each box. GAMMA's multi-box loop doesn't
+        -- subtract a partially consumed box and can overfill from subsequent boxes.
+        for _, id in ipairs(ids) do
+            local item = level.object_by_id(id)
+            local data = magazine_binder.get_data(mag:id())
+            if not data or #data.loaded >= SYS_GetParam(2, mag:section(), 'max_mag_size') then break end
+            if owns(item) and item:ammo_get_count() > 0 then fast_load(mag, item, true) end
+        end
+    end
+end
+
+function install()
+    if installed or not magazine_binder or not magazines then return end
+    installed = true
+    install_ammo_loading()
+    raw_carried = magazine_binder.get_carried_mags
+    raw_toggle = magazine_binder.toggle_carried_mag
+    local raw_is_carried = magazine_binder.is_carried_mag
+    magazine_binder.is_carried_mag = function(id)
+        return owns(id and level.object_by_id(id)) and raw_is_carried(id) or false
+    end
+    magazine_binder.get_carried_mags = function(result)
+        raw_carried(result)
+        for id in pairs(result) do
+            if not owns(level.object_by_id(id)) then result[id] = nil end
+        end
+    end
+    magazines.is_carried_mag = magazine_binder.is_carried_mag
+    magazines.get_carried_mags = magazine_binder.get_carried_mags
+    local load_weapon = magazines.load_weapon
+    magazines.load_weapon = function(weapon, mag)
+        if not owns(weapon) or not owns(mag) then
+            magazines.do_interrupt()
+            printf('[COOP_MAGS] LOAD_REJECT foreign weapon or magazine')
+            return
+        end
+        return load_weapon(weapon, mag)
+    end
+    local delayed_load = magazines.delay_load_weapon
+    magazines.delay_load_weapon = function(id, mag, pre_table)
+        if not owns(level.object_by_id(id)) or not owns(mag) then
+            magazines.do_interrupt()
+            printf('[COOP_MAGS] DELAY_REJECT ownership changed')
+            return true -- remove the old body's time event without ejecting/refunding anything
+        end
+        return delayed_load(id, mag, pre_table)
+    end
+end
+
+function reset()
+    if not installed then return end
+    local carried = {}
+    raw_carried(carried)
+    local count = 0
+    for id in pairs(carried) do raw_toggle(id); count = count + 1 end
+    -- Interrupt and remove Magazines Redux's own cached timers before the new actor takes over.
+    if magazines.on_game_load then magazines.on_game_load() end
+    printf('[COOP_MAGS] NEW_LIFE cleared_pouches=%s', tostring(count))
+end

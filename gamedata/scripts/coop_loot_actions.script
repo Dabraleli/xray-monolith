@@ -1,0 +1,119 @@
+-- Inventory actions must run where the item and its ALife entity actually live.
+-- Keep GAMMA's recipes and output ownership; authorize a corpse through its loot lease.
+local installed = false
+local busy = {}
+local retired = {}
+local watched, contents, next_scan
+
+-- Corpse item spawns arrive after the RPC acknowledgement. Refresh only on membership changes,
+-- without resetting sorting, scroll position or reopening the window.
+function client_update()
+    local gui=ui_inventory.GUI
+    if not gui or not gui:IsShown() or gui.mode~='loot' then watched=nil;contents=nil;return end
+    local now=time_global()
+    if watched==gui.npc_id and next_scan and now<next_scan then return end
+    next_scan=now+250
+    local owner=gui.npc_id and level.object_by_id(gui.npc_id)
+    if not owner or not IsStalker(owner) or owner:alive() then watched=nil;contents=nil;return end
+    local current={}
+    local function each(holder,item)current[item:id()]=holder:id() end
+    owner:iterate_inventory(each,owner)
+    if db.actor then db.actor:iterate_inventory(each,db.actor) end
+    local changed=false
+    if watched==gui.npc_id and contents then
+        for id,parent in pairs(current) do if contents[id]~=parent then changed=true;break end end
+        if not changed then for id in pairs(contents) do if not current[id] then changed=true;break end end end
+    end
+    watched=gui.npc_id;contents=current
+    if changed then gui:On_Item_Update();printf('[COOP_CLIENT] LOOT_CONTENTS refreshed corpse=%s',watched) end
+end
+
+function server_request(body, p)
+    local verb, id = p[2], tonumber(p[3])
+    local obj = id and level.object_by_id(id)
+    local parent = obj and obj:parent()
+    if not body:alive() or not parent then return {ok=false, reason='missing item'} end
+    if parent:id() ~= body:id() and not coop_loot_lock.server_owns(body, parent:id()) then
+        return {ok=false, reason='no corpse lease'}
+    end
+    if retired[id] and time_global() - retired[id] < 10000 then
+        return {ok=false, reason='already disassembled'}
+    end
+    if verb == 'disassemble' then
+        local tool = level.object_by_id(tonumber(p[4]) or -1)
+        local owner = tool and tool:parent()
+        if not owner or owner:id() ~= body:id() or not GetItemList('disassemble')[tool:section()] then
+            return {ok=false, reason='invalid tool'}
+        end
+        if not item_parts.is_suitable_dtool(obj, tool) then return {ok=false, reason='unsuitable tool'} end
+        if IsWeapon(obj) or IsOutfit(obj) or IsHeadgear(obj) then
+            if type(item_parts.get_parts_con(obj,nil,true)) ~= 'table' then
+                return {ok=false, reason='missing parts'}
+            end
+        end
+        retired[id] = time_global()
+        if IsWeapon(obj) then item_parts.disassembly_weapon(obj,tool)
+        elseif IsOutfit(obj) or IsHeadgear(obj) then item_parts.disassembly_outfit(obj,tool)
+        else item_parts.disassembly_item(obj,tool) end
+    elseif verb == 'fieldstrip' then
+        if not IsWeapon(obj) then return {ok=false, reason='not weapon'} end
+        local data = item_parts.get_parts_con(obj,nil,true)
+        if type(data) ~= 'table' then return {ok=false, reason='missing parts'} end
+        local part = p[4] ~= '' and p[4] or nil
+        if part and (not zzzz_arti_jamming_repairs.is_part(part) or arti_jamming.is_barrel(part)
+            or not data[part] or data[part] <= 0) then return {ok=false,reason='invalid part'} end
+        zzzz_arti_jamming_repairs.act_fieldstrip(id,part)
+    elseif verb == 'eject' then
+        if not IsWeapon(obj) or not magazines.is_supported_weapon(obj) then return {ok=false,reason='not supported'} end
+        if magazines.get_mag_loaded(id) then magazines.eject_magazine(obj) end
+    elseif verb == 'detach' then
+        if not IsWeapon(obj) or not ({sil=true,scope=true,gl=true})[p[4]] then return {ok=false,reason='invalid addon'} end
+        utils_item.detach_addon(obj,nil,p[4])
+    else return {ok=false,reason='unknown action'} end
+    printf('[COOP_SERVER] LOOT_ACTION body=%s item=%s verb=%s',body:id(),id,verb)
+    return {ok=true, parts=se_load_var(id,nil,'parts'), mag=magazine_binder.get_data(id)}
+end
+
+function install_client(rpc, apply)
+    if installed then return end
+    installed = true
+    local function foreign(obj)
+        local parent = obj and obj:parent()
+        return parent and db.actor and parent:id() ~= db.actor:id()
+    end
+    local function request(verb,obj,arg)
+        if not obj or busy[obj:id()] then return end
+        local id=obj:id()
+        busy[id]=true
+        local result=rpc(string.format('loot_action|%s|%d|%s',verb,id,tostring(arg or '')))
+        if result and result.ok then
+            apply(id,result)
+            if verb=='disassemble' then actor_effects.play_item_fx('disassemble_metal_fast') end
+        else
+            actor_menu.set_msg(1,'Действие не подтверждено сервером. Обновите окно обыска.',4)
+            printf('! [COOP_CLIENT] LOOT_ACTION %s item=%s: %s',verb,id,result and result.reason or 'timeout')
+        end
+        busy[id]=nil
+    end
+    -- Called after every mod's top-level replacements, before on_game_start captures functions.
+    for _,name in ipairs({'disassembly_weapon','disassembly_outfit','disassembly_item'}) do
+        item_parts[name]=function(obj,tool) return request('disassemble',obj,tool and tool:id()) end
+    end
+    local strip=zzzz_arti_jamming_repairs.act_fieldstrip
+    zzzz_arti_jamming_repairs.act_fieldstrip=function(id,part,...)
+        local obj=level.object_by_id(id)
+        if foreign(obj) then return request('fieldstrip',obj,part) end
+        return strip(id,part,...)
+    end
+    local eject=magazines.eject_magazine
+    magazines.eject_magazine=function(obj,...)
+        if foreign(obj) then return request('eject',obj) end
+        return eject(obj,...)
+    end
+    if mags_patches then mags_patches.eject=magazines.eject_magazine end
+    local detach=utils_item.detach_addon
+    utils_item.detach_addon=function(obj,addon,typ,ignore)
+        if foreign(obj) then return request('detach',obj,typ) end
+        return detach(obj,addon,typ,ignore)
+    end
+end

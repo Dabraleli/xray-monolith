@@ -1,0 +1,115 @@
+-- Keep one stale inventory timer from aborting GAMMA's shared event queue.
+-- The original queues retain their scheduling, cancellation and ordering rules.
+local installed = {}
+
+local function guarded(f, ev_id, act_id)
+    return function(...)
+        local ok, result = pcall(f, ...)
+        if ok then return result end
+        printf('! [COOP_CLIENT_EVENTS] dropped %s/%s: %s', tostring(ev_id), tostring(act_id), tostring(result))
+        if (ev_id == 'Mag_redux' or ev_id == 'mag_redux') and rawget(_G, 'magazines') then
+            magazines.do_interrupt()
+        end
+        return true
+    end
+end
+
+local function find_upvalue(create, wanted)
+    for i = 1, 64 do
+        local name, value = debug.getupvalue(create, i)
+        if not name then break end
+        if name == wanted then return value end
+    end
+end
+
+local function install_queue(holder)
+    if installed[holder] or type(holder.CreateTimeEvent) ~= 'function' then return end
+    local create, process = holder.CreateTimeEvent, holder.ProcessEventQueue
+    local queue = find_upvalue(create, 'ev_queue')
+    local computed = type(process) == 'function' and find_upvalue(process, 'computed_ev_queue')
+    local function guard_existing()
+        for ev_id, actions in pairs(queue or {}) do
+            for act_id, node in pairs(actions) do
+                if type(node) == 'table' and type(node.f) == 'function' and not node.coop_guarded then
+                    node.f = guarded(node.f, ev_id, act_id)
+                    node.coop_guarded = true
+                end
+            end
+        end
+        for _, node in ipairs(computed or {}) do
+            if type(node.f) == 'function' and not node.coop_guarded then
+                node.f = guarded(node.f, node.ev_id, node.act_id)
+                node.coop_guarded = true
+            end
+        end
+    end
+    holder.CreateTimeEvent = function(ev_id, act_id, timer, f, ...)
+        if type(f) ~= 'function' then return create(ev_id, act_id, timer, f, ...) end
+        return create(ev_id, act_id, timer, guarded(f, ev_id, act_id), ...)
+    end
+    if type(process) == 'function' then
+        -- _g_patches reads node.f; demonized's computed queue copies it at creation.
+        -- Wrapping creation covers that copy as well as the ordinary queue.
+        holder.ProcessEventQueue = function(...)
+            guard_existing()
+            return process(...)
+        end
+        if holder == _G and RemoveUniqueCall then
+            RemoveUniqueCall(process)
+            AddUniqueCall(holder.ProcessEventQueue)
+        end
+    end
+    guard_existing()
+    installed[holder] = true
+end
+
+local function install_aggregation()
+    if not item_weapon or not item_weapon.ammo_aggregation then return end
+    local aggregate = item_weapon.ammo_aggregation
+    -- Call sites often enqueue this function with an object userdata. Capture IDs
+    -- when queued, while the object is alive, then resolve both objects on execution.
+    local create = _G.CreateTimeEvent
+    _G.CreateTimeEvent = function(ev_id, act_id, timer, f, ...)
+        if f ~= aggregate then return create(ev_id, act_id, timer, f, ...) end
+        local obj, owner = ...
+        owner = owner or db.actor
+        if not obj or not owner then return end
+        local id, owner_id = obj:id(), owner:id()
+        -- A box is authoritative on the server. Its confirmed box_put callback
+        -- now schedules aggregation there, after ownership actually changed.
+        if not db.actor or owner_id ~= db.actor:id() then return end
+        return create(ev_id, act_id, timer, function()
+            local current, current_owner = level.object_by_id(id), level.object_by_id(owner_id)
+            local parent = current and current:parent()
+            if not current_owner or not parent or parent:id() ~= owner_id then return true end
+            return aggregate(current, current_owner)
+        end)
+    end
+end
+
+local function install_fast_transfer()
+    local fast = rawget(_G, 'ish_fast_transfer')
+    if not (fast and fast.Move_Items_Fast) then return end
+    local move = fast.Move_Items_Fast
+    fast.Move_Items_Fast = function(...)
+        local hover = utils_ui.UICellContainer.On_Hover
+        local ok, result = pcall(move, ...)
+        -- The original temporarily swaps this callback; an error used to leave
+        -- quick transfer disabled until the scripts were loaded again.
+        utils_ui.UICellContainer.On_Hover = hover
+        if not ok then
+            printf('! [COOP_CLIENT_EVENTS] fast transfer cancelled: %s', tostring(result))
+            return
+        end
+        return result
+    end
+end
+
+function install()
+    if installed[_G] then return end
+    install_queue(_G)
+    local demonized = rawget(_G, 'demonized_time_events')
+    if demonized then install_queue(demonized) end
+    install_aggregation()
+    install_fast_transfer()
+end

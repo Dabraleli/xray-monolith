@@ -1,0 +1,36 @@
+-- Fetch tasks share one check_time. Running tm:update() for each player does
+-- not inspect each inventory: the first player sets the timer for everybody.
+-- Choose a ready carrier before the normal task check, keeping GAMMA's own
+-- amount, condition, belt and artefact-container rules.
+function update(tm, order)
+    local now=time_global()
+    local completed={}
+    for _,tsk in pairs(tm.task_info) do
+        if tsk.status=='selected' and not tsk.last_check_task
+            and tsk.status_functor=='actor_has_fetch_item'
+            and tsk.target_functor=='general_fetch_task'
+            and (not tsk.check_time or now>=tsk.check_time) then
+            local chosen
+            for _,id in ipairs(order) do
+                local body=db.actors[id]
+                if body and body:alive() and level.coop_enter_body(id) then
+                    chosen=chosen or id
+                    -- Lua class instances are luabind userdata in the game,
+                    -- not iterable tables. Keep status writes on a proxy.
+                    local probe=setmetatable({stage=0},{__index=function(_,key)return tsk[key] end})
+                    local ok,err=pcall(task_status_functor.actor_has_fetch_item,probe,tsk.id)
+                    level.coop_leave_body()
+                    if not ok then error(err) end
+                    if probe.stage==1 then chosen=id;break end
+                end
+            end
+            if chosen and level.coop_enter_body(chosen) then
+                local ok,err=pcall(tsk.check_task,tsk)
+                level.coop_leave_body()
+                if not ok then error(err) end
+                if tsk.last_check_task=='complete' then completed[tsk.id]=chosen end
+            end
+        end
+    end
+    return completed
+end

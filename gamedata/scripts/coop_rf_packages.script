@@ -1,0 +1,381 @@
+-- RF quests select remote, sometimes offline ALife objects. Ordinary nearby-drop rules do not apply.
+local package_sections = {quest_tb_package_1=true,quest_tb_package_2=true,quest_tb_package_3=true,quest_tb_package_4=true,quest_tb_package_6=true}
+
+function allowed_spawn(section, pos, lvid, gvid)
+    if not package_sections[section] then return false end
+    for _, spots in pairs(tb_rf_receiver_packages.tb_package_coords) do
+        for _, p in ipairs(spots) do
+            if lvid == p[4] and gvid == p[5] and math.abs(pos.x-p[1])<0.01 and math.abs(pos.y-p[2])<0.01 and math.abs(pos.z-p[3])<0.01 then return true end
+        end
+    end
+    return false
+end
+
+function server_request(body, parts)
+    local id=tonumber(parts[3])
+    local se=id and alife():object(id)
+    if not se or not package_sections[se:section_name()] then return false end
+    if parts[2]=='restore' then
+        local p=se.position
+        -- Reserved request zero: consumed by restore() after this RPC completes.
+        level.coop_send_lua(body:id(),string.format('created|0|%s|%s|%s|%s,%s,%s',id,se:section_name(),se.parent_id or 65535,p.x,p.y,p.z))
+        return true
+    end
+    return false
+end
+
+local installed=false
+function install(module, rpc)
+    if installed then return end
+    installed=true
+    -- The two original GAMMA selection/message functions retain their module environment.
+    -- Only refusal handling is added; the base GAMMA file is left intact.
+    local replacements=function()
+function failsafepackagespawn()
+
+	tb_making_package = true
+
+	local surge_state = GetEvent("surge", "state")
+
+	local psi_storm_state = GetEvent("psi_storm", "state")
+
+	if (surge_state) or (psi_storm_state) then
+
+		tb_making_package = false
+
+		return false
+
+	end
+
+	if GetEvent("underground") then
+
+		tb_making_package = false
+
+		return false
+
+	end
+
+	if tb_making_package == true then
+
+		item_radio.clear_target(tb_target_item)
+
+		RemoveTimeEvent(tb_target_item,"remind_about_radio_package")
+
+		tb_package_active = false
+
+		tb_badguy_spawned = false
+
+		tb_target_item = 0
+
+		tb_target_item = 0
+
+		tb_reminder = "empty"
+
+		tb_package_in_level = "empty"
+
+		tb_scan_time = 4000
+
+		local actor_level, chosenmap, randspot, packagespot
+
+		chosenmap = tb_previous_level
+
+		tb_package_in_level = chosenmap
+
+		randspot = math.random(1,#tb_package_coords[chosenmap])
+
+		packagespot = tb_package_coords[chosenmap][randspot]
+
+		local rpos = vector():set(packagespot[1],packagespot[2],packagespot[3])
+
+		local rlvid = packagespot[4]
+
+		local rgvid = packagespot[5]
+
+		local availpacks = {"quest_tb_package_1","quest_tb_package_2","quest_tb_package_3","quest_tb_package_4","quest_tb_package_6"}
+
+		local rfreq = math.random(30,300)
+
+		tb_freq = rfreq
+
+		local rlocat = packagespot[6]
+
+		local rplace = packagespot[7]
+
+		local se_obj
+
+		se_obj = alife_create(tostring(availpacks[math.random(#availpacks)]),rpos,rlvid,rgvid)
+
+		if not se_obj then
+			tb_making_package = false
+			printf('! [COOP_RF] Package creation refused; retry remains available')
+			return false
+		end
+		if se_obj then
+
+			tb_target_item = se_obj.id
+
+			tb_target_lvid = rlvid
+
+			tb_target_gvid = rgvid
+
+		end
+
+		item_radio.add_target(se_obj.id, rfreq, 150)
+
+		tb_package_active = true
+
+		local anonpdamessage = game.translate_string("cb_package_lost") .. " " .. game.translate_string(rlocat) .. " " .. game.translate_string(rplace) .. game.translate_string("tb_use_rf_on_freq") .. " " .. tostring(rfreq) .. game.translate_string("tb_mhz_to_search")
+
+		tb_reminder = game.translate_string("tb_dont_forget") .. " " .. game.translate_string(rlocat) .. " " .. game.translate_string(rplace) .. game.translate_string("tb_freq_was_on") .. " " .. tostring(rfreq) .. game.translate_string("tb_the_mhz")
+
+		db.actor:give_game_news(game.translate_string("tb_anon_sender"), anonpdamessage, tb_sender_icon, 0, 20000, 0)
+
+		utils_obj.play_sound("device\\pda\\pda_sos")
+
+		CreateTimeEvent(tb_target_item, "remind_about_radio_package", math.random(900,1800), remindaboutpackage)
+
+		tb_making_package = false
+
+		CreateTimeEvent(0, "check_relation_change", 30, checkrelationchange)
+
+		return true
+
+	end
+
+	tb_making_package = false
+
+end
+function tb_radio_thing()
+
+	tb_making_package = true
+
+	local surge_state = GetEvent("surge", "state")
+
+	local psi_storm_state = GetEvent("psi_storm", "state")
+
+	if (surge_state) or (psi_storm_state) then
+
+		tb_making_package = false
+
+		return false
+
+	end
+
+	if GetEvent("underground") then
+
+		tb_making_package = false
+
+		return false
+
+	end
+
+	if tb_package_active == false then
+
+		local actor_level, randpath, chosenmap, randspot, packagespot, suitablemapforpsyhelmet, sameaspreviousmap, suitablemapforgrokpsyfields, loop_success
+
+		local actor_faction = get_actor_true_community()
+
+		suitablemapforpsyhelmet = false
+
+		sameaspreviousmap = false
+
+		suitablemapforgrokpsyfields = false
+
+		loop_success = false
+
+		if tb_package_queue[1] ~= nil then
+
+			actor_level = tb_package_queue[1][1]
+
+			tb_sender_icon = tb_package_queue[1][2]
+
+			table.remove(tb_package_queue,1)
+
+		else
+
+			actor_level = level.name()
+
+		end
+
+		if (tb_allmaps[actor_level]) then
+
+			-- oleh5230
+
+			-- limited loop iterations
+
+			-- select level from default list if loop fails
+
+			for i=1,25 do
+
+				randpath = math.random(1,#tb_allmaps[actor_level])
+
+				chosenmap = tb_allmaps[actor_level][randpath]
+
+				if chosenmap == tb_previous_level then
+
+					sameaspreviousmap = true
+
+				else
+
+					sameaspreviousmap = false
+
+				end
+
+
+
+				if (db.actor:object("bad_psy_helmet") ~= nil or db.actor:object("good_psy_helmet") ~= nil or actor_faction == "monolith" or actor_faction == "greh" or actor_faction == "zombied") then
+
+					suitablemapforpsyhelmet = true
+
+				else
+
+					if (chosenmap == "l10_radar" or chosenmap == "l11_pripyat" or chosenmap == "l12_stancia" or chosenmap == "l12_stancia_2" or chosenmap == "l13_generators") then
+
+						suitablemapforpsyhelmet = false
+
+					else
+
+						suitablemapforpsyhelmet = true
+
+					end
+
+				end
+
+
+
+				-- oleh5230
+
+				-- GAMMA extra psy fields condition
+
+				if	grok_psy_fields_in_the_north and grok_psy_fields_in_the_north.psy_immune_factions[actor_faction]
+
+				or	(has_alife_info("yan_labx16_switcher_primary_off") and has_alife_info("bar_deactivate_radar_done"))
+
+				or	has_alife_info("story_mode_disabled")
+
+				then
+
+					suitablemapforgrokpsyfields = true
+
+				else
+
+					if grok_psy_fields_in_the_north and grok_psy_fields_in_the_north.psy_extra_levels[chosenmap] then
+
+						suitablemapforgrokpsyfields = false
+
+					else
+
+						suitablemapforgrokpsyfields = true
+
+					end
+
+				end
+
+				if not sameaspreviousmap and suitablemapforpsyhelmet and suitablemapforgrokpsyfields then loop_success = true break end
+
+			end
+
+		end
+
+		if not loop_success then
+
+			randpath = math.random(1,#tb_allmaps["default"])
+
+			chosenmap = tb_allmaps["default"][randpath]
+
+		end
+
+		tb_previous_level = chosenmap
+
+		tb_package_in_level = chosenmap
+
+		randspot = math.random(1,#tb_package_coords[chosenmap])
+
+		packagespot = tb_package_coords[chosenmap][randspot]
+
+		local rpos = vector():set(packagespot[1],packagespot[2],packagespot[3])
+
+		local rlvid = packagespot[4]
+
+		local rgvid = packagespot[5]
+
+		local availpacks = {"quest_tb_package_1","quest_tb_package_2","quest_tb_package_3","quest_tb_package_4","quest_tb_package_6"}
+
+		local rfreq = math.random(30,300)
+
+		tb_freq = rfreq
+
+		local rlocat = packagespot[6]
+
+		local rplace = packagespot[7]
+
+		local se_obj
+
+		se_obj = alife_create(tostring(availpacks[math.random(#availpacks)]),rpos,rlvid,rgvid)
+
+		if not se_obj then
+			tb_making_package = false
+			printf('! [COOP_RF] Package creation refused; retry remains available')
+			return false
+		end
+		if se_obj then
+
+			tb_target_item = se_obj.id
+
+			tb_target_lvid = rlvid
+
+			tb_target_gvid = rgvid
+
+		end
+
+		item_radio.add_target(se_obj.id, rfreq, 150)
+
+		tb_package_active = true
+
+		local anonpdamessage = game.translate_string("tb_package_can_be_found") .. " " .. game.translate_string(rlocat) .. " " .. game.translate_string(rplace) .. game.translate_string("tb_use_rf_on_freq") .. " " .. tostring(rfreq) .. game.translate_string("tb_mhz_to_search")
+
+		tb_reminder = game.translate_string("tb_dont_forget") .. " " .. game.translate_string(rlocat) .. " " .. game.translate_string(rplace) .. game.translate_string("tb_freq_was_on") .. " " .. tostring(rfreq) .. game.translate_string("tb_the_mhz")
+
+		db.actor:give_game_news(game.translate_string("tb_anon_sender"), anonpdamessage, tb_sender_icon, 0, 20000, 0)
+
+		utils_obj.play_sound("device\\pda\\pda_sos")
+
+		CreateTimeEvent(tb_target_item, "remind_about_radio_package", math.random(900,1800), remindaboutpackage)
+
+		tb_making_package = false
+
+		return true
+
+	end
+
+	tb_making_package = false
+
+end
+    end
+    setfenv(replacements,module)()
+    local first=module.actor_on_first_update
+    local function restore()
+        if module.tb_package_active and module.tb_target_item~=0 then
+            local exists=rpc('rf_package|restore|'..tostring(module.tb_target_item),5000)
+            if exists==nil then return false end
+            if exists then
+                if level.coop_create_wait(0,1500)<0 then return false end
+            else
+                module.failsafepackagespawn()
+                CreateTimeEvent(0,'check_relation_change',30,module.checkrelationchange)
+                return true
+            end
+        end
+        first()
+        return true
+    end
+    module.actor_on_first_update=function()
+        if not restore() then CreateTimeEvent('coop_rf','restore',2,restore) end
+    end
+    local update=module.actor_on_update
+    module.actor_on_update=function()
+        if module.tb_package_active and module.tb_package_in_level==level.name() and not alife_object(module.tb_target_item) then return end
+        return update()
+    end
+    printf('[COOP_RF] Remote package creation and restore installed')
+end

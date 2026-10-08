@@ -1,0 +1,140 @@
+-- The server advances the world once, only after every connected body agrees.
+local vote, serial = nil, 0
+local timeout = 30000
+local function members()
+    local result = {}
+    for id, body in pairs(db.actors or {}) do
+        local name = level.coop_body_player(id)
+        if name ~= '' and level.coop_player_body(name) == id then result[id] = body end
+    end
+    return result
+end
+local function eligible(body)
+    return body:alive() and not level.coop_body_downed(body:id()) and not body:is_talking()
+end
+local function broadcast(v, op)
+    for id in pairs(v.members) do
+        level.coop_send_lua(id, string.format('sleep_vote|%s|%d|%d', op, v.id, v.hours))
+    end
+end
+local function cancel()
+    if vote then local old=vote; vote=nil; broadcast(old,'cancel') end
+end
+function server_update()
+    if not vote then return end
+    local now = time_global()
+    if now < vote.at or now-vote.at >= timeout then cancel(); return end
+    local current=members()
+    for id, body in pairs(current) do
+        if not vote.members[id] or not eligible(body) then cancel(); return end
+    end
+    for id in pairs(vote.members) do if not current[id] then cancel(); return end end
+end
+local function commit_if_ready()
+    server_update()
+    if not vote then return end
+    for id in pairs(vote.members) do if not vote.yes[id] then return end end
+    local done=vote; vote=nil
+    level.change_game_time(0,done.hours,0)
+    for _,body in pairs(done.members) do body.power=1 end
+    -- This callback handles the world timeline; personal sleep/thirst/psi handlers
+    -- are filtered on the server and run once on each participating client.
+    SendScriptCallback('actor_on_sleep',done.hours)
+    broadcast(done,'commit')
+    printf('[COOP_SERVER] SLEEP_VOTE_COMMIT token=%s hours=%s',done.id,done.hours)
+end
+function server_request(body,parts)
+    server_update()
+    if parts[2]=='request' then
+        local hours=tonumber(parts[3])
+        if not hours or hours~=math.floor(hours) or hours<1 or hours>24 then return end
+        if vote then
+            level.coop_send_lua(body:id(),'sleep_vote|busy|0|0'); return
+        end
+        local group=members()
+        if not group[body:id()] then return end
+        for _,b in pairs(group) do
+            if not eligible(b) then level.coop_send_lua(body:id(),'sleep_vote|cancel|0|0'); return end
+        end
+        serial=serial+1
+        vote={id=serial,hours=hours,at=time_global(),members=group,yes={[body:id()]=true}}
+        for id in pairs(group) do
+            level.coop_send_lua(id,string.format('sleep_vote|%s|%d|%d',id==body:id() and 'wait' or 'offer',serial,hours))
+        end
+        commit_if_ready()
+    elseif vote and tonumber(parts[3])==vote.id and vote.members[body:id()] then
+        if parts[2]=='yes' then vote.yes[body:id()]=true; commit_if_ready()
+        elseif parts[2]=='no' then cancel() end
+    end
+end
+
+local pending, gui, installed, last_commit
+local function clear()
+    if gui and gui.message_box:IsShown() then gui.message_box:HideDialog() end
+    pending=nil
+end
+function client_answer(yes)
+    if not pending then return end
+    local id=pending.id
+    clear()
+    level.coop_send_lua(0,string.format('sleep_vote|%s|%d',yes and 'yes' or 'no',id))
+end
+function client_reset()
+    clear();last_commit=nil
+end
+function client_update()
+    if not pending then return end
+    local now=time_global()
+    if not db.actor or not db.actor:alive() or level.coop_self_downed()
+        or db.actor:is_talking() or now<pending.at or now-pending.at>=timeout then
+        client_answer(false)
+    elseif pending.offer and gui and not gui.message_box:IsShown() then
+        client_answer(false) -- closing the prompt is a refusal, never consent
+    end
+end
+function client_reply(parts)
+    local op,id,hours=parts[2],tonumber(parts[3]),tonumber(parts[4])
+    if op=='commit' then
+        if not id or last_commit==id or not hours or hours<1 or hours>24 then return end
+        last_commit=id;clear()
+        if not db.actor or not db.actor:alive() then return end
+        SendScriptCallback('actor_on_sleep',hours)
+        db.actor.power=1
+        level.add_pp_effector('sleep_fade.ppe',11,false)
+        actor_menu.set_msg(1,string.format('Все поспали: %s ч.',hours),5)
+        printf('[COOP_CLIENT] SLEEP_VOTE_REST token=%s hours=%s',id,hours)
+    elseif op=='cancel' or op=='busy' then
+        if id==0 or (pending and pending.id==id) then
+            clear();actor_menu.set_msg(1,op=='busy' and 'Сон уже предложен другим игроком' or 'Совместный сон отменён',5)
+        end
+    elseif op=='wait' or op=='offer' then
+        clear()
+        pending={id=id,at=time_global(),offer=op=='offer'}
+        if op=='wait' then actor_menu.set_msg(1,'Ожидание согласия всех игроков на сон',5); return end
+        if not db.actor or not db.actor:alive() or level.coop_self_downed() or db.actor:is_talking() then client_answer(false); return end
+        if not gui then gui=SleepVoteDialog() end
+        gui.message_box:SetText(string.format('Напарник предлагает поспать %s ч. Согласиться?\nБез ответа в течение 30 секунд сон отменится.',hours))
+        gui.message_box:ShowDialog(true)
+    end
+end
+function install_client()
+    if installed then return end
+    installed=true
+    class 'SleepVoteDialog' (CUIScriptWnd)
+    function SleepVoteDialog:__init() super()
+        self.message_box=CUIMessageBoxEx()
+        self:Register(self.message_box,'sleep_vote')
+        self.message_box:InitMessageBox('message_box_yes_no')
+        self:AddCallback('sleep_vote',ui_events.MESSAGE_BOX_YES_CLICKED,self.Yes,self)
+        self:AddCallback('sleep_vote',ui_events.MESSAGE_BOX_NO_CLICKED,self.No,self)
+        self:AddCallback('sleep_vote',ui_events.MESSAGE_BOX_CANCEL_CLICKED,self.No,self)
+    end
+    function SleepVoteDialog:Yes() client_answer(true) end
+    function SleepVoteDialog:No() client_answer(false) end
+    ui_sleep_dialog.UISleep.OnButtonSleep=function(self)
+        local hours=self.forced or self.time_track:GetIValue()
+        if self:IsShown() then self:HideDialog();Unregister_UI('UISleep') end
+        disable_info('sleep_active');disable_info('actor_is_sleeping')
+        level.coop_send_lua(0,'sleep_vote|request|'..tostring(hours))
+    end
+end

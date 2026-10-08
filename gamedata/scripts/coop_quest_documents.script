@@ -1,0 +1,49 @@
+local installed = false
+local function player_holds(se)
+    if not se or se.parent_id==65535 then return false end
+    local holder=alife_object(se.parent_id)
+    return holder and (holder:clsid()==clsid.actor or holder:clsid()==clsid.script_actor) or false
+end
+local function find_item(section, id)
+    local se=id and alife_object(id)
+    if se and se:section_name()==section then return se end
+    se=get_story_se_item(section)
+    if se and se:section_name()==section then return se end
+    for _,actor in pairs(db.actors or {}) do
+        local obj=actor:object(section)
+        if obj then return alife_object(obj:id()) end
+    end
+end
+function install_server()
+    if installed then return end
+    installed=true
+    local status=task_status_functor.drx_sl_quest_item_task_status
+    task_status_functor.drx_sl_quest_item_task_status=function(tsk,id)
+        local result=status(tsk,id)
+        local var=db.actor and load_var(db.actor,id)
+        if not tsk or not var or not var.stash_created or not var.stash_type then return result end
+        local se=find_item('drx_sl_quest_item_'..var.stash_type,var.item_id)
+        if se and player_holds(se) then
+            tsk.stage=1
+            var.item_id=se.id
+            save_var(db.actor,id,var)
+            return nil
+        end
+        tsk.stage=0
+        return result
+    end
+    local remove=xr_effects.remove_item
+    xr_effects.remove_item=function(actor,npc,p)
+        local section=p and p[1]
+        if not section or not string.match(section,'^drx_sl_quest_item_%d+$') then return remove(actor,npc,p) end
+        local se=find_item(section)
+        if not player_holds(se) then
+            printf('! [COOP_SERVER] QUEST_DOCUMENT_MISSING section=%s',section)
+            return
+        end
+        -- Release the actual shared objective from its actual owner. The
+        -- hand-in actor may be another player than the carrier.
+        printf('[COOP_SERVER] QUEST_DOCUMENT_CONSUMED id=%s holder=%s finisher=%s',se.id,se.parent_id,db.actor:id())
+        alife_release(se)
+    end
+end

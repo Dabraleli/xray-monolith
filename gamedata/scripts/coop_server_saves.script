@@ -39,7 +39,7 @@ function server_request(body, parts)
     end
     if op~='load' and op~='quick' and op~='latest' then return end
     if pending_load or time_global()<load_until then
-        reply(id,'error|Ñåðâåð óæå çàãðóæàåò ñîõðàíåíèå.')
+        reply(id,'error|Ð¡ÐµÑ€Ð²ÐµÑ€ ÑƒÐ¶Ðµ Ð·Ð°Ð³Ñ€ÑƒÐ¶Ð°ÐµÑ‚ ÑÐ¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð¸Ðµ.')
         return
     end
     local selected=nil
@@ -52,7 +52,7 @@ function server_request(body, parts)
         end
     end
     if not selected then
-        reply(id,'error|'..(op=='quick' and 'Íà ñåðâåðå íåò áûñòðûõ ñîõðàíåíèé.' or 'Ñîõðàíåíèå îòñóòñòâóåò èëè ïîâðåæäåíî.'))
+        reply(id,'error|'..(op=='quick' and 'ÐÐ° ÑÐµÑ€Ð²ÐµÑ€Ðµ Ð½ÐµÑ‚ Ð±Ñ‹ÑÑ‚Ñ€Ñ‹Ñ… ÑÐ¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð¸Ð¹.' or 'Ð¡Ð¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð¸Ðµ Ð¾Ñ‚ÑÑƒÑ‚ÑÑ‚Ð²ÑƒÐµÑ‚ Ð¸Ð»Ð¸ Ð¿Ð¾Ð²Ñ€ÐµÐ¶Ð´ÐµÐ½Ð¾.'))
         return
     end
     pending_load={id=id, name=selected, at=time_global()+250}
@@ -82,7 +82,7 @@ function server_update(now)
         pending_load=nil
         if not level.object_by_id(request.id) then return end
         -- Recheck after queuing: the file may have disappeared. Only a catalog name can reach here.
-        if not valid_saved_game(request.name) then reply(request.id,'error|Ñîõðàíåíèå áîëüøå íåäîñòóïíî.') return end
+        if not valid_saved_game(request.name) then reply(request.id,'error|Ð¡Ð¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð¸Ðµ Ð±Ð¾Ð»ÑŒÑˆÐµ Ð½ÐµÐ´Ð¾ÑÑ‚ÑƒÐ¿Ð½Ð¾.') return end
         load_until=now+10000
         printf('[COOP_SAVES] LOAD name=%s',request.name)
         -- Outside the caller's body scope; the normal console validates and enqueues M_LOAD_GAME.
@@ -127,7 +127,7 @@ end
 function client_message(parts)
     local op=parts[2]
     if op=='error' then loading_until=0; message(parts[3] or '') return end
-    if op=='loading' then message('Ñåðâåð çàãðóæàåò: '..(parts[3] or '')) return end
+    if op=='loading' then message('Ð¡ÐµÑ€Ð²ÐµÑ€ Ð·Ð°Ð³Ñ€ÑƒÐ¶Ð°ÐµÑ‚: '..(parts[3] or '')) return end
     if not active or parts[3]~=tostring(sequence) then return end
     if op=='begin' then rows={};receiving=true
     elseif op=='item' and receiving and safe_name(parts[4]) then
@@ -136,8 +136,8 @@ function client_message(parts)
         receiving=false
         active.list_box:RemoveAll()
         for _,entry in ipairs(rows) do active:AddItemToList(entry.name,'['..entry.date..']') end
-        active.file_caption:SetText('Ñîõðàíåíèÿ ñåðâåðà')
-        active.file_data:SetText(#rows==0 and 'Íà ñåðâåðå íåò äîñòóïíûõ ñîõðàíåíèé.' or 'Âûáåðèòå ñîõðàíåíèå. Çàãðóçêà îòêàòèò îáùèé ìèð äëÿ âñåõ èãðîêîâ.')
+        active.file_caption:SetText('Ð¡Ð¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð¸Ñ ÑÐµÑ€Ð²ÐµÑ€Ð°')
+        active.file_data:SetText(#rows==0 and 'ÐÐ° ÑÐµÑ€Ð²ÐµÑ€Ðµ Ð½ÐµÑ‚ Ð´Ð¾ÑÑ‚ÑƒÐ¿Ð½Ñ‹Ñ… ÑÐ¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð¸Ð¹.' or 'Ð’Ñ‹Ð±ÐµÑ€Ð¸Ñ‚Ðµ ÑÐ¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð¸Ðµ. Ð—Ð°Ð³Ñ€ÑƒÐ·ÐºÐ° Ð¾Ñ‚ÐºÐ°Ñ‚Ð¸Ñ‚ Ð¾Ð±Ñ‰Ð¸Ð¹ Ð¼Ð¸Ñ€ Ð´Ð»Ñ Ð²ÑÐµÑ… Ð¸Ð³Ñ€Ð¾ÐºÐ¾Ð².')
         printf('[COOP_SAVES] CLIENT_LIST count=%s',#rows)
     end
 end
@@ -167,8 +167,8 @@ function install_client()
         if not self.coop_server_list then return fill(self,...) end
         active=self;sequence=sequence+1;rows={};receiving=false
         self.list_box:RemoveAll()
-        self.file_caption:SetText('Ñîõðàíåíèÿ ñåðâåðà')
-        self.file_data:SetText('Ïîëó÷åíèå ñïèñêà ñ ñåðâåðà...')
+        self.file_caption:SetText('Ð¡Ð¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð¸Ñ ÑÐµÑ€Ð²ÐµÑ€Ð°')
+        self.file_data:SetText('ÐŸÐ¾Ð»ÑƒÑ‡ÐµÐ½Ð¸Ðµ ÑÐ¿Ð¸ÑÐºÐ° Ñ ÑÐµÑ€Ð²ÐµÑ€Ð°...')
         self.picture:InitTexture('ui\\ui_noise')
         level.coop_send_lua(0,'server_saves|list|'..sequence)
     end
@@ -178,7 +178,7 @@ function install_client()
         local item=self.list_box:GetSelectedItem()
         if not item then return end
         self.file_caption:SetText(item.fn:GetText())
-        self.file_data:SetText('Ñîõðàíåíèå íà ñåðâåðå. Çàãðóçêà îòêàòèò îáùèé ìèð äëÿ âñåõ èãðîêîâ.')
+        self.file_data:SetText('Ð¡Ð¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð¸Ðµ Ð½Ð° ÑÐµÑ€Ð²ÐµÑ€Ðµ. Ð—Ð°Ð³Ñ€ÑƒÐ·ÐºÐ° Ð¾Ñ‚ÐºÐ°Ñ‚Ð¸Ñ‚ Ð¾Ð±Ñ‰Ð¸Ð¹ Ð¼Ð¸Ñ€ Ð´Ð»Ñ Ð²ÑÐµÑ… Ð¸Ð³Ñ€Ð¾ÐºÐ¾Ð².')
     end
     local load=cls.load_game_internal
     cls.load_game_internal=function(self,...)
@@ -207,7 +207,7 @@ function install_client()
     local delete=cls.OnButton_del_clicked
     cls.OnButton_del_clicked=function(self,...)
         if not self.coop_server_list then return delete(self,...) end
-        self.file_data:SetText('Ñåðâåðíûå ñîõðàíåíèÿ ìîæíî óäàëèòü òîëüêî íà ñåðâåðå.')
+        self.file_data:SetText('Ð¡ÐµÑ€Ð²ÐµÑ€Ð½Ñ‹Ðµ ÑÐ¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð¸Ñ Ð¼Ð¾Ð¶Ð½Ð¾ ÑƒÐ´Ð°Ð»Ð¸Ñ‚ÑŒ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð½Ð° ÑÐµÑ€Ð²ÐµÑ€Ðµ.')
     end
     local back=cls.OnButton_back_clicked
     cls.OnButton_back_clicked=function(self,...)

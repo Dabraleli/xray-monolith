@@ -14,12 +14,12 @@ local texts = {
             btn_character = 'Character', btn_connect = 'Connect', btn_back = 'Back',
             need_name = 'Enter a character name', need_character = 'Create the character first',
             connecting = 'Connecting to %s...' },
-    rus = { title = 'Кооперативная игра', address = 'Сервер', name = 'Имя персонажа', character = 'Персонаж',
-            character_none = 'ещё не создан - нажмите "Персонаж" (фракция, внешность, снаряжение)',
-            character_fmt = 'фракция: %s, снаряжение: %d предм., деньги: %d',
-            btn_character = 'Персонаж', btn_connect = 'Подключиться', btn_back = 'Назад',
-            need_name = 'Введите имя персонажа', need_character = 'Сначала создайте персонажа',
-            connecting = 'Подключение к %s...' },
+    rus = { title = 'РљРѕРѕРїРµСЂР°С‚РёРІРЅР°СЏ РёРіСЂР°', address = 'РЎРµСЂРІРµСЂ', name = 'РРјСЏ РїРµСЂСЃРѕРЅР°Р¶Р°', character = 'РџРµСЂСЃРѕРЅР°Р¶',
+            character_none = 'РµС‰С‘ РЅРµ СЃРѕР·РґР°РЅ - РЅР°Р¶РјРёС‚Рµ "РџРµСЂСЃРѕРЅР°Р¶" (С„СЂР°РєС†РёСЏ, РІРЅРµС€РЅРѕСЃС‚СЊ, СЃРЅР°СЂСЏР¶РµРЅРёРµ)',
+            character_fmt = 'С„СЂР°РєС†РёСЏ: %s, СЃРЅР°СЂСЏР¶РµРЅРёРµ: %d РїСЂРµРґРј., РґРµРЅСЊРіРё: %d',
+            btn_character = 'РџРµСЂСЃРѕРЅР°Р¶', btn_connect = 'РџРѕРґРєР»СЋС‡РёС‚СЊСЃСЏ', btn_back = 'РќР°Р·Р°Рґ',
+            need_name = 'Р’РІРµРґРёС‚Рµ РёРјСЏ РїРµСЂСЃРѕРЅР°Р¶Р°', need_character = 'РЎРЅР°С‡Р°Р»Р° СЃРѕР·РґР°Р№С‚Рµ РїРµСЂСЃРѕРЅР°Р¶Р°',
+            connecting = 'РџРѕРґРєР»СЋС‡РµРЅРёРµ Рє %s...' },
 }
 
 local function T(key)

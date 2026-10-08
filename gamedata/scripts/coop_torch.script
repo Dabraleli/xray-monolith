@@ -1,0 +1,53 @@
+-- Client animations own the toggle timing; the server owns the light and battery binder.
+local client_installed,server_installed=false,false
+function install_client(send)
+    if client_installed then return end
+    client_installed=true
+    local toggle=item_device.toggle_torch
+    item_device.toggle_torch=function()
+        toggle()
+        local torch=db.actor and db.actor:item_in_slot(10)
+        if torch then send(string.format('item|torch|%s|%s',torch:id(),item_device.is_torch_active()==torch:id() and 1 or 0)) end
+    end
+end
+
+function install_server()
+    if server_installed then return end
+    local process=item_device.device_binder.process_torch
+    local state_reader=item_device.is_torch_active -- process_torch may be wrapped by Dynamic Anomalies
+    local state_index
+    for i=1,64 do
+        local name=debug.getupvalue(state_reader,i)
+        if not name then break end
+        if name=='torch_active' then state_index=i;break end
+    end
+    assert(state_index,'coop torch: unsupported device binder torch_active upvalue')
+    local slots
+    for i=1,64 do
+        local name,value=debug.getupvalue(item_device.device_binder.update,i)
+        if not name then break end
+        if name=='dev_slot' then slots=value;break end
+    end
+    assert(type(slots)=='table','coop torch: unsupported device slot registry')
+    server_installed=true
+    item_device.device_binder.process_torch=function(self,id,section,condition)
+        local _,previous=debug.getupvalue(state_reader,state_index)
+        local parent=self.object:parent()
+        local equipped=parent and parent:item_in_slot(10)
+        slots[id]=equipped and equipped:id()==id or nil
+        -- A separate state per physical torch; one player's switch cannot extinguish another's.
+        debug.setupvalue(state_reader,state_index,self.object:torch_enabled() and id or false)
+        process(self,id,section,condition)
+        debug.setupvalue(state_reader,state_index,previous)
+    end
+end
+
+function request(body,id,on)
+    local torch=body:item_in_slot(10)
+    if not torch or torch:id()~=id or ini_sys:r_string_ex(torch:section(),'class')~='TORCH_S' then return false end
+    local critical=item_device.get_power_critical(torch:section())
+    if on and (not critical or torch:condition()<=critical or not body:alive()) then return false end
+    torch:enable_torch(on)
+    printf('[COOP_TORCH] body=%s item=%s active=%s condition=%s',tostring(body:id()),tostring(id),tostring(on),tostring(torch:condition()))
+    return true
+end

@@ -1,0 +1,24 @@
+local tracked={}
+local spot='coop_player_location'
+function update(roster,own)
+    local wanted={}
+    for id,mate in pairs(roster) do
+        local obj=level.object_by_id(id)
+        if id~=own and obj and obj:alive() then
+            wanted[id]=true
+            if level.map_has_object_spot(id,spot)==0 then
+                level.map_add_object_spot(id,spot,mate.name or '')
+                printf('[COOP_CLIENT] TEAMMATE_MINIMAP added=%s',id)
+            end
+        end
+    end
+    for id in pairs(tracked) do
+        if not wanted[id] then level.map_remove_object_spot(id,spot) end
+    end
+    if own and level.map_has_object_spot(own,spot)~=0 then level.map_remove_object_spot(own,spot) end
+    tracked=wanted
+end
+function reset()
+    for id in pairs(tracked) do level.map_remove_object_spot(id,spot) end
+    tracked={}
+end

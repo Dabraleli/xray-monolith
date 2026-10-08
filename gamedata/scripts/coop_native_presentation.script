@@ -1,0 +1,110 @@
+-- Reuse GAMMA's presentation widgets; native coop windows still own every action.
+local inventory, info, info_root, stats_root, info_object_id
+local cells={}
+local next_stats=0
+local function root()
+    local wnd=CUIWindow()
+    wnd:SetWndRect(Frect():set(0,0,1024,768))
+    return wnd
+end
+local function prepare()
+    if not inventory then
+        inventory=ui_inventory.UIInventory()
+        -- This hidden instance supplies widgets only, never gameplay callbacks.
+        for _,name in ipairs({'actor_item_to_ruck','actor_item_to_slot','actor_item_to_belt',
+            'actor_on_item_drop','actor_on_item_use','actor_on_item_put_in_box','actor_on_item_take_from_box',
+            'npc_on_item_take','npc_on_item_drop','npc_on_use','physic_object_on_use_callback','actor_on_net_destroy'}) do
+            UnregisterScriptCallback(name,inventory)
+        end
+    end
+    return inventory
+end
+function item_info(obj,cost,tip)
+    if not obj or not db.actor then return nil end
+    if not info then info_root=root();info=utils_ui.UIInfoItem(info_root,0) end
+    if info_object_id~=obj:id() then
+        -- GAMMA normally hides the tooltip between hovered items. This also
+        -- hides the weapon ammo block before laying out an outfit's parts.
+        info:Show(false)
+        info:Reset()
+        info.first_update=true
+        info_object_id=obj:id()
+    end
+    info:Update(obj,obj:section(),{value_str=cost~='' and cost or nil,note_str=tip~='' and tip or nil})
+    info.value:SetText(cost);info.value:Show(cost~='' and tip=='')
+    info.note:SetText(tip);info.note:Show(tip~='')
+    return info_root
+end
+function actor_stats(x,y)
+    if not db.actor then return nil end
+    local inv=prepare()
+    if not stats_root then
+        stats_root=root()
+        inv.stats_dialog:SetAutoDelete(false)
+        inv.equ_dialog:DetachChild(inv.stats_dialog)
+        stats_root:AttachChildKeepOwner(inv.stats_dialog)
+        inv.stats_dialog:SetAutoDelete(true)
+        inv.stats_dialog:SetWndPos(vector2():set(0,0))
+    end
+    stats_root:SetWndPos(vector2():set(x,y))
+    local now=time_global()
+    if now>=next_stats or now<next_stats-1000 then inv:UpdateStats();next_stats=now+500 end
+    inv.stats_dialog:Show(true)
+    return stats_root
+end
+function item_cell(obj,x,y,w,h,color)
+    if not obj or not db.actor then return nil end
+    local inv=prepare()
+    local id=obj:id()
+    local entry=cells[id]
+    local now=time_global()
+    if not entry or entry.sec~=obj:section() or entry.w~=w or entry.h~=h then
+        local base=inv.CC.actor_bag
+        local wnd=root()
+        local container={path=base.path,xml=base.xml,grid_size=h/SYS_GetParam(2,obj:section(),'inv_grid_height',1),grid_line=0}
+        local cell=utils_ui.UICellItem(container,wnd,1)
+        cell:Set(obj,{x=1,y=1})
+        cell.cell:SetWndSize(vector2():set(w,h))
+        entry={root=wnd,cell=cell,w=w,h=h,sec=obj:section(),next=now+500}
+        cells[id]=entry
+    elseif now>=entry.next or now<entry.next-1000 then
+        entry.cell:Update(obj);entry.next=now+500
+    end
+    entry.used=now
+    entry.root:SetWndPos(vector2():set(x,y))
+    entry.cell.ico:SetTextureColor(color)
+    if entry.cell.cnt then entry.cell.cnt:Show(false) end -- native stack count stays authoritative
+    return entry.root
+end
+function reset()
+    cells={};info=nil;info_root=nil;info_object_id=nil
+    inventory=nil;stats_root=nil;next_stats=0
+end
+-- Equipped weapons use the engine's rotated icon. Add GAMMA's upright repair
+-- class separately, using the same renderer and MCM setting as the inventory.
+function item_cell_heading(obj,x,y,w,h,color)
+    if not obj or not db.actor then return nil end
+    local key='equipped:'..obj:id()
+    local entry=cells[key]
+    if not entry or entry.sec~=obj:section() then
+        local wnd=root()
+        entry={root=wnd,cell=wnd,path='equipment:cont_equ',sec=obj:section()}
+        cells[key]=entry
+    end
+    entry.root:SetWndRect(Frect():set(x,y,x+w,y+h))
+    z_item_icon_info.Add_Repair_Icon(entry,nil,obj,obj:section())
+    return entry.root
+end
+function warmup()
+    prepare()
+end
+
+function native_focus(menu,obj)
+    -- GAMMA replaces GetActorMenu with its Lua inventory. Native coop windows
+    -- need the same compatibility callbacks to address the visible menu.
+    local original=GetActorMenu
+    _G.GetActorMenu=function() return menu end
+    local ok,err=pcall(actor_menu_inventory.CUIActorMenu_OnItemFocusReceive,obj)
+    _G.GetActorMenu=original
+    if not ok then error(err) end
+end

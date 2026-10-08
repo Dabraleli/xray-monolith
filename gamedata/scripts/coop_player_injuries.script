@@ -1,0 +1,26 @@
+-- BHS stores limbs in actor pstor, which is deliberately excluded from the
+-- general player store. Preserve just these personal fields, not world pstor.
+local parts = { 'head', 'torso', 'rightarm', 'leftarm', 'rightleg', 'leftleg' }
+function capture(state)
+    local m = rawget(_G, 'zzz_player_injuries')
+    if not db.actor or not m or not m.health or not m.timedhp then return end
+    local saved = { body = db.actor:id(), health = {}, timedhp = {} }
+    for _, part in ipairs(parts) do
+        saved.health[part] = m.health[part]
+        saved.timedhp[part] = m.timedhp[part]
+    end
+    state.coop_limb_health = saved
+end
+function restore(state, actor)
+    local saved = state.coop_limb_health
+    if not saved or saved.body ~= actor:id() then return end -- genuine respawn
+    for _, kind in ipairs({ 'health', 'timedhp' }) do
+        for _, part in ipairs(parts) do
+            local value = saved[kind] and saved[kind][part]
+            if type(value) == 'number' and value == value then
+                utils_obj.save_var(actor, kind .. '.' .. part, value)
+            end
+        end
+    end
+    printf('[COOP_CLIENT] LIMBS restored body=%s', actor:id())
+end
