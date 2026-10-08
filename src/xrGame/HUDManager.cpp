@@ -136,9 +136,39 @@ void CHUDManager::OnFrame()
 	if (pUIGame)
 		pUIGame->OnFrame();
 
-	PP.CameraPick();
-	g_player_hud->OnFrame();
-	DoPick(PP);
+	// A headless host has no first-person view. Keep the game UI update above
+	// (it may own callbacks), but do not trace a camera or animate HUD weapons.
+	static const bool headless = strstr(Core.Params, "-coop_server_probe") &&
+		strstr(Core.Params, "-coop_server_nodraw") && strstr(Core.Params, "-coop_server_no_game_ui");
+	static const bool profile = headless && strstr(Core.Params, "-coop_hud_profile");
+	static const bool baseline = headless && strstr(Core.Params, "-coop_hud_baseline");
+	const bool runHud = !headless || baseline;
+	CTimer timer;
+	if (profile) timer.Start();
+	if (runHud)
+	{
+		PP.CameraPick();
+		g_player_hud->OnFrame();
+		DoPick(PP);
+	}
+	if (profile)
+	{
+		static u32 started = Device.dwTimeGlobal, frames = 0;
+		static float total = 0.f, peak = 0.f;
+		const float ms = timer.GetElapsed_sec() * 1000.f;
+		total += ms;
+		peak = _max(peak, ms);
+		++frames;
+		const u32 elapsed = Device.dwTimeGlobal - started;
+		if (elapsed >= 5000)
+		{
+			Msg("[COOP_HUD_PROFILE] baseline=%d frames=%u elapsed_ms=%u hud_ms=%.3f peak_ms=%.3f",
+				baseline ? 1 : 0, frames, elapsed, total, peak);
+			started = Device.dwTimeGlobal;
+			frames = 0;
+			total = peak = 0.f;
+		}
+	}
 }
 
 //--------------------------------------------------------------------
