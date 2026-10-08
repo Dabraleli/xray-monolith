@@ -2,33 +2,119 @@
 -- not inspect each inventory: the first player sets the timer for everybody.
 -- Choose a ready carrier before the normal task check, keeping GAMMA's own
 -- amount, condition, belt and artefact-container rules.
+local ready_stages={actor_has_fetch_item=1,actor_has_fetch_weapon_warfare=1,
+    multifetch_status_functor=1,intercept_artifact_task_status_functor=2,
+    recover_item_on_corpse_status_functor=1,recover_mutant_data_status=2}
+local installed=false
+
+-- Read the module's current saved state (load_state replaces its local table).
+-- Do not execute spawning/status functors once per player for unique-ID tasks.
+local function unique_item(tsk)
+    local data={}
+    if tsk.status_functor=='recover_item_on_corpse_status_functor' then
+        tasks_recover_item_on_corpse.save_state(data)
+        local row=data.tasks_rioc and data.tasks_rioc[tsk.id]
+        return true,row and row.item_id,0
+    elseif tsk.status_functor=='intercept_artifact_task_status_functor' then
+        tasks_intercept_artifact.save_state(data)
+        local row=data.nta_intercept_artifact_task_data and data.nta_intercept_artifact_task_data[tsk.id]
+        return true,row and row.artifact_id,1
+    elseif tsk.status_functor=='recover_mutant_data_status' then
+        tasks_recover_mutant_data.save_state(data)
+        local row=data.recover_mutant_data_mdata and data.recover_mutant_data_mdata[tsk.id]
+        return true,row and row.item_id,1
+    end
+end
+
+function supported(tsk)
+    return tsk and ready_stages[tsk.status_functor]~=nil
+end
+
+-- Reused at hand-in; a cached stage is not proof that the items still exist.
+-- A complete set must be held by one living player, never summed across players.
+function carrier(tsk, order)
+    if not supported(tsk) then return nil end
+    local unique,item_id,missing_stage=unique_item(tsk)
+    if unique then
+        local se=item_id and alife_object(item_id)
+        local owner=se and db.actors and db.actors[se.parent_id]
+        if owner and owner:alive() then return owner:id(),ready_stages[tsk.status_functor],owner:id() end
+        local first
+        for id,body in pairs(db.actors or {}) do
+            if body:alive() and (not first or id<first) then first=id end
+        end
+        -- Preserve initialization and terminal-stage handling in the original functor.
+        return nil,item_id and missing_stage or tsk.stage,first
+    end
+    if not order then
+        order={}
+        for id in pairs(db.actors or {}) do order[#order+1]=id end
+        table.sort(order)
+    end
+    local fallback, first
+    for _,id in ipairs(order) do
+        local body=db.actors[id]
+        if body and body:alive() and level.coop_enter_body(id) then
+            first=first or id
+            local stage=ready_stages[tsk.status_functor]==1 and 0 or tsk.stage
+            local probe=setmetatable({stage=stage},{__index=function(_,key)return tsk[key] end})
+            local ok,result=pcall(task_status_functor[tsk.status_functor],probe,tsk.id)
+            level.coop_leave_body()
+            if not ok then error(result) end
+            fallback=fallback or probe.stage
+            if not result and probe.stage==ready_stages[tsk.status_functor] then
+                return id,probe.stage,id
+            end
+        end
+    end
+    return nil,fallback or 0,first
+end
+
+function refresh_dialog(npc)
+    local tm=task_manager.get_task_manager()
+    for _,tsk in pairs(tm.task_info) do
+        if tsk.status=='selected' and not tsk.last_check_task and supported(tsk)
+            and (not npc or tsk.task_giver_id==npc:id()) then
+            local _,stage=carrier(tsk)
+            tsk.stage=stage
+        end
+    end
+end
+
+function install()
+    if installed then return end
+    installed=true
+    -- Dialog availability must use today's inventory, not a throttled map update.
+    for _,name in ipairs({'get_first_finished_task','drx_sl_get_finished_task',
+        'drx_sl_get_finished_cf_task','generate_finished_tasks'}) do
+        local original=axr_task_manager[name]
+        if original then
+            axr_task_manager[name]=function(npc,...)
+                refresh_dialog(npc)
+                return original(npc,...)
+            end
+        end
+    end
+end
+
 function update(tm, order)
+    install()
     local now=time_global()
     local completed={}
     for _,tsk in pairs(tm.task_info) do
         if tsk.status=='selected' and not tsk.last_check_task
-            and tsk.status_functor=='actor_has_fetch_item'
-            and tsk.target_functor=='general_fetch_task'
+            and supported(tsk)
             and (not tsk.check_time or now>=tsk.check_time) then
-            local chosen
-            for _,id in ipairs(order) do
-                local body=db.actors[id]
-                if body and body:alive() and level.coop_enter_body(id) then
-                    chosen=chosen or id
-                    -- Lua class instances are luabind userdata in the game,
-                    -- not iterable tables. Keep status writes on a proxy.
-                    local probe=setmetatable({stage=0},{__index=function(_,key)return tsk[key] end})
-                    local ok,err=pcall(task_status_functor.actor_has_fetch_item,probe,tsk.id)
-                    level.coop_leave_body()
-                    if not ok then error(err) end
-                    if probe.stage==1 then chosen=id;break end
-                end
-            end
-            if chosen and level.coop_enter_body(chosen) then
+            local chosen,stage,first=carrier(tsk,order)
+            -- Original check_task draws the marker before checking inventory.
+            -- Publish the party decision first, avoiding a one-update stale target.
+            tsk.stage=stage
+            local context=chosen or first
+            if context and level.coop_enter_body(context) then
                 local ok,err=pcall(tsk.check_task,tsk)
                 level.coop_leave_body()
                 if not ok then error(err) end
-                if tsk.last_check_task=='complete' then completed[tsk.id]=chosen end
+                if chosen and tsk.last_check_task=='complete' then completed[tsk.id]=chosen end
             end
         end
     end

@@ -607,6 +607,7 @@ local function send_world_callback(name, ...)
             -- stash with the tip's items on the first use)
             local box = ...
             if box and IsInvbox(box) then
+                coop_loot_actions.server_box_used(body,box)
                 local items = 0
                 box:iterate_inventory_box(function(owner, item) items = items + 1 end, box)
                 printf('[COOP_SERVER] BOX_USE body=%s box=%s name=%s items=%s', tostring(body and body:id()), tostring(box:id()), box:name(), items)
@@ -3341,12 +3342,8 @@ function install_task_item_holders() -- module function: called from install_pda
     local function held_by_player(se)
         if not se then return false end
         local parent = se.parent_id
-        if parent == 0 then return true end
-        if parent == 65535 then return false end
-        if db.actors and db.actors[parent] then return true end
-        local holder = alife_object(parent)
-        local cls = holder and holder:clsid()
-        return cls == clsid.actor or cls == clsid.script_actor
+        local body=db.actors and db.actors[parent]
+        return body~=nil and body:alive()
     end
     local function module_upvalue(f, wanted)
         for i = 1, 40 do
@@ -3486,7 +3483,29 @@ function install_world_news() -- module function: called from install_pda below
     printf('[COOP_SERVER] WORLD_NEWS installed pda=%s log=%s', tostring(item_device and item_device.coop_world_pda or false), tostring(dynamic_news_helper and dynamic_news_helper.coop_logged or false))
 end
 
+function install_trade_context()
+    if not mob_trade or mob_trade.coop_context_installed then return end
+    mob_trade.coop_context_installed=true
+    local original=mob_trade.GetTalkingNpc
+    mob_trade.GetTalkingNpc=function(...)
+        -- TradeStart/TradeStop set used_npc_id for this exact conversation.
+        -- Scanning all talking NPCs selects another player's trader.
+        local id=GetEvent('used_npc_id')
+        local npc=id and level.object_by_id(id)
+        if npc then return npc end
+        return original(...)
+    end
+    local trade=mob_trade.mob_trade
+    local on_trade=trade.on_trade
+    trade.on_trade=function(self,buy,sell)
+        -- Also repair schemes loaded before their first trade-open callback.
+        if self.st.all_money==nil then self.st.all_money=0 end
+        return on_trade(self,buy,sell)
+    end
+end
+
 function install_pda() -- module function: called from net_spawn above
+    install_trade_context()
     coop_torch.install_server()
     coop_psi_helmet.install()
     install_world_news()
@@ -4165,6 +4184,19 @@ if task_manager and task_manager.CRandomTask and not task_manager.CRandomTask.co
     local set_completed = task_manager.CRandomTask.set_task_completed
     task_manager.CRandomTask.set_task_completed = function(self, task_id)
         local body = context_body()
+        local tsk=self.task_info[task_id]
+        if coop_fetch_tasks.supported(tsk) then
+            local carrier,stage=coop_fetch_tasks.carrier(tsk)
+            tsk.stage=stage
+            if not carrier then
+                printf('[COOP_SERVER] TASK_HANDIN_REJECT task=%s reason=no_carrier',tostring(task_id))
+                return
+            end
+            -- Completion effects and their deferred removal must use the same
+            -- inventory that satisfied the task, not the current speaker's.
+            task_completer[task_id]=carrier
+            return set_completed(self,task_id)
+        end
         if body and task_id then task_completer[task_id] = body:id() end
         return set_completed(self, task_id)
     end
