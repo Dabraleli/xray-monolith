@@ -144,6 +144,15 @@ namespace Feel
 
 	void Vision::feel_vision_update(CObject* parent, Fvector& P, float dt, float vis_threshold)
 	{
+		// Visible animation objects can have no collision form. Filter before o_new(),
+		// which samples their mesh; the later o_trace() guard is too late for new entries.
+		// Filtering before the set differences also retires cached entries that lost a form,
+		// and allows them to be added again if their collision form returns.
+		seen.erase(std::remove_if(seen.begin(), seen.end(), [](CObject* object)
+		{
+			return !object || !object->CFORM();
+		}), seen.end());
+
 		// B-A = objects, that become visible
 		if (!seen.empty())
 		{
