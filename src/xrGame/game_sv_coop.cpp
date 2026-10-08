@@ -7,6 +7,7 @@
 #include "alife_graph_registry.h"
 #include "alife_object_registry.h"
 #include "Actor.h"
+#include "Torch.h"
 #include "level_graph.h"
 #include "game_level_cross_table.h"
 #include "xrServer_Objects_ALife_Monsters.h"
@@ -247,6 +248,14 @@ void game_sv_Coop::Create(shared_str& options)
         {
             CSE_ALifeCreatureActor* body = smart_cast<CSE_ALifeCreatureActor*>(it->second);
             if (!body || body == world) continue;
+            // Several lives share a character name. Corpses are world loot, not reconnect targets.
+            if (!body->g_Alive())
+            {
+                body->CSE_ALifeObject::can_switch_online(true);
+                body->CSE_ALifeObject::can_switch_offline(true);
+                Msg("[COOP_SERVER] LOADED_CORPSE id=%u name=%s children=%u", body->ID, body->name_replace(), u32(body->children.size()));
+                continue;
+            }
             body->CSE_ALifeObject::can_switch_online(false);
             body->CSE_ALifeObject::can_switch_offline(true);
             // The saved actor state (ClientSave or the parked copy written by save_game) is taken
@@ -1614,6 +1623,7 @@ void game_sv_Coop::UpdateItemStates()
             state.condition = item->GetCondition();
             CEatableItem* eatable = item->cast_eatable_item();
             state.uses = eatable ? eatable->GetRemainingUses() : 0xff;
+            CTorch* torch = smart_cast<CTorch*>(item);
             CWeapon* weapon = smart_cast<CWeapon*>(item);
             state.ammo = weapon ? u16(weapon->GetAmmoElapsed()) : 0xffff;
             // An ammo box's rounds too: the server's copy changes on its own (UnloadMagazine puts the
@@ -1625,12 +1635,16 @@ void game_sv_Coop::UpdateItemStates()
             // The place too: a returning player's items spawn on the client without the saved
             // state (CoopHideClientData), so the outfit, helmet, backpack and PDA fell into the
             // ruck by their default_to_ruck (132); the client follows the server's placement.
+            // The type-specific value is the light state for torches (they have no ammo).
+            if (torch) state.ammo = torch->torch_active() ? 1 : 0;
+            state.ammo_revision = 0;
+            if (CWeaponAmmo* box = smart_cast<CWeaponAmmo*>(item)) state.ammo_revision = box->m_coopAmmoRevision;
             state.place = item->m_ItemCurrPlace.value;
             const u16 id = item->object_id();
             seen.insert(id);
             xr_map<u16, SItemState>::iterator known = m_item_states.find(id);
-            if (known != m_item_states.end() && fsimilar(known->second.condition, state.condition, 0.0005f) &&
-                known->second.uses == state.uses && known->second.ammo == state.ammo && known->second.place == state.place)
+            if (!torch && known != m_item_states.end() && fsimilar(known->second.condition, state.condition, 0.0005f) &&
+                known->second.uses == state.uses && known->second.ammo == state.ammo && known->second.place == state.place && known->second.ammo_revision == state.ammo_revision)
                 continue;
             m_item_states[id] = state;
             NET_Packet P;
@@ -1639,7 +1653,31 @@ void game_sv_Coop::UpdateItemStates()
             P.w_u8(state.uses);
             P.w_u16(state.ammo);
             P.w_u16(state.place);
-            server().SendTo(data->ID, P, net_flags(TRUE, TRUE));
+            P.w_u32(state.ammo_revision);
+            // Refresh torches for observers too, including clients joining after a toggle.
+            if (torch) server().SendBroadcast(BroadcastCID, P, net_flags(TRUE, TRUE));
+            else server().SendTo(data->ID, P, net_flags(TRUE, TRUE));
+        }
+        // Containers have no actor inventory and their held ammo gets no normal
+        // count updates. Refresh nearby box ammo after server-side aggregation,
+        // including a player who approaches a box after its last count change.
+        for (u32 n = 0; n < Level().Objects.o_count(); ++n)
+        {
+            CInventoryBox* container = smart_cast<CInventoryBox*>(Level().Objects.o_get_by_iterator(n));
+            if (!container || container->getDestroy() || container->Position().distance_to_sqr(body->Position()) > 64.f) continue;
+            for (u16 id : container->m_items)
+            {
+                CWeaponAmmo* ammo = smart_cast<CWeaponAmmo*>(Level().Objects.net_Find(id));
+                if (!ammo || ammo->getDestroy() || ammo->H_Parent() != container) continue;
+                NET_Packet P;
+                CGameObject::u_EventGen(P, GE_COOP_ITEM_STATE, id);
+                P.w_float(ammo->GetCondition());
+                P.w_u8(0xff);
+                P.w_u16(ammo->m_boxCurr);
+                P.w_u16(ammo->m_ItemCurrPlace.value);
+                P.w_u32(ammo->m_coopAmmoRevision);
+                server().SendTo(data->ID, P, net_flags(TRUE, TRUE));
+            }
         }
     };
     server().ForEachClientDo(visit);
@@ -1678,9 +1716,9 @@ void game_sv_Coop::UpdateDowned()
         if (it == m_downed.end()) continue;
         SDowned& downed = it->second;
         CActor* body = smart_cast<CActor*>(Level().Objects.net_Find(ids[i]));
-        if (!body || !body->g_Alive() || !coop_client_of(body))
+        if (!body || body->getDestroy() || !coop_client_of(body))
         {
-            Msg("[COOP_SERVER] DOWN_DROPPED body=%u (gone, dead or unowned)", ids[i]);
+            Msg("[COOP_SERVER] DOWN_DROPPED body=%u (gone or unowned)", ids[i]);
             m_downed.erase(it);
             continue;
         }
@@ -2080,6 +2118,22 @@ void game_sv_Coop::RelayScriptSound(u32 sid, LPCSTR path, u32 type, CObject* obj
     coop_sound_send(P, (object || position) ? &where : NULL);
 }
 
+// Traders use ref_sound directly, outside both script_sound and the NPC sound player.
+// An empty path stops the current phrase. Reuse the trader's one sound slot on clients.
+void game_sv_Coop::RelayTraderSound(CObject* object, LPCSTR path)
+{
+    if (!coop_server_game() || !object) return;
+    NET_Packet P;
+    P.w_begin(M_COOP_SOUND);
+    P.w_u8(5);
+    P.w_u16(object->ID());
+    P.w_stringZ(path ? path : "");
+    const Fvector where = object->Position();
+    coop_sound_send(P, path && *path ? &where : NULL);
+    if (strstr(Core.Params, "-coop_damage_probe"))
+        Msg("[COOP_TRADER_SOUND] side=server id=%u path=%s", object->ID(), path ? path : "<stop>");
+}
+
 void game_sv_Coop::RelayScriptSoundStop(u32 sid, bool deferred)
 {
     if (!coop_server_game()) return;
@@ -2341,8 +2395,9 @@ void game_sv_Coop::TradeSendPrices(xrClientData* client, u8 op)
         const u32 price = npc_trade->GetItemPrice(*i, true);
         if (price) prices.push_back(std::make_pair((*i)->object().ID(), price));
     }
-    for (TIItemContainer::const_iterator i = npc->inventory().m_all.begin(); i != npc->inventory().m_all.end(); ++i)
+    for (TIItemContainer::const_iterator i = npc->inventory().m_ruck.begin(); i != npc->inventory().m_ruck.end(); ++i)
     {
+        if (!(*i)->CanTrade()) continue;
         const u32 price = npc_trade->GetItemPrice(*i, false);
         if (price) prices.push_back(std::make_pair((*i)->object().ID(), price));
     }
@@ -2371,6 +2426,10 @@ void game_sv_Coop::TradeDeal(xrClientData* client, bool buying, const xr_vector<
     {
         PIItem item = buying ? npc->inventory().GetItemFromInventory(ids[i]) : body->inventory().GetItemFromInventory(ids[i]);
         if (!item || item->object().getDestroy()) continue;
+        // Match GAMMA's trader stock (iterate_ruck), including at commit time.
+        // Equipped NPC weapons are never sale stock, even if a client names one.
+        if (buying && (!item->CanTrade() || std::find(npc->inventory().m_ruck.begin(),
+            npc->inventory().m_ruck.end(), item) == npc->inventory().m_ruck.end())) continue;
         const u32 price = npc_trade->GetItemPrice(item, !buying);
         if (!price) continue;
         items.push_back(item);
@@ -2400,6 +2459,14 @@ void game_sv_Coop::TradeDeal(xrClientData* client, bool buying, const xr_vector<
     Msg("[COOP_SERVER] TRADE_DEAL client=%u body=%u npc=%u buying=%u items=%u total=%u money=%u", client->ID.value(), body->ID(),
         it->second.npc, buying ? 1 : 0, u32(items.size()), total, body->get_money());
     TradeSendPrices(client, 2);
+    NET_Packet confirmation;
+    confirmation.w_begin(M_COOP_TRADE);
+    confirmation.w_u8(5);
+    confirmation.w_u16(it->second.npc);
+    confirmation.w_u8(buying ? 1 : 0);
+    confirmation.w_u16(u16(items.size()));
+    for (PIItem item : items) confirmation.w_u16(item->object().ID());
+    server().SendTo(client->ID, confirmation, net_flags(TRUE, TRUE));
 }
 
 void game_sv_Coop::TradeStop(xrClientData* client)

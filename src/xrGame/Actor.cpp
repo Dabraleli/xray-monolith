@@ -559,6 +559,8 @@ struct playing_pred
 
 void CActor::Hit(SHit* pHDS)
 {
+	// Downed bodies wait for help: discard hits before Lua injuries and equipment damage.
+	if (IsGameTypeCoop() && (OnServer() ? game_sv_Coop::IsDowned(ID()) : game_cl_Coop::IsDowned(ID()))) return;
 	bool b_initiated = pHDS->aim_bullet; // physics strike by poltergeist
 
 	pHDS->aim_bullet = false;

@@ -16,6 +16,7 @@
 #include "alife_graph_registry.h"
 #include "xrServer.h"
 #include "alife_schedule_registry.h"
+#include "Level.h"
 
 #ifdef DEBUG
 	extern Flags32 psAI_Flags;
@@ -25,17 +26,25 @@ void CSE_ALifeTraderAbstract::spawn_supplies()
 {
 	CSE_ALifeDynamicObject* dynamic_object = smart_cast<CSE_ALifeDynamicObject*>(this);
 	VERIFY(dynamic_object);
-	CSE_Abstract* abstract = dynamic_object->alife().spawn_item("device_pda", base()->o_Position,
-	                                                            dynamic_object->m_tNodeID, dynamic_object->m_tGraphID,
-	                                                            base()->ID);
-	CSE_ALifeItemPDA* pda = smart_cast<CSE_ALifeItemPDA*>(abstract);
-	pda->m_original_owner = base()->ID;
+    // Coop player bodies inherit NPC supplies, but their PDA comes from the selected
+    // loadout or loot. The hidden world actor (ID 0), NPCs and single-player keep theirs.
+    CSE_ALifeItemPDA* pda = NULL;
+    const bool coop_body = IsGameTypeCoop() && base()->ID != 0 &&
+        smart_cast<CSE_ALifeCreatureActor*>(dynamic_object);
+    if (!coop_body)
+    {
+        CSE_Abstract* abstract = dynamic_object->alife().spawn_item("device_pda", base()->o_Position,
+            dynamic_object->m_tNodeID, dynamic_object->m_tGraphID, base()->ID);
+        pda = smart_cast<CSE_ALifeItemPDA*>(abstract);
+        pda->m_original_owner = base()->ID;
+    }
 
 #ifdef XRGAME_EXPORTS
 	character_profile();
 	m_SpecificCharacter = shared_str();
 	m_community_index = NO_COMMUNITY_INDEX;
-	pda->m_specific_character = specific_character();
+	const shared_str character = specific_character();
+	if (pda) pda->m_specific_character = character;
 #endif
 
 	if (m_SpecificCharacter.size())

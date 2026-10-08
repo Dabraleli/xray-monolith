@@ -160,11 +160,13 @@ void CWeaponAmmo::net_Destroy()
 
 void CWeaponAmmo::OnH_B_Chield()
 {
+	m_coopAmmoRequested = 0;
 	inherited::OnH_B_Chield();
 }
 
 void CWeaponAmmo::OnH_B_Independent(bool just_before_destroy)
 {
+	m_coopAmmoRequested = 0;
 	if (!Useful())
 	{
 		if (Local())
@@ -240,7 +242,8 @@ void CWeaponAmmo::net_Import(NET_Packet& P)
 {
 	inherited::net_Import(P);
 
-	P.r_u16(m_boxCurr);
+	const u16 count = P.r_u16();
+	if (!IsGameTypeCoop() || !OnClient() || !H_Parent() || !m_coopAmmoRequested) m_boxCurr = count;
 }
 
 CInventoryItem* CWeaponAmmo::can_make_killing(const CInventory* inventory) const

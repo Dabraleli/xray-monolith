@@ -506,6 +506,7 @@ class_<CScriptGameObject> script_register_game_object2(class_<CScriptGameObject>
 		//For Ammo
 		.def("ammo_get_count", &CScriptGameObject::AmmoGetCount)
 		.def("ammo_set_count", &CScriptGameObject::AmmoSetCount)
+		.def("ammo_set_count_revision", &CScriptGameObject::AmmoSetCountRevision)
 		.def("ammo_box_size", &CScriptGameObject::AmmoBoxSize)
 		//For Weapons
 		.def("weapon_addon_attach", SAFE_WRAP(&CScriptGameObject::Weapon_AddonAttach))

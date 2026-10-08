@@ -154,6 +154,7 @@ public:
     // presentation is theirs - and the NPC/monster sound player (phrases, cries, monster calls).
     static void RelayScriptSound(u32 sid, LPCSTR path, u32 type, CObject* object, u8 mode, const Fvector* position,
                                  float delay, u32 flags, float volume, float frequency);
+    static void RelayTraderSound(CObject* object, LPCSTR path);
     static void RelayScriptSoundStop(u32 sid, bool deferred);
     static void RelayScriptSoundPosition(u32 sid, const Fvector& position);
     static void RelayNpcSound(CObject* object, u32 internal_type, u32 index, u32 max_start, u32 min_start, u32 max_stop,
@@ -267,6 +268,7 @@ public:
         u8 uses;
         u16 ammo;
         u16 place; // SInvItemPlace::value: slot / belt / ruck as the server's inventory has it
+        u32 ammo_revision;
     };
     xr_map<u16, SItemState> m_item_states; // by item id, the last state sent
     u32 m_item_states_checked;

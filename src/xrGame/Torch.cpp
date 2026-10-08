@@ -522,6 +522,8 @@ void CTorch::net_Import(NET_Packet& P)
 	inherited::net_Import(P);
 
 	BYTE F = P.r_u8();
+	// Owned player torches receive authoritative state in GE_COOP_ITEM_STATE.
+    if (IsGameTypeCoop() && OnClient() && smart_cast<CActor*>(H_Parent())) return;
 	bool new_m_switched_on = !!(F & eTorchActive);
 
 	if (new_m_switched_on != m_switched_on) Switch(new_m_switched_on);

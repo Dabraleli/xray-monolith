@@ -21,6 +21,7 @@
 #include "game_cl_base.h"
 #include "game_cl_coop.h" // coop client: s_following_place
 #include "Actor.h"
+#include "Torch.h"
 #include "string_table.h"
 #include "../Include/xrRender/Kinematics.h"
 #include "ai_object_location.h"
@@ -309,6 +310,7 @@ void CInventoryItem::OnEvent(NET_Packet& P, u16 type)
 			const u16 ammo = P.r_u16();
 			SInvItemPlace place;
 			place.value = P.r_u16();
+            const u32 ammo_revision = P.r_u32();
 			if (!IsGameTypeCoop() || !OnClient()) break;
 			if (_valid(condition)) m_fCondition = condition;
 			clamp(m_fCondition, 0.f, 1.f);
@@ -317,7 +319,9 @@ void CInventoryItem::OnEvent(NET_Packet& P, u16 type)
 			if (ammo != 0xffff)
 			{
 				if (CWeapon* weapon = smart_cast<CWeapon*>(this)) weapon->SetAmmoElapsed(ammo);
-				else if (CWeaponAmmo* box = smart_cast<CWeaponAmmo*>(this)) box->m_boxCurr = ammo; // the server's count of the box
+				else if (CWeaponAmmo* box = smart_cast<CWeaponAmmo*>(this)) box->CoopApplyAmmo(ammo, ammo_revision);
+                else if (CTorch* torch = smart_cast<CTorch*>(this))
+                    if (torch->torch_active() != (ammo != 0)) torch->Switch(ammo != 0);
 			}
 			// The server's place of the item in this player's inventory. The spawn of a returning
 			// player's items carries no saved state to a client (CoopHideClientData), so the

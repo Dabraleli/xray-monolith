@@ -72,13 +72,19 @@ void CALifeSimulatorBase::unregister_object(CSE_ALifeDynamicObject* object, bool
 	if (!object->m_bOnline)
 	{
 		graph().remove(object, object->m_tGraphID);
-		scheduled().remove(object);
+
 	}
 	else if (object->ID_Parent == 0xffff)
 	{
 		//			if (object->used_ai_locations())
 		graph().level().remove(object, !object->used_ai_locations());
 	}
+
+    // A scheduled object must never outlive its ALife registration. Loaded online
+    // groups and unregister callbacks can leave an entry despite m_bOnline.
+    if (object->m_bOnline && scheduled().object(object->ID, true))
+        Msg("[ALIFE_SCHEDULE] REMOVE_ONLINE id=%u section=%s name=%s", object->ID, object->s_name.c_str(), object->name_replace());
+    scheduled().remove(object, true);
 }
 
 void CALifeSimulatorBase::on_death(CSE_Abstract* killed, CSE_Abstract* killer)

@@ -360,7 +360,8 @@ void CActor::OnEvent(NET_Packet& P, u16 type)
 		{
 			// Coop server: a health delta requested by the owning client's Lua (thirst/sleep penalties).
 			const float delta = P.r_float();
-			if (IsGameTypeCoop() && OnServer() && g_Alive() && this != Level().CurrentControlEntity())
+			if (IsGameTypeCoop() && OnServer() && g_Alive() && this != Level().CurrentControlEntity() &&
+			    (delta >= 0.f || !game_sv_Coop::IsDowned(ID())))
 				conditions().ChangeHealth(delta);
 		}
 		break;

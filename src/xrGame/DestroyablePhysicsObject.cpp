@@ -104,6 +104,7 @@ void CDestroyablePhysicsObject::Hit(SHit* pHDS)
 
 void CDestroyablePhysicsObject::Destroy()
 {
+    m_coopDestroyTime = Device.dwTimeGlobal;
 	setVisible(false);				   
 #ifdef DEBUG
 	VERIFY(!physics_world()->Processing());
@@ -164,6 +165,9 @@ void CDestroyablePhysicsObject::shedule_Update(u32 dt)
 
 bool CDestroyablePhysicsObject::CanRemoveObject()
 {
+    // Headless particle/sound playback must not keep the destroyed source in
+    // ALife forever (a late join would otherwise recreate its intact shell).
+    if (IsGameTypeCoop() && OnServer()) return Device.dwTimeGlobal - m_coopDestroyTime >= 2000;
 	return !CParticlesPlayer::IsPlaying() && !m_destroy_sound._feedback(); //&& sound!
 }
 

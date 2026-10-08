@@ -22,6 +22,7 @@
 #include "file_transfer.h"
 #include "screenshot_server.h"
 #include "xrServer_info.h"
+#include "entity_alive.h"
 #include <functional>
 
 #pragma warning(push)
@@ -755,8 +756,27 @@ u32 xrServer::OnMessage(NET_Packet& P, ClientID sender) // Non-Zero means broadc
                 (event_type == GE_OWNERSHIP_TAKE || event_type == GE_OWNERSHIP_REJECT || event_type == GE_TRADE_SELL || event_type == GE_TRADE_BUY))
             {
                 P.r_seek(after_header);
+                const u16 item_id = P.r_u16();
                 Msg("[COOP_ITEM_EVENT] client=%u body=%u type=%u item=%u destination=%u admitted=%u time=%u", sender.value(),
-                    CL->owner->ID, event_type, P.r_u16(), destination, admitted ? 1 : 0, Device.dwTimeGlobal);
+                    CL->owner->ID, event_type, item_id, destination, admitted ? 1 : 0, Device.dwTimeGlobal);
+                if (!admitted)
+                {
+                    CSE_Abstract* item = ID_to_entity(item_id);
+                    CSE_Abstract* container = ID_to_entity(destination);
+                    CSE_ALifeCreatureAbstract* creature = smart_cast<CSE_ALifeCreatureAbstract*>(container);
+                    CObject* body_object = Level().Objects.net_Find(CL->owner->ID);
+                    CObject* target_object = Level().Objects.net_Find(destination);
+                    CEntityAlive* live_creature = smart_cast<CEntityAlive*>(target_object);
+                    const Fvector zero = Fvector().set(0, 0, 0);
+                    const Fvector& bp = body_object ? body_object->Position() : zero;
+                    const Fvector& tp = target_object ? target_object->Position() : zero;
+                    Msg("[COOP_LOOT_REJECT] body=%u item=%u parent=%u container=%u body_online=%u target_online=%u destroyed=%u distance=%.3f se_alive=%d live_alive=%d detached=%u body_pos=%.3f,%.3f,%.3f target_pos=%.3f,%.3f,%.3f",
+                        CL->owner->ID, item_id, item ? item->ID_Parent : u16(-1), destination,
+                        body_object ? 1 : 0, target_object ? 1 : 0, target_object && target_object->getDestroy() ? 1 : 0,
+                        body_object && target_object ? bp.distance_to(tp) : -1.f,
+                        creature ? int(creature->g_Alive()) : -1, live_creature ? int(live_creature->g_Alive()) : -1,
+                        CL->coop_last_detached, VPUSH(bp), VPUSH(tp));
+                }
             }
             P.r_seek(cursor);
             if (!admitted)

@@ -1040,6 +1040,7 @@ public:
 	//CWeaponAmmo
 	u16 AmmoGetCount();
 	void AmmoSetCount(u16 count);
+	void AmmoSetCountRevision(u16 count, u32 revision);
 	u16 AmmoBoxSize();
 
 	//Weapon & Outfit

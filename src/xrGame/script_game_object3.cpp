@@ -1637,8 +1637,21 @@ void CScriptGameObject::AmmoSetCount(u16 count)
 		Msg("! [COOP] ammo_set_count %u > box size %u for %s: emptied", u32(count), u32(ammo->m_boxSize), *object().cName());
 		count = 0;
 	}
-	game_cl_Coop::ItemVerb("item|box|%u|%u", object().ID(), u32(count)); // coop client: the server's box too
+    if (IsGameTypeCoop() && OnClient())
+    {
+        static u32 revision = 0;
+        if (++revision == 0) ++revision;
+        ammo->m_coopAmmoRequested = revision;
+        game_cl_Coop::ItemVerb("item|box|%u|%u|%u", object().ID(), u32(count), revision);
+    }
 	ammo->m_boxCurr = count;
+}
+
+void CScriptGameObject::AmmoSetCountRevision(u16 count, u32 revision)
+{
+    if (!IsGameTypeCoop() || !OnServer()) return;
+    AmmoSetCount(count);
+    if (CWeaponAmmo* ammo = smart_cast<CWeaponAmmo*>(&object())) ammo->m_coopAmmoRevision = revision;
 }
 
 u16 CScriptGameObject::AmmoBoxSize()

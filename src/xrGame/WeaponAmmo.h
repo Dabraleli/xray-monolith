@@ -88,6 +88,13 @@ public:
 
 	u16 m_boxSize;
 	u16 m_boxCurr;
+    // The holder predicts Lua consumption. Only snapshots acknowledging its latest edit may replace it.
+    u32 m_coopAmmoRequested = 0;
+    u32 m_coopAmmoRevision = 0;
+    void CoopApplyAmmo(u16 count, u32 revision)
+    {
+        if (!m_coopAmmoRequested || revision == m_coopAmmoRequested) m_boxCurr = count;
+    }
 	bool m_tracer;
 	bool m_4to1_tracer;
 

@@ -119,7 +119,8 @@ void CArtefact::OnH_A_Chield()
 	inherited::OnH_A_Chield();
 
 	StopLights();
-	if (IsGameTypeSingle())
+	// Coop inventory artefacts follow SP; only competitive modes carry their particles.
+	if (IsGameTypeSingle() || IsGameTypeCoop())
 	{
 		SwitchAfParticles(false);
 	}

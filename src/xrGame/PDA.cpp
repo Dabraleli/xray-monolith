@@ -327,6 +327,16 @@ void CPda::UpdateCL()
 	float condition = GetCondition();
 	CUIPdaWnd* pda = &CurrentGameUI()->GetPdaMenu();
 	pda->m_power = condition;
+    // A 3D PDA otherwise reopens its non-modal window every frame after
+    // the server starts a talk, competing with the talk window for input.
+    if (IsGameTypeCoop() && Actor()->IsTalking())
+    {
+        if (pda->IsShown()) pda->HideDialog();
+        m_bZoomed = false;
+        m_eDeferredEnable = eDefault;
+        Actor()->inventory().Activate(NO_ACTIVE_SLOT);
+        return;
+    }
 
 	if (!psActorFlags.test(AF_3D_PDA))
 	{

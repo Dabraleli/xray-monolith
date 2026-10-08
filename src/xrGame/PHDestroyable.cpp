@@ -156,6 +156,17 @@ void CPHDestroyable::Destroy(u16 source_id/*=u16(-1)*/, LPCSTR section/*="ph_ske
 	};
 	///////////////////////////////////////////////////////////////////////////
 	m_flags.set(fl_destroyed,TRUE);
+    // Coop has no local fragment-spawn path. Waiting for fragment notifications
+    // leaves an invisible, collidable crate forever (fl_released stays false).
+    if (IsGameTypeCoop())
+    {
+        if (obj->PPhysicsShell()) PhysicallyRemoveSelf();
+        m_flags.set(fl_released, TRUE);
+        if (strstr(Core.Params, "-coop_damage_probe"))
+            Msg("[COOP_CRATE] released id=%u visible=%u enabled=%u shell_enabled=%u", obj->ID(),
+                obj->getVisible() ? 1 : 0, obj->getEnabled() ? 1 : 0,
+                obj->PPhysicsShell() && obj->PPhysicsShell()->isEnabled() ? 1 : 0);
+    }
 	return;
 }
 

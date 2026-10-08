@@ -1244,7 +1244,8 @@ void CSE_ALifeItemBolt::UPDATE_Read(NET_Packet& tNetPacket)
 
 bool CSE_ALifeItemBolt::can_save() const
 {
-	return (false); //!attached());
+	// Coop transitions reload ALife. Keep inventory bolts, not thrown temporary missiles.
+	return strstr(Core.Params, "-coop_server_probe") && ID_Parent != u16(-1) && inherited::can_save();
 }
 
 bool CSE_ALifeItemBolt::used_ai_locations() const
