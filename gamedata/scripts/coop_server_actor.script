@@ -1046,6 +1046,19 @@ function install_emissions() -- module function: called from install_world_callb
     local before_hit = _G.CActor__BeforeHitCallback
     _G.CActor__BeforeHitCallback = function(actor, s_hit, bone_id)
         local source = s_hit.draftsman
+        -- CActor::Hit already enforced the server friendly_fire setting. Do not
+        -- let SP's friendly-NPC relation rule silently disable enabled player damage.
+        if source and source:id()~=actor:id() and db.actors and
+            db.actors[source:id()] and db.actors[actor:id()] then
+            if s_hit.type~=hit.strike and bind_stalker_ext.invulnerable_time and
+                time_global()<bind_stalker_ext.invulnerable_time then
+                bind_stalker_ext.invulnerable_time=bind_stalker_ext.invulnerable_time-500
+                return false
+            end
+            local flags={ret_value=true}
+            SendScriptCallback('actor_on_before_hit',s_hit,bone_id,flags)
+            return flags.ret_value
+        end
         if source and source:id() == actor:id() and
             (s_hit.type == hit.telepatic or s_hit.type == hit.shock) then
             if bind_stalker_ext.invulnerable_time and time_global() < bind_stalker_ext.invulnerable_time then

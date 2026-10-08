@@ -561,6 +561,23 @@ void CActor::Hit(SHit* pHDS)
 {
 	// Downed bodies wait for help: discard hits before Lua injuries and equipment damage.
 	if (IsGameTypeCoop() && (OnServer() ? game_sv_Coop::IsDowned(ID()) : game_cl_Coop::IsDowned(ID()))) return;
+	if (IsGameTypeCoop() && OnServer())
+	{
+		CObject* source = pHDS->who ? pHDS->who : Level().Objects.net_Find(pHDS->whoID);
+		if (game_sv_Coop::BodyOf(this) && source != this && game_sv_Coop::BodyOf(source))
+		{
+			// Session setting: restart the host to reload it. Block before Lua and
+			// equipment calculations, including the hit report sent to the client.
+			static const bool friendly_fire = []()
+			{
+				string_path path;
+				FS.update_path(path, "$app_data_root$", "coop_server.ltx");
+				CInifile config(path);
+				return config.line_exist("server", "friendly_fire") && config.r_bool("server", "friendly_fire");
+			}();
+			if (!friendly_fire) return;
+		}
+	}
 	bool b_initiated = pHDS->aim_bullet; // physics strike by poltergeist
 
 	pHDS->aim_bullet = false;
