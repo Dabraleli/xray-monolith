@@ -1,9 +1,31 @@
 -- Inventory actions must run where the item and its ALife entity actually live.
--- Keep GAMMA's recipes and output ownership; authorize a corpse through its loot lease.
+-- Keep GAMMA's recipes and output ownership; authorize each corpse viewer through their own session.
 local installed = false
 local busy = {}
 local retired = {}
 local watched, contents, next_scan
+local opened_boxes={}
+local refresh_requested=false
+
+function client_refresh()
+    refresh_requested=true
+end
+
+function server_box_used(body,box)
+    if body and box and IsInvbox(box) and body:alive()
+        and box:position():distance_to_sqr(body:position())<=64 then
+        opened_boxes[body:id()]=box:id()
+    end
+end
+
+local function authorized_holder(body,parent)
+    if parent:id()==body:id() then return true end
+    if IsInvbox(parent) then
+        return opened_boxes[body:id()]==parent:id()
+            and parent:position():distance_to_sqr(body:position())<=64
+    end
+    return coop_loot_lock.server_owns(body,parent:id())
+end
 
 -- Corpse item spawns arrive after the RPC acknowledgement. Refresh only on membership changes,
 -- without resetting sorting, scroll position or reopening the window.
@@ -11,15 +33,17 @@ function client_update()
     local gui=ui_inventory.GUI
     if not gui or not gui:IsShown() or gui.mode~='loot' then watched=nil;contents=nil;return end
     local now=time_global()
-    if watched==gui.npc_id and next_scan and now<next_scan then return end
+    if not refresh_requested and watched==gui.npc_id and next_scan and now<next_scan then return end
     next_scan=now+250
     local owner=gui.npc_id and level.object_by_id(gui.npc_id)
-    if not owner or not IsStalker(owner) or owner:alive() then watched=nil;contents=nil;return end
+    if not owner or not (IsInvbox(owner) or (IsStalker(owner) and not owner:alive())) then watched=nil;contents=nil;return end
     local current={}
     local function each(holder,item)current[item:id()]=holder:id() end
-    owner:iterate_inventory(each,owner)
+    if IsInvbox(owner) then owner:iterate_inventory_box(each,owner)
+    else owner:iterate_inventory(each,owner) end
     if db.actor then db.actor:iterate_inventory(each,db.actor) end
-    local changed=false
+    local changed=refresh_requested
+    refresh_requested=false
     if watched==gui.npc_id and contents then
         for id,parent in pairs(current) do if contents[id]~=parent then changed=true;break end end
         if not changed then for id in pairs(contents) do if not current[id] then changed=true;break end end end
@@ -33,13 +57,79 @@ function server_request(body, p)
     local obj = id and level.object_by_id(id)
     local parent = obj and obj:parent()
     if not body:alive() or not parent then return {ok=false, reason='missing item'} end
-    if parent:id() ~= body:id() and not coop_loot_lock.server_owns(body, parent:id()) then
-        return {ok=false, reason='no corpse lease'}
+    -- Network transfer updates ALife before the local object's ownership event is applied.
+    -- Never dismantle/eject from that stale local parent while another player takes it.
+    local entity=alife_object(id)
+    if not entity or entity.parent_id~=parent:id() then return {ok=false,reason='item transfer pending'} end
+    if not authorized_holder(body,parent) then
+        return {ok=false, reason=IsInvbox(parent) and 'box not opened or out of range' or 'no corpse lease'}
     end
     if retired[id] and time_global() - retired[id] < 10000 then
         return {ok=false, reason='already disassembled'}
     end
-    if verb == 'disassemble' then
+    if verb=='magnifier' then
+        if not IsWeapon(obj) or parent:id()~=body:id() or body:active_item()~=obj then
+            return {ok=false,reason='magnifier weapon must be active and owned'}
+        end
+        local section=obj:section()
+        local desired=p[4]
+        if not magnifier_switch or (desired~=magnifier_switch.get_new_section(section,0)
+            and desired~=magnifier_switch.get_new_section(section,1)) then
+            return {ok=false,reason='invalid magnifier variant'}
+        end
+        -- nextTick uses AddUniqueCall, not the already context-aware time-event queue.
+        -- Capture each caller so a deferred slot/fire-mode restore cannot affect world/other actor.
+        if not magnifier_switch.coop_next_tick then
+            local next_tick=magnifier_switch.nextTick or _G.nextTick
+            magnifier_switch.nextTick=function(callback,ticks)
+                local body_id=db.actor:id()
+                return next_tick(function()
+                    if not level.coop_enter_body(body_id) then return true end
+                    local ok,result=pcall(callback)
+                    level.coop_leave_body()
+                    if not ok then printf('! [COOP_SERVER] MAGNIFIER restore body=%s error=%s',body_id,tostring(result));return true end
+                    return result
+                end,ticks)
+            end
+            magnifier_switch.coop_next_tick=true
+        end
+        local result=magnifier_switch.switch_magnifier(obj,section,desired)
+        if not result or not result.id then return {ok=false,reason='magnifier not ready'} end
+        retired[id]=time_global()
+        return {ok=true,replacement=result.id}
+    elseif verb == 'attach_scope' then
+        local addon=level.object_by_id(tonumber(p[4]) or -1)
+        local owner=addon and addon:parent()
+        if not IsWeapon(obj) or parent:id()~=body:id() or not owner or owner:id()~=body:id() then
+            return {ok=false,reason='weapon and addon must belong to player'}
+        end
+        local base=ini_sys:r_string_ex(obj:section(),'parent_section')
+        local child=base and (base..'_'..addon:section())
+        local compatible=false
+        for _,section in pairs(parse_list(ini_sys,base or obj:section(),'scopes')) do
+            if section==addon:section() then compatible=true;break end
+        end
+        local previous
+        if base and base~=obj:section() then
+            if string.sub(obj:section(),1,#base+1)~=base..'_' then return {ok=false,reason='unknown scope variant'} end
+            previous=string.sub(obj:section(),#base+2)
+            local scopes=utils_data.collect_sections(ini_sys,{'addons_table'})
+            if not scopes[previous] or not ini_sys:section_exist(previous) then return {ok=false,reason='unknown current scope'} end
+        end
+        if not child or child==obj:section() or not ini_sys:section_exist(child) or not compatible then
+            return {ok=false,reason='incompatible conversion kit'}
+        end
+        if retired[addon:id()] and time_global()-retired[addon:id()]<10000 then
+            return {ok=false,reason='addon already consumed'}
+        end
+        local result=alife_clone_weapon(alife_object(id),child)
+        if not result then return {ok=false,reason='weapon conversion failed'} end
+        retired[id]=time_global();retired[addon:id()]=time_global()
+        alife_release(addon)
+        if previous then alife_create_item(previous,parent) end
+        printf('[COOP_SERVER] LOOT_ACTION body=%s item=%s verb=attach_scope replacement=%s section=%s',body:id(),id,result.id,child)
+        return {ok=true,replacement=result.id}
+    elseif verb == 'disassemble' then
         local tool = level.object_by_id(tonumber(p[4]) or -1)
         local owner = tool and tool:parent()
         if not owner or owner:id() ~= body:id() or not GetItemList('disassemble')[tool:section()] then
@@ -66,6 +156,24 @@ function server_request(body, p)
     elseif verb == 'eject' then
         if not IsWeapon(obj) or not magazines.is_supported_weapon(obj) then return {ok=false,reason='not supported'} end
         if magazines.get_mag_loaded(id) then magazines.eject_magazine(obj) end
+    elseif verb=='detach_scope' or (verb=='detach' and p[4]=='scope' and IsWeapon(obj) and item_weapon.menu_scope(obj)) then
+        if not IsWeapon(obj) then return {ok=false,reason='not weapon'} end
+        local base=ini_sys:r_string_ex(obj:section(),'parent_section')
+        local section=obj:section()
+        if not base or base==section or string.sub(section,1,#base+1)~=base..'_' then
+            return {ok=false,reason='no removable scope'}
+        end
+        local addon=string.sub(section,#base+2)
+        local scopes=utils_data.collect_sections(ini_sys,{'addons_table'})
+        if not scopes[addon] or not ini_sys:section_exist(addon) or not ini_sys:section_exist(base) then
+            return {ok=false,reason='unknown removable scope'}
+        end
+        local result=alife_clone_weapon(alife_object(id),base)
+        if not result then return {ok=false,reason='weapon conversion failed'} end
+        retired[id]=time_global()
+        alife_create_item(addon,parent)
+        printf('[COOP_SERVER] LOOT_ACTION body=%s item=%s verb=detach_scope replacement=%s addon=%s',body:id(),id,result.id,addon)
+        return {ok=true,replacement=result.id}
     elseif verb == 'detach' then
         if not IsWeapon(obj) or not ({sil=true,scope=true,gl=true})[p[4]] then return {ok=false,reason='invalid addon'} end
         utils_item.detach_addon(obj,nil,p[4])
@@ -94,12 +202,44 @@ function install_client(rpc, apply)
             printf('! [COOP_CLIENT] LOOT_ACTION %s item=%s: %s',verb,id,result and result.reason or 'timeout')
         end
         busy[id]=nil
+        return result and result.ok and result or nil
     end
     -- Called after every mod's top-level replacements, before on_game_start captures functions.
     for _,name in ipairs({'disassembly_weapon','disassembly_outfit','disassembly_item'}) do
         item_parts[name]=function(obj,tool) return request('disassemble',obj,tool and tool:id()) end
     end
     local strip=zzzz_arti_jamming_repairs.act_fieldstrip
+    item_weapon.attach_scope=function(addon,weapon)
+        return request('attach_scope',weapon,addon and addon:id())
+    end
+    item_weapon.detach_scope=function(weapon)
+        return request('detach_scope',weapon)
+    end
+    -- These mods otherwise replace/bypass item_weapon during on_game_start.
+    if ish_toggle_scope then
+        ish_toggle_scope.attach_scope_override=item_weapon.attach_scope
+        -- Its detach wrapper records the secondary slot and delegates to our captured function.
+    end
+    if magnifier_switch then
+        magnifier_switch.switch_magnifier=function(weapon,section,desired)
+            weapon=weapon or (db.actor and db.actor:active_item())
+            if not weapon then return end
+            desired=desired or magnifier_switch.get_new_section(weapon:section())
+            if desired then return request('magnifier',weapon,desired) end
+        end
+    end
+    local wheel=haru_quick_action_wheel_mcm and haru_quick_action_wheel_mcm.QScopeWheelOption
+    if wheel then
+        local attach,detach=wheel.Attach,wheel.Detach
+        wheel.Attach=function(self,addon,weapon)
+            if weapon:cast_Weapon():GetScopeName() then return attach(self,addon,weapon) end
+            if weapon:get_state()==0 then return request('attach_scope',weapon,addon and addon:id()) end
+        end
+        wheel.Detach=function(self,weapon)
+            if weapon:cast_Weapon():GetScopeName() then return detach(self,weapon) end
+            if weapon:get_state()==0 then return request('detach_scope',weapon) end
+        end
+    end
     zzzz_arti_jamming_repairs.act_fieldstrip=function(id,part,...)
         local obj=level.object_by_id(id)
         if foreign(obj) then return request('fieldstrip',obj,part) end

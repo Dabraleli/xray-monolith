@@ -1722,6 +1722,8 @@ function on_server_lua(text)
     local kind = parts[1]
     if kind == 'loot_lock' then
         coop_loot_lock.client_reply(parts)
+    elseif kind == 'loot_refresh' then
+        coop_loot_actions.client_refresh()
     elseif kind == 'psi_order' then
         coop_psi_helmet.on_message(parts)
     elseif kind == 'hit' then

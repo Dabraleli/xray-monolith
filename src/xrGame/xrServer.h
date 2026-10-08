@@ -36,7 +36,8 @@ public:
 
 	BOOL net_PassUpdates;
 	u32 net_LastMoveUpdateTime;
-	u16 coop_last_detached; // item this connection just detached with GE_TRADE_SELL
+	u16 coop_last_detached; // legacy diagnostic
+	xr_map<u16, std::pair<u16, u32>> coop_transfers; // item -> source, request time
 
 	game_PlayerState* ps;
 

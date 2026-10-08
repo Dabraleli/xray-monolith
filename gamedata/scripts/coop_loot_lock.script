@@ -1,9 +1,12 @@
+-- Per-viewer corpse sessions: multiple players can inspect the same inventory.
+-- Tokens/heartbeats authorize each viewer independently; item transfers are atomic on the server.
 local locks = {}
 local pending, active, send, original_start, wrapped_start, next_ping
 local serial = 0
 local delayed_guard_installed=false
 function server_owns(body, id)
-    local lock=locks[id]
+    local viewers=locks[id]
+    local lock=viewers and viewers[body:id()]
     local obj=level.object_by_id(id)
     local now=time_global()
     local valid=lock and lock.owner==body:id() and now>=lock.at and now-lock.at<=5000
@@ -17,19 +20,21 @@ function server_request(body, parts)
     if not id or not token then return end
     local now = time_global()
     if parts[2]~='ping' then printf('[COOP_LOOT] REQUEST body=%s verb=%s corpse=%s token=%s',body:id(),parts[2],id,token) end
-    local lock = locks[id]
+    local viewers = locks[id] or {}
+    locks[id] = viewers
+    local lock = viewers[body:id()]
     if lock and (now < lock.at or now - lock.at > 5000 or not level.object_by_id(lock.owner)) then
-        locks[id] = nil; lock = nil
+        viewers[body:id()] = nil; lock = nil
     end
     if parts[2] == 'close' then
-        if lock and lock.owner == body:id() and lock.token == token then locks[id] = nil end
+        if lock and lock.owner == body:id() and lock.token == token then viewers[body:id()] = nil end
         return
     end
     local obj = level.object_by_id(id)
     local valid = obj and IsStalker(obj) and not obj:alive() and body:alive()
         and obj:position():distance_to_sqr(body:position()) <= 64
-    if parts[2] == 'open' and valid and (not lock or lock.owner == body:id()) then
-        locks[id] = {owner=body:id(),token=token,at=now}
+    if parts[2] == 'open' and valid then
+        viewers[body:id()] = {owner=body:id(),token=token,at=now}
         level.coop_send_lua(body:id(),string.format('loot_lock|ok|%d|%d',id,token))
     elseif parts[2] == 'ping' and valid and lock and lock.owner == body:id() and lock.token == token then
         lock.at = now
@@ -98,7 +103,7 @@ function client_reply(parts)
     end
     close(request)
     if parts[2]=='busy' and actor_menu and actor_menu.set_msg then
-        actor_menu.set_msg(1, 'Тело уже обыскивает другой игрок', 3)
+        actor_menu.set_msg(1, 'Обыск недоступен: подойдите ближе к телу', 3)
     end
     printf('[COOP_CLIENT] LOOT_LOCK unavailable corpse=%s',id)
 end

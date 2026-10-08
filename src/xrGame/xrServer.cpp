@@ -47,6 +47,7 @@ void xrClientData::Clear()
 	net_PassUpdates = TRUE;
 	net_LastMoveUpdateTime = 0;
 	coop_last_detached = u16(-1);
+	coop_transfers.clear();
 	m_ping_warn.m_maxPingWarnings = 0;
 	m_ping_warn.m_dwLastMaxPingWarningTime = 0;
 	m_admin_rights.m_has_admin_rights = FALSE;
@@ -750,6 +751,52 @@ u32 xrServer::OnMessage(NET_Packet& P, ClientID sender) // Non-Zero means broadc
             P.r_u32(); // event timestamp
             const u16 event_type = P.r_u16();
             const u16 destination = P.r_u16();
+            // A container move is a pair in the legacy client protocol. Keep the
+            // source attached until both halves arrive, then commit and broadcast once.
+            if (event_type == GE_TRADE_SELL || event_type == GE_TRADE_BUY)
+            {
+                if (P.B.count < P.r_tell() + sizeof(u16)) return 0;
+                const u16 item_id = P.r_u16();
+                const u32 now = Device.dwTimeGlobal;
+                for (auto it = CL->coop_transfers.begin(); it != CL->coop_transfers.end();)
+                    if (now - it->second.second > 5000) it = CL->coop_transfers.erase(it);
+                    else ++it;
+                CSE_Abstract* body = CL->owner;
+                CSE_ALifeCreatureActor* actor = smart_cast<CSE_ALifeCreatureActor*>(body);
+                CSE_Abstract* item = ID_to_entity(item_id);
+                CSE_Abstract* target = ID_to_entity(destination);
+                if (!actor || !actor->g_Alive() || !item || !smart_cast<CSE_ALifeInventoryItem*>(item)) return 0;
+                if (event_type == GE_TRADE_SELL)
+                {
+                    CL->coop_transfers.erase(item_id);
+                    if (item->ID_Parent == destination && coop_lootable_container(body, target))
+                        CL->coop_transfers[item_id] = std::make_pair(destination, now);
+                    return 0;
+                }
+                auto reject_move = [&]() -> u32
+                {
+                    game_sv_Coop::SendLua(body->ID, "loot_refresh|rejected");
+                    return 0;
+                };
+                auto request = CL->coop_transfers.find(item_id);
+                if (request == CL->coop_transfers.end()) return reject_move();
+                const u16 source_id = request->second.first;
+                CL->coop_transfers.erase(request);
+                CSE_Abstract* source = ID_to_entity(source_id);
+                // Both endpoints are checked again. One must be the requesting body.
+                if (source_id == destination || item->ID_Parent != source_id ||
+                    (source != body && target != body) || !coop_lootable_container(body, source) ||
+                    !coop_lootable_container(body, target)) return reject_move();
+                if (std::find(source->children.begin(), source->children.end(), item_id) == source->children.end()) return reject_move();
+                NET_Packet reject, take;
+                Perform_transfer(reject, take, item, source, target);
+                NET_Packet pack;
+                pack.w_begin(M_EVENT_PACK);
+                pack.w_u8(u8(reject.B.count)); pack.w(reject.B.data, reject.B.count);
+                pack.w_u8(u8(take.B.count)); pack.w(take.B.data, take.B.count);
+                SendBroadcast(BroadcastCID, pack, net_flags(TRUE, TRUE));
+                return 0;
+            }
             const bool admitted = CoopAdmitClientEvent(CL, P, event_type, destination);
             const u32 after_header = cursor + sizeof(u32) + 2 * sizeof(u16);
             if (strstr(Core.Params, "-coop_damage_probe") && P.B.count >= after_header + sizeof(u16) &&
