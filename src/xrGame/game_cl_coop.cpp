@@ -959,6 +959,21 @@ void game_cl_Coop::OnPdaMessage(NET_Packet& P)
             task->m_map_object_id = map_object_id;
             manager.GiveGameTaskToActor(task, 0, false, 0);
         }
+        else if (task->GetTaskState() != eTaskStateInProgress && state == eTaskStateInProgress)
+        {
+            // Repeatable jobs reuse their section ID. Revive the local mirror
+            // instead of leaving a newly accepted job in the completed history.
+            task->m_map_location = map_location;
+            task->m_map_object_id = map_object_id;
+            task->m_ReceiveTime = Level().GetGameTime();
+            task->m_FinishTime = 0;
+            task->m_TimeToComplete = task->m_ReceiveTime;
+            task->m_timer_finish = task->m_ReceiveTime;
+            task->OnArrived();
+            manager.SetTaskState(task, eTaskStateInProgress);
+            manager.SetActiveTask(task);
+            Msg("[COOP_CLIENT] PDA_TASK_REACTIVATED id=%s", id.c_str());
+        }
         else if (task->GetTaskState() == eTaskStateInProgress && state == eTaskStateInProgress &&
                  (task->m_map_location != map_location || task->m_map_object_id != map_object_id))
             task->ChangeMapLocation(map_location.c_str() ? map_location.c_str() : "", map_object_id);
