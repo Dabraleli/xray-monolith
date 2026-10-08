@@ -288,7 +288,10 @@ u32 CTrade::GetItemPrice(PIItem pItem, bool b_buying, bool b_free)
 	//	result		= iFloor(result/10+0.5f)*10;
 
 	CEatableItem* eatable_item = pItem->cast_eatable_item();
-	if (eatable_item && eatable_item->GetMaxUses())
+	// Persistent single-use addons use the eat action to install, but their
+	// use counter is not a remaining charge or a measure of their value.
+	if (eatable_item && eatable_item->GetMaxUses() &&
+		(eatable_item->CanDelete() || eatable_item->GetMaxUses() > 1))
 	{
 		u8 max_uses = eatable_item->GetMaxUses();
 		u8 remaining_uses = eatable_item->GetRemainingUses();
