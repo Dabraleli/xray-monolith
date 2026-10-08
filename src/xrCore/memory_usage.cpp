@@ -39,6 +39,11 @@ XRCORE_API void log_vminfo()
 
 size_t xrMemory::mem_usage()
 {
+    // _heapwalk validates the previous entry on the next call. Background
+    // resource loaders may free that entry between calls unless the CRT heap
+    // stays locked for the entire walk. Unlock before logging/asserting.
+    HANDLE heap = reinterpret_cast<HANDLE>(_get_heap_handle());
+    R_ASSERT2(HeapLock(heap), "cannot lock CRT heap for memory accounting");
 	_HEAPINFO hinfo = {};
 	int status;
 	size_t bytesUsed = 0;
@@ -47,6 +52,8 @@ size_t xrMemory::mem_usage()
 		if (hinfo._useflag == _USEDENTRY)
 			bytesUsed += hinfo._size;
 	}
+    const BOOL unlocked = HeapUnlock(heap);
+    R_ASSERT2(unlocked, "cannot unlock CRT heap after memory accounting");
 	switch (status)
 	{
 	case _HEAPEMPTY:
